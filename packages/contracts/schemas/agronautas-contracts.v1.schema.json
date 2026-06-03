@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agronautas.dev/contracts/agronautas-contracts.v1.schema.json",
+  "title": "AgronautasContractsV1",
+  "description": "Canonical cross-runtime contract catalog for Agronautas MVP foundation slice 1.",
+  "type": "object",
+  "required": ["contractVersion", "canonicalStrategy", "boundaryMetadata", "degradationReasonCatalog"],
+  "properties": {
+    "contractVersion": { "const": "1.0.0" },
+    "canonicalStrategy": { "const": "json-schema-catalog-v1" },
+    "boundaryMetadata": { "$ref": "#/$defs/CorrientesRiceZoneBoundaryMetadata" },
+    "degradationReasonCatalog": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/DegradationReason" },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "DegradationReason": {
+      "type": "string",
+      "enum": [
+        "weather_data_unavailable",
+        "weather_data_stale",
+        "satellite_data_unavailable",
+        "satellite_data_stale",
+        "boundary_source_pending_verification",
+        "locality_unverified",
+        "manual_context_missing"
+      ]
+    },
+    "CorrientesRiceZoneBoundaryMetadata": {
+      "type": "object",
+      "required": ["sourceName", "sourceUrl", "sourceVersion", "normalizationStatus", "notes"],
+      "properties": {
+        "sourceName": { "type": "string", "minLength": 1 },
+        "sourceUrl": { "type": "string", "format": "uri" },
+        "sourceVersion": { "type": "string", "minLength": 1 },
+        "normalizationStatus": { "enum": ["placeholder-pending-ingest", "official-source-referenced"] },
+        "notes": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "FieldIntake": {
+      "type": "object",
+      "required": ["contractVersion", "fieldId", "crop", "hectares", "locality", "location"],
+      "properties": {
+        "contractVersion": { "const": "1.0.0" },
+        "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "crop": { "const": "rice" },
+        "hectares": { "type": "number", "exclusiveMinimum": 0 },
+        "locality": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "growthStage": { "enum": ["emergence", "tillering", "panicle_initiation", "flowering", "maturity"] },
+        "location": {
+          "type": "object",
+          "required": ["lat", "lng"],
+          "properties": {
+            "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+            "lng": { "type": "number", "minimum": -180, "maximum": 180 },
+            "polygonWkt": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "RiskDriver": {
+      "type": "object",
+      "required": ["key", "label", "weight", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+        "value": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "RiskSnapshot": {
+      "type": "object",
+      "required": ["contractVersion", "snapshotId", "fieldId", "score", "level", "confidence", "computedAt", "validUntil", "ruleVersion", "degradationReasons", "evidenceRefs", "drivers"],
+      "properties": {
+        "contractVersion": { "const": "1.0.0" },
+        "snapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "level": { "enum": ["low", "medium", "high"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "computedAt": { "type": "string", "format": "date-time" },
+        "validUntil": { "type": "string", "format": "date-time" },
+        "ruleVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } },
+        "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "drivers": { "type": "array", "items": { "$ref": "#/$defs/RiskDriver" }, "minItems": 1 }
+      },
+      "additionalProperties": false
+    },
+    "AlertSnapshot": {
+      "type": "object",
+      "required": ["contractVersion", "alertId", "fieldId", "basedOnSnapshotId", "type", "priority", "confidence", "freshness", "degradationReasons"],
+      "properties": {
+        "contractVersion": { "const": "1.0.0" },
+        "alertId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "basedOnSnapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "enum": ["flood", "water_stress", "thermal_stress"] },
+        "priority": { "type": "integer", "enum": [1, 2, 3] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "freshness": { "enum": ["fresh", "stale", "degraded"] },
+        "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } }
+      },
+      "additionalProperties": false
+    },
+    "CopilotSnapshotReference": {
+      "type": "object",
+      "required": ["snapshotId", "score", "level", "confidence", "freshness", "computedAt", "validUntil", "ruleVersion", "degradationReasons", "evidenceRefs"],
+      "properties": {
+        "snapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "level": { "enum": ["low", "medium", "high"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "freshness": { "enum": ["fresh", "stale", "degraded"] },
+        "computedAt": { "type": "string", "format": "date-time" },
+        "validUntil": { "type": "string", "format": "date-time" },
+        "ruleVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } },
+        "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+      },
+      "additionalProperties": false
+    },
+    "CopilotAlertReference": {
+      "type": "object",
+      "required": ["alertId", "basedOnSnapshotId", "type", "priority", "confidence", "freshness", "degradationReasons"],
+      "properties": {
+        "alertId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "basedOnSnapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "enum": ["flood", "water_stress", "thermal_stress"] },
+        "priority": { "type": "integer", "enum": [1, 2, 3] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "freshness": { "enum": ["fresh", "stale", "degraded"] },
+        "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } }
+      },
+      "additionalProperties": false
+    },
+    "CopilotContext": {
+      "type": "object",
+      "required": ["contractVersion", "fieldId", "crop", "alertIds", "degradationReasons"],
+      "properties": {
+        "contractVersion": { "const": "1.0.0" },
+        "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "crop": { "const": "rice" },
+        "growthStage": { "enum": ["emergence", "tillering", "panicle_initiation", "flowering", "maturity"] },
+        "requestedWindow": {
+          "type": "object",
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "string", "format": "date-time" },
+            "to": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": false
+        },
+        "latestSnapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "alertIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } },
+        "snapshot": { "$ref": "#/$defs/CopilotSnapshotReference" },
+        "alerts": { "type": "array", "items": { "$ref": "#/$defs/CopilotAlertReference" } }
+      },
+      "additionalProperties": false
+    },
+    "AgronautasContractError": {
+      "type": "object",
+      "required": ["contractVersion", "code", "message", "retryable"],
+      "properties": {
+        "contractVersion": { "const": "1.0.0" },
+        "code": { "enum": ["INVALID_CONTRACT", "OUT_OF_SUPPORTED_AREA", "UNSUPPORTED_CROP", "MISSING_CONTEXT", "STALE_SNAPSHOT"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "retryable": { "type": "boolean" },
+        "details": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    }
+  }
+}

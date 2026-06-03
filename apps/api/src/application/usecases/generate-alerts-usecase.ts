@@ -1,0 +1,150 @@
+import { randomUUID } from 'node:crypto'
+import { toAlertSnapshotContract, type AlertSnapshotFoundation, type RiskSnapshotFoundation } from '../../domain/entities/agronautas'
+import type { AlertSnapshotRecord, AlertSnapshotRepository, RiskSnapshotRepository } from '../../domain/repositories/agronautas'
+
+export interface GenerateAlertsInput {
+  fieldId: string
+  triggeredBy: 'api' | 'scheduler'
+}
+
+export interface GenerateAlertsResult {
+  status: 'generated' | 'stale-snapshot' | 'missing-snapshot'
+  alerts: AlertSnapshotFoundation[]
+  snapshot: RiskSnapshotFoundation | null
+}
+
+interface GenerateAlertsOptions {
+  now?: () => Date
+  idGenerator?: () => string
+}
+
+export class GenerateAlertsUseCase {
+  constructor(
+    private readonly riskSnapshotRepository: RiskSnapshotRepository,
+    private readonly alertSnapshotRepository: AlertSnapshotRepository,
+    private readonly options: GenerateAlertsOptions = {},
+  ) {}
+
+  async execute(input: GenerateAlertsInput): Promise<GenerateAlertsResult> {
+    const snapshot = await this.riskSnapshotRepository.getLatest(input.fieldId)
+    if (!snapshot) return { status: 'missing-snapshot', alerts: [], snapshot: null }
+
+    const reference = this.now()
+    if (snapshot.isExpired(reference)) {
+      return { status: 'stale-snapshot', alerts: [], snapshot }
+    }
+
+    const alerts = deriveAlerts(snapshot, this.idGenerator())
+    await this.alertSnapshotRepository.saveMany(
+      alerts.map((alert) => ({
+        alertId: alert.alertId,
+        fieldId: alert.fieldId,
+        basedOnSnapshotId: alert.basedOnSnapshotId,
+        runId: snapshot.props.runId,
+        type: alert.type,
+        priority: alert.priority,
+        confidence: alert.confidence,
+        freshness: alert.freshness,
+        degradationReasons: [...alert.degradationReasons],
+        staleCause: snapshot.props.staleCause,
+      })),
+    )
+
+    return { status: 'generated', alerts, snapshot }
+  }
+
+  private now(): Date {
+    return this.options.now?.() ?? new Date()
+  }
+
+  private idGenerator(): string {
+    return this.options.idGenerator?.() ?? randomUUID()
+  }
+}
+
+function deriveAlerts(snapshot: RiskSnapshotFoundation, nextId: string): AlertSnapshotFoundation[] {
+  const alerts: AlertSnapshotFoundation[] = []
+  const driverMap = new Map(snapshot.props.drivers.map((driver) => [driver.key, driver.value]))
+  const freshness = snapshot.freshness
+  const degradationReasons = [...snapshot.props.degradationReasons]
+  const baseConfidence = snapshot.props.confidence
+
+  const heat = driverMap.get('heat_pressure') ?? 0
+  const rainfall = driverMap.get('rainfall_load') ?? 0
+  const satelliteStress = driverMap.get('satellite_stress') ?? 0
+
+  if (snapshot.props.score >= 70 || rainfall >= 0.7) {
+    alerts.push({
+      alertId: `${nextId}-flood`,
+      fieldId: snapshot.props.fieldId,
+      basedOnSnapshotId: snapshot.props.snapshotId,
+      type: 'flood',
+      priority: snapshot.props.score >= 80 ? 1 : 2,
+      confidence: Number(Math.min(1, Math.max(0.3, baseConfidence)).toFixed(3)),
+      freshness,
+      degradationReasons,
+    })
+  }
+
+  if (satelliteStress >= 0.65) {
+    alerts.push({
+      alertId: `${nextId}-water-stress`,
+      fieldId: snapshot.props.fieldId,
+      basedOnSnapshotId: snapshot.props.snapshotId,
+      type: 'water_stress',
+      priority: satelliteStress >= 0.8 ? 1 : 2,
+      confidence: Number(Math.max(0.25, (baseConfidence - 0.04)).toFixed(3)),
+      freshness,
+      degradationReasons,
+    })
+  }
+
+  if (heat >= 0.75) {
+    alerts.push({
+      alertId: `${nextId}-thermal-stress`,
+      fieldId: snapshot.props.fieldId,
+      basedOnSnapshotId: snapshot.props.snapshotId,
+      type: 'thermal_stress',
+      priority: heat >= 0.9 ? 1 : 2,
+      confidence: Number(Math.max(0.25, (baseConfidence - 0.02)).toFixed(3)),
+      freshness,
+      degradationReasons,
+    })
+  }
+
+  return alerts.sort((left, right) => left.priority - right.priority || right.confidence - left.confidence)
+}
+
+export function toAlertContracts(alerts: AlertSnapshotFoundation[]) {
+  return alerts.map((alert) => toAlertSnapshotContract(alert))
+}
+
+export function toStaleAlertContracts(alerts: AlertSnapshotRecord[]) {
+  return alerts.map((alert) =>
+    toAlertSnapshotContract({
+      alertId: alert.alertId,
+      fieldId: alert.fieldId,
+      basedOnSnapshotId: alert.basedOnSnapshotId,
+      type: alert.type,
+      priority: alert.priority,
+      confidence: alert.confidence,
+      freshness: 'stale',
+      degradationReasons: alert.degradationReasons as AlertSnapshotFoundation['degradationReasons'],
+    }),
+  )
+}
+
+export function toStoredAlertContracts(alerts: AlertSnapshotRecord[]) {
+  return alerts.map((alert) =>
+    toAlertSnapshotContract({
+      alertId: alert.alertId,
+      fieldId: alert.fieldId,
+      basedOnSnapshotId: alert.basedOnSnapshotId,
+      type: alert.type,
+      priority: alert.priority,
+      confidence: alert.confidence,
+      freshness: alert.freshness,
+      degradationReasons: alert.degradationReasons as AlertSnapshotFoundation['degradationReasons'],
+    }),
+  )
+}

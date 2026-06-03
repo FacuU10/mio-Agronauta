@@ -1,0 +1,81 @@
+{
+  "schemaPath": "../../schemas/agronautas-contracts.v1.schema.json",
+  "cases": [
+    {
+      "name": "field-intake-valid",
+      "contract": "FieldIntake",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "fieldId": "corrientes-lote-001",
+        "crop": "rice",
+        "hectares": 42.5,
+        "locality": "Mercedes",
+        "growthStage": "tillering",
+        "location": { "lat": -29.1846, "lng": -58.0759 }
+      }
+    },
+    {
+      "name": "field-intake-invalid-contract",
+      "contract": "FieldIntake",
+      "valid": false,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "fieldId": "corrientes-lote-002",
+        "crop": "soy",
+        "hectares": 10,
+        "location": { "lat": -29.18, "lng": -58.07 }
+      }
+    },
+    {
+      "name": "risk-snapshot-degraded-valid",
+      "contract": "RiskSnapshot",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "snapshotId": "risk-001",
+        "fieldId": "corrientes-lote-001",
+        "score": 72,
+        "level": "high",
+        "confidence": 0.62,
+        "computedAt": "2026-06-03T00:00:00Z",
+        "validUntil": "2026-06-03T06:00:00Z",
+        "ruleVersion": "v0.1.0",
+        "degradationReasons": ["satellite_data_stale"],
+        "evidenceRefs": ["weather:open-meteo:2026-06-03T00:00:00Z"],
+        "drivers": [{ "key": "rainfall", "label": "Rainfall anomaly", "weight": 0.4, "value": 21.2 }]
+      }
+    },
+    {
+      "name": "alert-snapshot-valid",
+      "contract": "AlertSnapshot",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "alertId": "alert-001",
+        "fieldId": "corrientes-lote-001",
+        "basedOnSnapshotId": "risk-001",
+        "type": "flood",
+        "priority": 1,
+        "confidence": 0.71,
+        "freshness": "degraded",
+        "degradationReasons": ["satellite_data_stale"]
+      }
+    },
+    {
+      "name": "copilot-context-valid",
+      "contract": "CopilotContext",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "fieldId": "corrientes-lote-001",
+        "crop": "rice",
+        "growthStage": "tillering",
+        "requestedWindow": { "from": "2026-06-01T00:00:00Z", "to": "2026-06-03T00:00:00Z" },
+        "latestSnapshotId": "risk-001",
+        "alertIds": ["alert-001"],
+        "degradationReasons": ["satellite_data_stale"]
+      }
+    }
+  ]
+}

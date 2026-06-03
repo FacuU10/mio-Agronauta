@@ -1,0 +1,150 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+}
+
+enum SnapshotFreshness {
+  fresh
+  stale
+  degraded
+}
+
+model Field {
+  id                String                                      @id @default(cuid())
+  externalFieldId   String                                      @unique
+  crop              String
+  hectares          Decimal                                     @db.Decimal(10, 2)
+  localityName      String
+  provinceCode      String                                      @default("AR-W")
+  centroidLat       Decimal                                     @db.Decimal(10, 7)
+  centroidLng       Decimal                                     @db.Decimal(10, 7)
+  centroid          Unsupported("geometry(Point,4326)")?
+  boundary          Unsupported("geometry(MultiPolygon,4326)")?
+  boundarySource    Json
+  boundaryVersion   String
+  createdAt         DateTime                                    @default(now())
+  updatedAt         DateTime                                    @updatedAt
+  fieldContexts     FieldContext[]
+  ingestionRuns     SignalIngestionRun[]
+  riskSnapshots     RiskSnapshot[]
+  alertSnapshots    AlertSnapshot[]
+  copilotThreadRefs CopilotThreadRef[]
+
+  @@index([provinceCode, localityName])
+  @@index([centroid], type: Gist)
+  @@map("fields")
+}
+
+model FieldContext {
+  id                 String   @id @default(cuid())
+  fieldId            String
+  growthStage        String?
+  nearestStationId   String?
+  localityCanonical  String
+  localityConfidence Decimal  @default(1) @db.Decimal(4, 3)
+  contextPayload     Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  field              Field    @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@index([fieldId, createdAt(sort: Desc)])
+  @@map("field_contexts")
+}
+
+model SignalIngestionRun {
+  id                String    @id @default(cuid())
+  fieldId           String?
+  provider          String
+  signalType        String
+  runId             String    @unique
+  status            String
+  staleCause        String?
+  startedAt         DateTime
+  finishedAt        DateTime?
+  observedAt        DateTime?
+  evidencePayload   Json
+  degradationReason String?
+  createdAt         DateTime  @default(now())
+  field             Field?    @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+
+  @@index([provider, signalType, observedAt])
+  @@index([fieldId, startedAt(sort: Desc)])
+  @@map("signal_ingestion_runs")
+}
+
+model RiskSnapshot {
+  id                 String            @id @default(cuid())
+  fieldId            String
+  runId              String
+  score              Decimal           @db.Decimal(5, 2)
+  confidence         Decimal           @db.Decimal(4, 3)
+  level              RiskLevel
+  freshness          SnapshotFreshness @default(fresh)
+  computedAt         DateTime
+  validUntil         DateTime
+  ruleVersion        String
+  staleCause         String?
+  degradationReasons Json
+  drivers            Json
+  evidenceRefs       Json
+  summaryPayload     Json
+  createdAt          DateTime          @default(now())
+  field              Field             @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  alertSnapshots     AlertSnapshot[]
+
+  @@index([fieldId, computedAt(sort: Desc)])
+  @@index([fieldId, validUntil])
+  @@index([runId])
+  @@map("risk_snapshots")
+}
+
+model AlertSnapshot {
+  id                 String            @id @default(cuid())
+  fieldId            String
+  riskSnapshotId     String
+  runId              String
+  alertType          String
+  priority           Int
+  confidence         Decimal           @db.Decimal(4, 3)
+  freshness          SnapshotFreshness @default(fresh)
+  staleCause         String?
+  degradationReasons Json
+  payload            Json
+  createdAt          DateTime          @default(now())
+  field              Field             @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  riskSnapshot       RiskSnapshot      @relation(fields: [riskSnapshotId], references: [id], onDelete: Cascade)
+
+  @@index([fieldId, createdAt(sort: Desc)])
+  @@index([riskSnapshotId])
+  @@map("alert_snapshots")
+}
+
+model CopilotThreadRef {
+  id                 String    @id @default(cuid())
+  fieldId            String
+  externalThreadId   String    @unique
+  latestSnapshotId   String?
+  latestAlertId      String?
+  contextWindowStart DateTime?
+  contextWindowEnd   DateTime?
+  metadata           Json
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  field              Field     @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@index([fieldId, updatedAt(sort: Desc)])
+  @@map("copilot_thread_refs")
+}
