@@ -17,7 +17,7 @@ test('POST /fields acepta alta válida en Corrientes', async () => {
     fieldContextRepository: createFieldContextRepository(contextStore),
   })
 
-  const response = await request(app, '/fields', {
+  const response = await request(app, '/agronautas/fields', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-1', crop: 'rice', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
@@ -35,7 +35,7 @@ test('POST /fields rechaza punto fuera de alcance', async () => {
     fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: false, staleCause: 'outside_corrientes_rice_zone' }, fieldStore: new Map() }),
   })
 
-  const response = await request(app, '/fields', {
+  const response = await request(app, '/agronautas/fields', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-2', crop: 'rice', hectares: 10, locality: 'Rosario', location: { lat: -32.9, lng: -60.7 } }),
@@ -49,7 +49,7 @@ test('POST /fields rechaza punto fuera de alcance', async () => {
 test('POST /fields rechaza cultivo fuera de alcance MVP', async () => {
   const app = createTestApp()
 
-  const response = await request(app, '/fields', {
+  const response = await request(app, '/agronautas/fields', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-unsupported-crop', crop: 'soy', hectares: 10, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
@@ -93,8 +93,8 @@ test('GET /fields/:id/alerts/current responde stale y encola recompute sin dupli
     },
   })
 
-  const first = await request(app, '/fields/field-1/alerts/current')
-  const second = await request(app, '/fields/field-1/alerts/current')
+  const first = await request(app, '/agronautas/fields/field-1/alerts/current')
+  const second = await request(app, '/agronautas/fields/field-1/alerts/current')
 
   assert.equal(first.status, 202)
   assert.equal(second.status, 202)
@@ -160,7 +160,7 @@ test('GET /fields/:id/copilot/context expone referencias persistidas sin recalcu
     },
   })
 
-  const response = await request(app, `/fields/${field.props.id}/copilot/context?from=2026-06-01T00:00:00.000Z&to=2026-06-07T00:00:00.000Z`)
+  const response = await request(app, `/agronautas/fields/${field.props.id}/copilot/context?from=2026-06-01T00:00:00.000Z&to=2026-06-07T00:00:00.000Z`)
   assert.equal(response.status, 200)
   const json = (await response.json()) as {
     requestedWindow: { from: string; to: string }
@@ -179,10 +179,44 @@ test('GET /fields/:id/copilot/context expone referencias persistidas sin recalcu
   assert.deepEqual(lockCalls, [])
 })
 
+test('GET /agronautas/runtime expone modo y prefijo activos', async () => {
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'demo'
+  process.env['AGRONAUTAS_ROUTE_PREFIX'] = '/agronautas'
+
+  const response = await request(createTestApp(), '/agronautas/runtime')
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('x-agronautas-mode'), 'demo')
+  assert.deepEqual(await response.json(), { mode: 'demo', routePrefix: '/agronautas', contractVersion: '1.0.0' })
+
+  delete process.env['AGRONAUTAS_RUNTIME_MODE']
+  delete process.env['AGRONAUTAS_ROUTE_PREFIX']
+})
+
+test('modo demo responde contratos backend-driven sin depender de repositorios', async () => {
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'demo'
+
+  const app = createTestApp()
+  const createResponse = await request(app, '/agronautas/fields', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'demo-field', crop: 'rice', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
+  })
+  assert.equal(createResponse.status, 201)
+
+  const riskResponse = await request(app, '/agronautas/fields/demo-field/risk/current')
+  assert.equal(riskResponse.status, 200)
+  assert.equal(riskResponse.headers.get('x-agronautas-mode'), 'demo')
+  const riskJson = await riskResponse.json() as { status: string; snapshot: { degradationReasons: string[] } }
+  assert.equal(riskJson.status, 'stale')
+  assert.deepEqual(riskJson.snapshot.degradationReasons, ['satellite_data_stale'])
+
+  delete process.env['AGRONAUTAS_RUNTIME_MODE']
+})
+
 function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRouter>[0]> = {}) {
   const app = express()
   app.use(express.json())
-  app.use(createAgronautasRouter({
+  app.use('/agronautas', createAgronautasRouter({
     fieldRepository: overrides.fieldRepository ?? createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() }),
     fieldContextRepository: overrides.fieldContextRepository ?? createFieldContextRepository(new Map()),
     riskSnapshotRepository: overrides.riskSnapshotRepository ?? {

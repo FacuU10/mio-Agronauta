@@ -7,10 +7,12 @@ import {
   fieldCreatedSchema,
   fieldOverviewSchema,
   riskCurrentSchema,
+  runtimeInfoSchema,
 } from './schemas'
-import type { AlertsCurrent, FieldCreated, FieldOverview, RiskCurrent } from './schemas'
+import type { AlertsCurrent, FieldCreated, FieldOverview, RiskCurrent, RuntimeInfo } from './schemas'
 
 export interface AgronautasService {
+  getRuntime(): Promise<RuntimeInfo>
   createFieldIntake(input: FieldIntake): Promise<FieldCreated>
   getField(fieldId: string): Promise<FieldOverview>
   getCurrentRisk(fieldId: string): Promise<RiskCurrent>
@@ -19,6 +21,7 @@ export interface AgronautasService {
 
 export function createAgronautasApiService(): AgronautasService {
   return {
+    getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/agronautas/runtime')),
     createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/agronautas/fields', { method: 'POST', body: JSON.stringify(input) })),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/agronautas/fields/${fieldId}`)),
     getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/risk/current`)),
@@ -28,6 +31,9 @@ export function createAgronautasApiService(): AgronautasService {
 
 export function createAgronautasMockService(): AgronautasService {
   return {
+    async getRuntime() {
+      return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
+    },
     async createFieldIntake(input) {
       if (input.location.lat < -32 || input.location.lat > -27 || input.location.lng < -60.5 || input.location.lng > -56) {
         throw new ApiError(422, 'El lote queda fuera del alcance Corrientes arroz', contractErrorSchema.parse({
@@ -107,7 +113,5 @@ export function createAgronautasMockService(): AgronautasService {
 }
 
 export function resolveAgronautasService(): AgronautasService {
-  return process.env['NEXT_PUBLIC_AGRONAUTAS_USE_MOCKS'] === 'true'
-    ? createAgronautasMockService()
-    : createAgronautasApiService()
+  return createAgronautasApiService()
 }

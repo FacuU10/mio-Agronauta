@@ -60,9 +60,13 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       },
     ],
   })
+  const runtimeQuery = useQueries({
+    queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime() }],
+  })[0]
 
   return (
     <AgronautasWorkspace
+      runtimeMode={runtimeQuery.data?.mode ?? 'real'}
       selectedFieldId={selectedFieldId}
       lastCreatedFieldId={lastCreatedFieldId}
       intakeError={intakeError}

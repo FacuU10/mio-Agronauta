@@ -48,8 +48,15 @@ export const contractErrorSchema = z.object({
   details: z.record(z.unknown()).optional(),
 })
 
+export const runtimeInfoSchema = z.object({
+  mode: z.enum(['real', 'demo']),
+  routePrefix: z.string().min(1),
+  contractVersion: z.literal(AGRONAUTAS_CONTRACT_VERSION),
+})
+
 export type FieldCreated = z.infer<typeof fieldCreatedSchema>
 export type FieldOverview = z.infer<typeof fieldOverviewSchema>
 export type RiskCurrent = z.infer<typeof riskCurrentSchema>
 export type AlertsCurrent = z.infer<typeof alertsCurrentSchema>
 export type ContractError = z.infer<typeof contractErrorSchema>
+export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>

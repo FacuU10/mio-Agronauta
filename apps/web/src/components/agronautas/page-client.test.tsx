@@ -39,6 +39,7 @@ test('alta válida muestra dashboard con alertas y evidencia', async () => {
   fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
 
   await waitFor(() => {
+    assert.ok(view.getByText(/Modo demo/i))
     assert.ok(view.getByText('Drivers y evidencia'))
     assert.ok(view.getByText('Riesgo de anegamiento'))
     assert.ok(view.getByText(/weather:open-meteo/i))

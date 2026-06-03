@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 
 interface WorkspaceProps {
+  runtimeMode: 'real' | 'demo'
   selectedFieldId: string | null
   lastCreatedFieldId: string | null
   intakeError: string | null
@@ -29,7 +30,7 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-8 md:px-8">
       <section className="grid gap-4 rounded-[32px] border border-[var(--border)] bg-[linear-gradient(135deg,#173622_0%,#2c6f45_55%,#dbb369_100%)] px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
         <div className="space-y-4">
-          <Badge className="bg-white/15 text-white">Web MVP · Slice 5A</Badge>
+          <Badge className="bg-white/15 text-white">Web MVP · Modo {props.runtimeMode === 'demo' ? 'demo' : 'real'}</Badge>
           <h1 className="max-w-2xl text-3xl font-semibold leading-tight md:text-5xl">Intake guiado, riesgo auditable y alertas frescura-aware para arroz en Corrientes.</h1>
           <p className="max-w-2xl text-sm text-white/85 md:text-base">La UI usa contratos compartidos, mantiene la lógica pesada fuera del cliente y expone confianza, degradación y evidencia de cada snapshot.</p>
         </div>
@@ -42,6 +43,7 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
             <StatusRow label="Lote activo" value={props.selectedFieldId ?? 'Ninguno'} />
             <StatusRow label="Última alta" value={props.lastCreatedFieldId ?? 'Sin actividad'} />
             <StatusRow label="Alertas actuales" value={String(props.alerts?.alerts.length ?? 0)} />
+            <StatusRow label="Runtime backend" value={props.runtimeMode} />
           </CardContent>
         </Card>
       </section>

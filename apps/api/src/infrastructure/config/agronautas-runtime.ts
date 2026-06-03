@@ -1,0 +1,58 @@
+type RuntimeMode = 'real' | 'demo'
+
+const DEFAULT_ROUTE_PREFIX = '/agronautas'
+const DEFAULT_OPTIONAL_READINESS_SERVICES = ['mongodb']
+
+export interface AgronautasRuntimeConfig {
+  mode: RuntimeMode
+  routePrefix: string
+  trustProxy: boolean | number | string
+  optionalReadinessServices: string[]
+}
+
+export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env): AgronautasRuntimeConfig {
+  return {
+    mode: parseRuntimeMode(env['AGRONAUTAS_RUNTIME_MODE']),
+    routePrefix: normalizeRoutePrefix(env['AGRONAUTAS_ROUTE_PREFIX']),
+    trustProxy: parseTrustProxy(env['TRUST_PROXY']),
+    optionalReadinessServices: parseCsv(env['READINESS_OPTIONAL_SERVICES'], DEFAULT_OPTIONAL_READINESS_SERVICES),
+  }
+}
+
+export function parseAllowedOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
+  return parseCsv(env['CORS_ORIGINS'], ['http://localhost:3000'])
+}
+
+function parseRuntimeMode(value: string | undefined): RuntimeMode {
+  return value === 'demo' ? 'demo' : 'real'
+}
+
+function normalizeRoutePrefix(value: string | undefined): string {
+  const trimmed = (value ?? DEFAULT_ROUTE_PREFIX).trim()
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+  const normalized = withLeadingSlash.replace(/\/+$/, '')
+  return normalized.length ? normalized : DEFAULT_ROUTE_PREFIX
+}
+
+function parseTrustProxy(value: string | undefined): boolean | number | string {
+  if (!value) return false
+  const trimmed = value.trim()
+  if (trimmed === 'true') return true
+  if (trimmed === 'false') return false
+
+  const numeric = Number(trimmed)
+  if (Number.isInteger(numeric) && numeric >= 0) {
+    return numeric
+  }
+
+  return trimmed
+}
+
+function parseCsv(value: string | undefined, fallback: string[]): string[] {
+  const items = value
+    ?.split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  return items?.length ? items : fallback
+}
