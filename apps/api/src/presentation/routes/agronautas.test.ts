@@ -179,6 +179,62 @@ test('GET /fields/:id/copilot/context expone referencias persistidas sin recalcu
   assert.deepEqual(lockCalls, [])
 })
 
+test('GET /fields/:id/status resume frescura y última actualización sin encolar recompute', async () => {
+  const fieldStore = new Map<string, Field>()
+  const field = new Field({
+    id: 'field-status-1',
+    externalFieldId: 'ext-status-1',
+    crop: 'rice',
+    hectares: 18,
+    localityName: 'Mercedes',
+    provinceCode: 'AR-W',
+    centroid: { lat: -29.2, lng: -58.1 },
+    boundaryMetadata: {
+      sourceName: 'test',
+      sourceUrl: 'https://example.com',
+      sourceVersion: 'v1',
+      normalizationStatus: 'official-source-referenced',
+    },
+  })
+  fieldStore.set(field.props.id, field)
+
+  const snapshot = new RiskSnapshotFoundation({
+    snapshotId: 'snap-status-1',
+    fieldId: field.props.id,
+    runId: 'run-status-1',
+    score: 76,
+    confidence: 0.84,
+    computedAt: new Date('2026-06-03T00:00:00.000Z'),
+    validUntil: new Date('2026-06-03T01:00:00.000Z'),
+    ruleVersion: 'risk-v0',
+    drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.4, value: 0.8 }],
+    evidenceRefs: ['signal_ingestion_runs:weather-api:climate:run-status-1'],
+    degradationReasons: ['satellite_data_stale'],
+  })
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    riskSnapshotRepository: {
+      async save() {},
+      async getLatest() { return snapshot },
+      async listTimeline() { return [snapshot] },
+    },
+    alertSnapshotRepository: {
+      async saveMany() {},
+      async getLatestForField() { return [{ alertId: 'alert-status-1', fieldId: field.props.id, basedOnSnapshotId: snapshot.props.snapshotId, runId: snapshot.props.runId, type: 'flood', priority: 1, confidence: 0.73, freshness: 'degraded', degradationReasons: ['satellite_data_stale'] }] },
+      async listTimeline() { return [] },
+    },
+  }), `/agronautas/fields/${field.props.id}/status`)
+
+  assert.equal(response.status, 200)
+  const json = await response.json() as { fieldStatus: string; riskStatus: string; alertsStatus: string; alertCount: number; lastUpdatedAt: string }
+  assert.equal(json.fieldStatus, 'stale')
+  assert.equal(json.riskStatus, 'stale')
+  assert.equal(json.alertsStatus, 'degraded')
+  assert.equal(json.alertCount, 1)
+  assert.equal(json.lastUpdatedAt, '2026-06-03T00:00:00.000Z')
+})
+
 test('GET /agronautas/runtime expone modo y prefijo activos', async () => {
   process.env['AGRONAUTAS_RUNTIME_MODE'] = 'demo'
   process.env['AGRONAUTAS_ROUTE_PREFIX'] = '/agronautas'
@@ -211,6 +267,108 @@ test('modo demo responde contratos backend-driven sin depender de repositorios',
   assert.deepEqual(riskJson.snapshot.degradationReasons, ['satellite_data_stale'])
 
   delete process.env['AGRONAUTAS_RUNTIME_MODE']
+})
+
+test('POST /fields/:id/chat responde con resumen grounded y action trace', async () => {
+  const fieldStore = new Map<string, Field>()
+  const field = new Field({
+    id: 'field-chat-1',
+    externalFieldId: 'ext-chat-1',
+    crop: 'rice',
+    hectares: 30,
+    localityName: 'Mercedes',
+    provinceCode: 'AR-W',
+    centroid: { lat: -29.2, lng: -58.1 },
+    boundaryMetadata: {
+      sourceName: 'test',
+      sourceUrl: 'https://example.com',
+      sourceVersion: 'v1',
+      normalizationStatus: 'official-source-referenced',
+    },
+  })
+  fieldStore.set(field.props.id, field)
+  const snapshot = new RiskSnapshotFoundation({
+    snapshotId: 'snap-chat-1',
+    fieldId: field.props.id,
+    runId: 'run-chat-1',
+    score: 68,
+    confidence: 0.81,
+    computedAt: new Date('2026-06-03T00:00:00.000Z'),
+    validUntil: new Date('2026-06-03T06:00:00.000Z'),
+    ruleVersion: 'risk-v0',
+    drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.4, value: 0.7 }],
+    evidenceRefs: ['signal_ingestion_runs:weather-api:climate:run-chat-1'],
+    degradationReasons: [],
+  })
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    riskSnapshotRepository: {
+      async save() {},
+      async getLatest() { return snapshot },
+      async listTimeline() { return [snapshot] },
+    },
+    alertSnapshotRepository: {
+      async saveMany() {},
+      async getLatestForField() { return [{ alertId: 'alert-chat-1', fieldId: field.props.id, basedOnSnapshotId: snapshot.props.snapshotId, runId: snapshot.props.runId, type: 'flood', priority: 1, confidence: 0.73, freshness: 'fresh', degradationReasons: [] }] },
+      async listTimeline() { return [] },
+    },
+  }), `/agronautas/fields/${field.props.id}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: 'Explicá el riesgo actual' }),
+  })
+
+  assert.equal(response.status, 200)
+  const json = await response.json() as { executedAction: string; supportingFacts: Array<{ label: string }>; trace: Array<{ action: string }> }
+  assert.equal(json.executedAction, 'GET_RISK_SUMMARY')
+  assert.ok(json.supportingFacts.some((fact) => fact.label === 'Score'))
+  assert.equal(json.trace[0]?.action, 'GET_RISK_SUMMARY')
+})
+
+test('POST /fields/:id/chat rechaza preguntas fuera del alcance aprobado', async () => {
+  const response = await request(createTestApp(), '/agronautas/fields/field-1/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: 'Dame un clima futuro exacto para 30 días' }),
+  })
+
+  assert.equal(response.status, 422)
+  const json = await response.json() as { unavailableReason: string }
+  assert.equal(json.unavailableReason, 'unsupported_question')
+})
+
+test('POST /fields/:id/chat cae a modo degradado cuando Groq no está disponible', async () => {
+  const fieldStore = new Map<string, Field>()
+  const field = new Field({
+    id: 'field-chat-2',
+    externalFieldId: 'ext-chat-2',
+    crop: 'rice',
+    hectares: 11,
+    localityName: 'Mercedes',
+    provinceCode: 'AR-W',
+    centroid: { lat: -29.2, lng: -58.1 },
+    boundaryMetadata: {
+      sourceName: 'test',
+      sourceUrl: 'https://example.com',
+      sourceVersion: 'v1',
+      normalizationStatus: 'official-source-referenced',
+    },
+  })
+  fieldStore.set(field.props.id, field)
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+  }), `/agronautas/fields/${field.props.id}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: 'Dame un resumen general' }),
+  })
+
+  assert.equal(response.status, 200)
+  const json = await response.json() as { degraded: boolean; unavailableReason: string }
+  assert.equal(json.degraded, true)
+  assert.equal(json.unavailableReason, 'groq_unavailable')
 })
 
 function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRouter>[0]> = {}) {

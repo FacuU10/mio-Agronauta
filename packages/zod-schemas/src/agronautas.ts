@@ -131,8 +131,116 @@ export const agronautasContractErrorSchema = z.object({
   details: z.record(z.unknown()).optional(),
 })
 
+export const recomputeRequestResultSchema = z.object({
+  status: z.enum(['enqueued', 'already_in_progress']),
+  runId: z.string().min(1).optional(),
+  mode: z.enum(['demo']).optional(),
+})
+
+export const riskTimelineResponseSchema = z.object({
+  fieldId: z.string().min(1).max(80),
+  items: z.array(riskSnapshotSchema),
+})
+
+export const weatherTimelineItemSchema = z.object({
+  provider: z.string().min(1),
+  observedAt: z.string().datetime(),
+  freshnessHours: z.number().nonnegative(),
+  confidence: z.number().min(0).max(1),
+  staleCause: z.string().min(1).nullable().optional(),
+  temperatureC: z.number(),
+  rainfallMm7d: z.number(),
+  humidityPct: z.number(),
+})
+
+export const weatherTimelineResponseSchema = z.object({
+  fieldId: z.string().min(1).max(80),
+  items: z.array(weatherTimelineItemSchema),
+})
+
+export const monitoringStatusSchema = z.object({
+  contractVersion: contractVersionSchema,
+  fieldId: z.string().min(1).max(80),
+  fieldStatus: z.enum(['ready', 'stale', 'missing_data']),
+  riskStatus: z.enum(['fresh', 'degraded', 'stale', 'missing']),
+  alertsStatus: z.enum(['fresh', 'degraded', 'stale', 'missing']),
+  alertCount: z.number().int().nonnegative(),
+  lastUpdatedAt: z.string().datetime().nullable(),
+  validUntil: z.string().datetime().nullable(),
+  degradationReasons: z.array(degradationReasonSchema).default([]),
+})
+
+export const groundedChatActionTypeSchema = z.enum([
+  'GET_FIELD_OVERVIEW',
+  'GET_RISK_SUMMARY',
+  'GET_ALERTS',
+  'COMPARE_FIELDS',
+  'FINAL_RESPONSE',
+])
+
+export const groundedChatRequestSchema = z.object({
+  contractVersion: contractVersionSchema,
+  message: z.string().min(1).max(800),
+  comparisonFieldId: z.string().min(1).max(80).optional(),
+})
+
+export const groundedChatActionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('GET_FIELD_OVERVIEW'),
+    fieldId: z.string().min(1).max(80),
+  }),
+  z.object({
+    action: z.literal('GET_RISK_SUMMARY'),
+    fieldId: z.string().min(1).max(80),
+  }),
+  z.object({
+    action: z.literal('GET_ALERTS'),
+    fieldId: z.string().min(1).max(80),
+  }),
+  z.object({
+    action: z.literal('COMPARE_FIELDS'),
+    fieldId: z.string().min(1).max(80),
+    comparisonFieldId: z.string().min(1).max(80),
+  }),
+  z.object({
+    action: z.literal('FINAL_RESPONSE'),
+    fieldId: z.string().min(1).max(80),
+  }),
+])
+
+export const groundedChatFactSchema = z.object({
+  label: z.string().min(1).max(120),
+  value: z.string().min(1).max(400),
+})
+
+export const groundedChatTraceSchema = z.object({
+  action: groundedChatActionTypeSchema,
+  status: z.enum(['selected', 'executed', 'fallback']),
+})
+
+export const groundedChatResponseSchema = z.object({
+  contractVersion: contractVersionSchema,
+  fieldId: z.string().min(1).max(80),
+  answer: z.string().min(1).max(2000),
+  executedAction: groundedChatActionTypeSchema,
+  comparisonFieldId: z.string().min(1).max(80).optional(),
+  supportingFacts: z.array(groundedChatFactSchema).max(8).default([]),
+  citations: z.array(z.string().min(1).max(200)).max(8).default([]),
+  trace: z.array(groundedChatTraceSchema).min(1).max(6),
+  degraded: z.boolean().default(false),
+  unavailableReason: z.string().min(1).max(240).optional(),
+})
+
 export type FieldIntake = z.infer<typeof fieldIntakeSchema>
 export type RiskSnapshot = z.infer<typeof riskSnapshotSchema>
 export type AlertSnapshot = z.infer<typeof alertSnapshotSchema>
 export type CopilotContext = z.infer<typeof copilotContextSchema>
 export type AgronautasContractError = z.infer<typeof agronautasContractErrorSchema>
+export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema>
+export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>
+export type WeatherTimelineItem = z.infer<typeof weatherTimelineItemSchema>
+export type WeatherTimelineResponse = z.infer<typeof weatherTimelineResponseSchema>
+export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
+export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
+export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>
+export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>

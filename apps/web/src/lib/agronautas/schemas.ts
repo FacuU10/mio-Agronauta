@@ -3,10 +3,27 @@ import {
   AGRONAUTAS_CONTRACT_VERSION,
   alertSnapshotSchema,
   fieldIntakeSchema,
+  groundedChatRequestSchema,
+  groundedChatResponseSchema,
+  monitoringStatusSchema,
+  recomputeRequestResultSchema,
   riskSnapshotSchema,
+  riskTimelineResponseSchema,
+  weatherTimelineResponseSchema,
 } from '@repo/zod-schemas'
 
-export { AGRONAUTAS_CONTRACT_VERSION, fieldIntakeSchema, alertSnapshotSchema, riskSnapshotSchema }
+export {
+  AGRONAUTAS_CONTRACT_VERSION,
+  alertSnapshotSchema,
+  fieldIntakeSchema,
+  groundedChatRequestSchema,
+  groundedChatResponseSchema,
+  monitoringStatusSchema,
+  recomputeRequestResultSchema,
+  riskSnapshotSchema,
+  riskTimelineResponseSchema,
+  weatherTimelineResponseSchema,
+}
 
 export const fieldCreatedSchema = z.object({
   fieldId: z.string().min(1),
@@ -60,3 +77,9 @@ export type RiskCurrent = z.infer<typeof riskCurrentSchema>
 export type AlertsCurrent = z.infer<typeof alertsCurrentSchema>
 export type ContractError = z.infer<typeof contractErrorSchema>
 export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>
+export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
+export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema>
+export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>
+export type WeatherTimelineResponse = z.infer<typeof weatherTimelineResponseSchema>
+export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
+export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>

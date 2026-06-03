@@ -1,12 +1,12 @@
 'use client'
 
 import React from 'react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQueries } from '@tanstack/react-query'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { ApiError } from '@/lib/api-client'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
-import { contractErrorSchema } from '@/lib/agronautas/schemas'
+import { AGRONAUTAS_CONTRACT_VERSION, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
 import { AgronautasWorkspace } from './workspace'
 
@@ -22,6 +22,8 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const setSelectedFieldId = useAgronautasStore((state) => state.setSelectedFieldId)
   const setLastCreatedFieldId = useAgronautasStore((state) => state.setLastCreatedFieldId)
   const setIntakeError = useAgronautasStore((state) => state.setIntakeError)
+  const [chatResponse, setChatResponse] = useState<GroundedChatResponse | undefined>(undefined)
+  const [chatError, setChatError] = useState<string | null>(null)
 
   const intakeMutation = useMutation({
     mutationFn: (input: FieldIntake) => resolvedService.createFieldIntake(input),
@@ -29,6 +31,8 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       setSelectedFieldId(result.fieldId)
       setLastCreatedFieldId(result.fieldId)
       setIntakeError(null)
+      setChatResponse(undefined)
+      setChatError(null)
     },
     onError: (error) => {
       if (error instanceof ApiError) {
@@ -41,7 +45,29 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
     },
   })
 
-  const [fieldQuery, riskQuery, alertsQuery] = useQueries({
+  const recomputeMutation = useMutation({
+    mutationFn: (fieldId: string) => resolvedService.requestRecompute(fieldId),
+  })
+
+  const chatMutation = useMutation({
+    mutationFn: (message: string) => {
+      if (!selectedFieldId) throw new Error('Seleccioná un lote antes de usar el chat')
+      return resolvedService.askFieldChat(selectedFieldId, {
+        contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+        message,
+      })
+    },
+    onSuccess: (result) => {
+      setChatResponse(result)
+      setChatError(null)
+    },
+    onError: (error) => {
+      setChatResponse(undefined)
+      setChatError(error instanceof Error ? error.message : 'No se pudo obtener una respuesta del chat')
+    },
+  })
+
+  const [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery] = useQueries({
     queries: [
       {
         queryKey: ['agronautas', 'field', selectedFieldId],
@@ -56,6 +82,21 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       {
         queryKey: ['agronautas', 'alerts', selectedFieldId],
         queryFn: () => resolvedService.getCurrentAlerts(selectedFieldId as string),
+        enabled: Boolean(selectedFieldId),
+      },
+      {
+        queryKey: ['agronautas', 'status', selectedFieldId],
+        queryFn: () => resolvedService.getMonitoringStatus(selectedFieldId as string),
+        enabled: Boolean(selectedFieldId),
+      },
+      {
+        queryKey: ['agronautas', 'risk-timeline', selectedFieldId],
+        queryFn: () => resolvedService.getRiskTimeline(selectedFieldId as string),
+        enabled: Boolean(selectedFieldId),
+      },
+      {
+        queryKey: ['agronautas', 'weather-timeline', selectedFieldId],
+        queryFn: () => resolvedService.getWeatherTimeline(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
       },
     ],
@@ -74,9 +115,19 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       field={fieldQuery.data}
       risk={riskQuery.data}
       alerts={alertsQuery.data}
-      isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading}
+      status={statusQuery.data}
+      riskTimeline={riskTimelineQuery.data}
+      weatherTimeline={weatherTimelineQuery.data}
+      chatResponse={chatResponse}
+      chatError={chatError}
+      isChatPending={chatMutation.isPending}
+      recomputeStatus={recomputeRequestResultSchema.safeParse(recomputeMutation.data).success ? recomputeMutation.data : undefined}
+      isRecomputePending={recomputeMutation.isPending}
+      isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}
+      onRequestRecompute={() => (selectedFieldId ? recomputeMutation.mutateAsync(selectedFieldId) : Promise.resolve(undefined))}
+      onAskChat={(message) => chatMutation.mutateAsync(message)}
     />
   )
 }

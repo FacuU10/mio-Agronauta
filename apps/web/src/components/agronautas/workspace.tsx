@@ -2,7 +2,7 @@
 
 import React from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
-import type { AlertsCurrent, FieldOverview, RiskCurrent } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, FieldOverview, GroundedChatResponse, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -21,8 +21,18 @@ interface WorkspaceProps {
   field?: FieldOverview
   risk?: RiskCurrent
   alerts?: AlertsCurrent
+  status?: MonitoringStatus
+  riskTimeline?: RiskTimelineResponse
+  weatherTimeline?: WeatherTimelineResponse
+  chatResponse?: GroundedChatResponse
+  chatError: string | null
+  isChatPending: boolean
+  recomputeStatus?: RecomputeRequestResult
+  isRecomputePending: boolean
   onSelectField: (fieldId: string | null) => void
   onSubmitIntake: (input: FieldIntake) => Promise<unknown>
+  onRequestRecompute: () => Promise<unknown>
+  onAskChat: (message: string) => Promise<unknown>
 }
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
@@ -118,7 +128,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, isDashboardLoading, onSelectField }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, chatResponse, chatError, isChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -155,12 +165,59 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, isDashboardLoadi
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div>
               <p className="text-sm font-semibold text-amber-900">Snapshot stale detectado</p>
-              <p className="text-sm text-amber-800">La UI no promete actualidad falsa y muestra el último snapshot con recompute {alerts?.recompute?.status ?? risk.recompute?.status ?? 'pendiente'}.</p>
+              <p className="text-sm text-amber-800">La UI no promete actualidad falsa y muestra el último snapshot con recompute {recomputeStatus?.status ?? alerts?.recompute?.status ?? risk.recompute?.status ?? 'pendiente'}.</p>
             </div>
-            <Button variant="outline" onClick={() => onSelectField(selectedFieldId)}>Refrescar vista</Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => onSelectField(selectedFieldId)}>Refrescar vista</Button>
+              <Button onClick={() => void onRequestRecompute()} disabled={isRecomputePending}>{isRecomputePending ? 'Solicitando...' : 'Solicitar recompute'}</Button>
+            </div>
           </CardContent>
         </Card>
       ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card data-testid="agronautas-status-card">
+          <CardHeader>
+            <CardTitle>Estado monitoreo</CardTitle>
+            <CardDescription>Fuente de verdad backend para frescura, alertas y última actualización.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 text-sm">
+            <StatusRow label="Estado" value={status?.fieldStatus ?? 'Sin estado'} />
+            <StatusRow label="Riesgo" value={status?.riskStatus ?? 'missing'} />
+            <StatusRow label="Alertas" value={status?.alertsStatus ?? 'missing'} />
+            <StatusRow label="Última actualización" value={status?.lastUpdatedAt ?? 'N/D'} />
+          </CardContent>
+        </Card>
+        <Card data-testid="agronautas-risk-timeline-card">
+          <CardHeader>
+            <CardTitle>Timeline de riesgo</CardTitle>
+            <CardDescription>Snapshots persistidos para auditar score y vigencia.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm">
+            {riskTimeline?.items.length ? riskTimeline.items.map((item) => (
+              <div key={item.snapshotId} className="rounded-2xl border border-[var(--border)] p-3">
+                <p className="font-medium">{item.computedAt}</p>
+                <p>Score {item.score} · {item.level}</p>
+              </div>
+            )) : <p className="text-[var(--muted-foreground)]">Sin timeline persistido.</p>}
+          </CardContent>
+        </Card>
+        <Card data-testid="agronautas-weather-timeline-card">
+          <CardHeader>
+            <CardTitle>Timeline climático</CardTitle>
+            <CardDescription>Contexto backend para revisar frescura y señal usada.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm">
+            {weatherTimeline?.items.length ? weatherTimeline.items.map((item) => (
+              <div key={`${item.provider}-${item.observedAt}`} className="rounded-2xl border border-[var(--border)] p-3">
+                <p className="font-medium">{item.provider}</p>
+                <p>{item.observedAt}</p>
+                <p>{item.temperatureC}°C · lluvia 7d {item.rainfallMm7d}mm</p>
+              </div>
+            )) : <p className="text-[var(--muted-foreground)]">Sin timeline climático persistido.</p>}
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.15fr,0.85fr]">
         <Card data-testid="agronautas-risk-card">
@@ -208,6 +265,45 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, isDashboardLoadi
           </CardContent>
         </Card>
       </div>
+
+      <Card data-testid="agronautas-chat-card">
+        <CardHeader>
+          <CardTitle>Chat acotado con grounding backend</CardTitle>
+          <CardDescription>Solo explica overview, riesgo, alertas o comparaciones aprobadas. Nunca reemplaza el dashboard.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <form
+            className="grid gap-3"
+            onSubmit={async (event) => {
+              event.preventDefault()
+              const formData = new FormData(event.currentTarget)
+              const message = String(formData.get('chatMessage') ?? '').trim()
+              if (!message) return
+              await onAskChat(message)
+            }}
+          >
+            <Field label="Pregunta" name="chatMessage" placeholder="Explicá el riesgo actual del lote" />
+            <Button type="submit" disabled={isChatPending}>{isChatPending ? 'Consultando...' : 'Preguntar al chat'}</Button>
+          </form>
+
+          {chatError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{chatError}</p> : null}
+
+          {chatResponse ? (
+            <div className="grid gap-3 rounded-2xl border border-[var(--border)] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={chatResponse.degraded ? 'warning' : 'success'}>{chatResponse.degraded ? 'Degradado' : 'Grounded'}</Badge>
+                <Badge variant="outline">{chatResponse.executedAction}</Badge>
+              </div>
+              <p className="text-sm">{chatResponse.answer}</p>
+              {chatResponse.supportingFacts.length ? (
+                <ul className="space-y-1 text-sm text-[var(--muted-foreground)]">
+                  {chatResponse.supportingFacts.map((fact) => <li key={`${fact.label}-${fact.value}`}>• {fact.label}: {fact.value}</li>)}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
     </div>
   )
 }

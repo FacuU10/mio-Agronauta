@@ -41,8 +41,10 @@ test('alta válida muestra dashboard con alertas y evidencia', async () => {
   await waitFor(() => {
     assert.ok(view.getByText(/Modo demo/i))
     assert.ok(view.getByText('Drivers y evidencia'))
+    assert.ok(view.getByText('Estado monitoreo'))
     assert.ok(view.getByText('Riesgo de anegamiento'))
     assert.ok(view.getByText(/weather:open-meteo/i))
+    assert.ok(view.getByText('Timeline climático'))
   })
 })
 
@@ -74,5 +76,50 @@ test('visualización stale advierte recompute en curso', async () => {
   await waitFor(() => {
     assert.ok(view.getByText('Snapshot stale detectado'))
     assert.ok(view.getByText(/recompute enqueued/i))
+  })
+
+  fireEvent.click(view.getByRole('button', { name: 'Solicitar recompute' }))
+  fireEvent.click(view.getByRole('button', { name: 'Solicitar recompute' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/recompute already_in_progress/i))
+  })
+})
+
+test('chat grounded responde sin romper el dashboard', async () => {
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={createAgronautasMockService()} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+  await waitFor(() => assert.ok(view.getByTestId('agronautas-chat-card')))
+
+  fireEvent.change(view.getByLabelText('Pregunta'), { target: { value: 'Explicá el riesgo actual' } })
+  fireEvent.click(view.getByRole('button', { name: 'Preguntar al chat' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/score 74/i))
+    assert.ok(view.getByText('Drivers y evidencia'))
+  })
+})
+
+test('chat degradado expone motivo honesto', async () => {
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={createAgronautasMockService()} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+  await waitFor(() => assert.ok(view.getByTestId('agronautas-chat-card')))
+
+  fireEvent.change(view.getByLabelText('Pregunta'), { target: { value: 'chat deshabilitado' } })
+  fireEvent.click(view.getByRole('button', { name: 'Preguntar al chat' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/Groq no está configurado/i))
+    assert.ok(view.getByText('Degradado'))
   })
 })

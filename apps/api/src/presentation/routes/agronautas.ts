@@ -4,11 +4,14 @@ import {
   alertSnapshotSchema,
   copilotContextSchema,
   fieldIntakeSchema,
+  groundedChatRequestSchema,
+  monitoringStatusSchema,
   riskSnapshotSchema,
 } from '@repo/zod-schemas'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
 import { GenerateAlertsUseCase, toAlertContracts, toStaleAlertContracts, toStoredAlertContracts } from '../../application/usecases/generate-alerts-usecase'
 import { RequestRiskRecomputeUseCase } from '../../application/usecases/request-risk-recompute-usecase'
+import { GroundedChatUseCase } from '../../application/usecases/grounded-chat-usecase'
 import type {
   AlertSnapshotRepository,
   FieldContextRepository,
@@ -23,6 +26,7 @@ import { PostgresRiskSnapshotRepository } from '../../infrastructure/database/po
 import { PostgresSignalSummaryRepository } from '../../infrastructure/database/postgres/agronautas-signal-summary-repository'
 import { RedisRecomputeLockRepository } from '../../infrastructure/database/redis/agronautas-recompute-lock-repository'
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
+import { createGroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import { createDemoAlerts, createDemoCopilotContext, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
 
 interface AgronautasRouterDeps {
@@ -48,6 +52,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   const createFieldIntake = new CreateFieldIntakeUseCase(resolved.fieldRepository, resolved.fieldContextRepository)
   const generateAlerts = new GenerateAlertsUseCase(resolved.riskSnapshotRepository, resolved.alertSnapshotRepository)
   const requestRecompute = new RequestRiskRecomputeUseCase(resolved.recomputeLockRepository)
+  const groundedChat = new GroundedChatUseCase({
+    fieldRepository: resolved.fieldRepository,
+    riskSnapshotRepository: resolved.riskSnapshotRepository,
+    alertSnapshotRepository: resolved.alertSnapshotRepository,
+    groqProvider: createGroqChatProvider(),
+  })
   const runtimeConfig = getAgronautasRuntimeConfig()
 
   router.use((req, res, next) => {
@@ -133,6 +143,49 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const limit = parseLimit(req)
     const snapshots = await resolved.riskSnapshotRepository.listTimeline?.(req.params.fieldId, limit) ?? []
     return res.json({ fieldId: req.params.fieldId, items: snapshots.map((snapshot) => riskSnapshotSchema.parse(snapshot.toContract())) })
+  })
+
+  router.get('/fields/:fieldId/status', async (req, res) => {
+    if (runtimeConfig.mode === 'demo') {
+      const snapshot = createDemoRiskSnapshot(req.params.fieldId)
+      const alerts = createDemoAlerts(req.params.fieldId)
+
+      return res.json(monitoringStatusSchema.parse({
+        contractVersion: '1.0.0',
+        fieldId: req.params.fieldId,
+        fieldStatus: 'stale',
+        riskStatus: 'stale',
+        alertsStatus: 'stale',
+        alertCount: alerts.length,
+        lastUpdatedAt: snapshot.computedAt,
+        validUntil: snapshot.validUntil,
+        degradationReasons: snapshot.degradationReasons,
+      }))
+    }
+
+    const [field, snapshot, alerts] = await Promise.all([
+      resolved.fieldRepository.findById(req.params.fieldId),
+      resolved.riskSnapshotRepository.getLatest(req.params.fieldId),
+      resolved.alertSnapshotRepository.getLatestForField(req.params.fieldId),
+    ])
+
+    if (!field) return res.status(404).json({ error: 'Field not found' })
+
+    const riskStatus = snapshot ? snapshot.freshness : 'missing'
+    const alertsStatus = alerts.length > 0 ? deriveAlertStatus(alerts) : snapshot ? snapshot.freshness : 'missing'
+    const degradationReasons = snapshot?.props.degradationReasons ?? []
+
+    return res.json(monitoringStatusSchema.parse({
+      contractVersion: '1.0.0',
+      fieldId: req.params.fieldId,
+      fieldStatus: !snapshot ? 'missing_data' : snapshot.freshness === 'fresh' && alertsStatus === 'fresh' ? 'ready' : 'stale',
+      riskStatus,
+      alertsStatus,
+      alertCount: alerts.length,
+      lastUpdatedAt: snapshot?.props.computedAt.toISOString() ?? null,
+      validUntil: snapshot?.props.validUntil.toISOString() ?? null,
+      degradationReasons,
+    }))
   })
 
   router.get('/fields/:fieldId/weather/timeline', async (req, res) => {
@@ -274,6 +327,29 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json(payload)
   })
 
+  router.post('/fields/:fieldId/chat', async (req, res) => {
+    const parsed = groundedChatRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+
+    const message = parsed.data.message.toLowerCase()
+    if (/(clima futuro exacto|rendimiento garantizado|especul)/i.test(message)) {
+      return res.status(422).json({
+        contractVersion: '1.0.0',
+        fieldId: req.params.fieldId,
+        answer: 'Esa pregunta queda fuera del alcance del MVP porque no está respaldada por los datasets aprobados.',
+        executedAction: 'FINAL_RESPONSE',
+        supportingFacts: [],
+        citations: [],
+        trace: [{ action: 'FINAL_RESPONSE', status: 'fallback' }],
+        degraded: true,
+        unavailableReason: 'unsupported_question',
+      })
+    }
+
+    const response = await groundedChat.execute(req.params.fieldId, parsed.data)
+    return res.json(response)
+  })
+
   return router
 }
 
@@ -298,6 +374,12 @@ function parseRequestedWindow(req: Request): { from: string; to: string } | unde
   const from = typeof req.query['from'] === 'string' ? req.query['from'] : undefined
   const to = typeof req.query['to'] === 'string' ? req.query['to'] : undefined
   return from && to ? { from, to } : undefined
+}
+
+function deriveAlertStatus(alerts: Array<{ freshness: 'fresh' | 'stale' | 'degraded' }>): 'fresh' | 'stale' | 'degraded' {
+  if (alerts.some((alert) => alert.freshness === 'stale')) return 'stale'
+  if (alerts.some((alert) => alert.freshness === 'degraded')) return 'degraded'
+  return 'fresh'
 }
 
 export type { AgronautasRouterDeps }
