@@ -11,7 +11,9 @@ export class PostgresAlertSnapshotRepository implements AlertSnapshotRepository 
         `INSERT INTO alert_snapshots (
           id, field_id, risk_snapshot_id, run_id, alert_type, priority, confidence, freshness, stale_cause, degradation_reasons, payload
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (field_id, risk_snapshot_id, alert_type) DO UPDATE SET
+          id = EXCLUDED.id,
+          run_id = EXCLUDED.run_id,
           priority = EXCLUDED.priority,
           confidence = EXCLUDED.confidence,
           freshness = EXCLUDED.freshness,

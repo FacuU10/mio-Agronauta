@@ -1,4 +1,4 @@
-.PHONY: help install up down test lint secure clean
+.PHONY: help install up down test lint secure clean worker-install worker-run
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
@@ -9,6 +9,7 @@ install: ## Install dependencies
 up: ## Start development environment
 	docker-compose up -d
 	@echo "✅ Backend running at http://localhost:3001"
+	@echo "✅ Worker running as docker service 'monorepo-worker'"
 	@echo "✅ Frontend: Run 'pnpm --filter web dev' (will be at http://localhost:3000)"
 
 down: ## Stop development environment
@@ -16,6 +17,12 @@ down: ## Stop development environment
 
 test: ## Run all tests
 	pnpm run test
+
+worker-install: ## Install Python worker in editable mode
+	python -m pip install -e ./apps/workflow-runtime-python[dev]
+
+worker-run: ## Run Python worker locally
+	python -m worker.main
 
 lint: ## Run linters
 	pnpm run lint

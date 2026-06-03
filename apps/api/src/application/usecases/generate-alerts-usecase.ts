@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { toAlertSnapshotContract, type AlertSnapshotFoundation, type RiskSnapshotFoundation } from '../../domain/entities/agronautas'
 import type { AlertSnapshotRecord, AlertSnapshotRepository, RiskSnapshotRepository } from '../../domain/repositories/agronautas'
 
@@ -15,7 +14,6 @@ export interface GenerateAlertsResult {
 
 interface GenerateAlertsOptions {
   now?: () => Date
-  idGenerator?: () => string
 }
 
 export class GenerateAlertsUseCase {
@@ -34,7 +32,7 @@ export class GenerateAlertsUseCase {
       return { status: 'stale-snapshot', alerts: [], snapshot }
     }
 
-    const alerts = deriveAlerts(snapshot, this.idGenerator())
+    const alerts = deriveAlerts(snapshot)
     await this.alertSnapshotRepository.saveMany(
       alerts.map((alert) => ({
         alertId: alert.alertId,
@@ -56,13 +54,9 @@ export class GenerateAlertsUseCase {
   private now(): Date {
     return this.options.now?.() ?? new Date()
   }
-
-  private idGenerator(): string {
-    return this.options.idGenerator?.() ?? randomUUID()
-  }
 }
 
-function deriveAlerts(snapshot: RiskSnapshotFoundation, nextId: string): AlertSnapshotFoundation[] {
+function deriveAlerts(snapshot: RiskSnapshotFoundation): AlertSnapshotFoundation[] {
   const alerts: AlertSnapshotFoundation[] = []
   const driverMap = new Map(snapshot.props.drivers.map((driver) => [driver.key, driver.value]))
   const freshness = snapshot.freshness
@@ -74,9 +68,9 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation, nextId: string): AlertSn
   const satelliteStress = driverMap.get('satellite_stress') ?? 0
 
   if (snapshot.props.score >= 70 || rainfall >= 0.7) {
-    alerts.push({
-      alertId: `${nextId}-flood`,
-      fieldId: snapshot.props.fieldId,
+      alerts.push({
+        alertId: buildDeterministicAlertId(snapshot, 'flood'),
+        fieldId: snapshot.props.fieldId,
       basedOnSnapshotId: snapshot.props.snapshotId,
       type: 'flood',
       priority: snapshot.props.score >= 80 ? 1 : 2,
@@ -87,9 +81,9 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation, nextId: string): AlertSn
   }
 
   if (satelliteStress >= 0.65) {
-    alerts.push({
-      alertId: `${nextId}-water-stress`,
-      fieldId: snapshot.props.fieldId,
+      alerts.push({
+        alertId: buildDeterministicAlertId(snapshot, 'water_stress'),
+        fieldId: snapshot.props.fieldId,
       basedOnSnapshotId: snapshot.props.snapshotId,
       type: 'water_stress',
       priority: satelliteStress >= 0.8 ? 1 : 2,
@@ -100,9 +94,9 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation, nextId: string): AlertSn
   }
 
   if (heat >= 0.75) {
-    alerts.push({
-      alertId: `${nextId}-thermal-stress`,
-      fieldId: snapshot.props.fieldId,
+      alerts.push({
+        alertId: buildDeterministicAlertId(snapshot, 'thermal_stress'),
+        fieldId: snapshot.props.fieldId,
       basedOnSnapshotId: snapshot.props.snapshotId,
       type: 'thermal_stress',
       priority: heat >= 0.9 ? 1 : 2,
@@ -113,6 +107,13 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation, nextId: string): AlertSn
   }
 
   return alerts.sort((left, right) => left.priority - right.priority || right.confidence - left.confidence)
+}
+
+function buildDeterministicAlertId(
+  snapshot: RiskSnapshotFoundation,
+  type: AlertSnapshotFoundation['type'],
+): string {
+  return `${snapshot.props.fieldId}:${snapshot.props.snapshotId}:${type}`
 }
 
 export function toAlertContracts(alerts: AlertSnapshotFoundation[]) {

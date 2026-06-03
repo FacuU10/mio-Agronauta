@@ -9,6 +9,8 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "lint:security": "turbo run lint:security",
+    "worker:install": "python -m pip install -e ./apps/workflow-runtime-python[dev]",
+    "worker:run": "python -m worker.main",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo run clean && rm -rf node_modules"
   },

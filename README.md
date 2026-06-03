@@ -142,7 +142,7 @@ make clean       # Clean up (removes volumes and node_modules)
 2. Create a new Web Service on Render
 3. Set build command: `pnpm install && pnpm --filter api run build`
 4. Set start command: `pnpm --filter api start`
-5. Add environment variables: `DATABASE_URL`, `MONGODB_URL`, `REDIS_URL`, `CORS_ORIGINS`, `AGRONAUTAS_ROUTE_PREFIX`, `AGRONAUTAS_RUNTIME_MODE`, `TRUST_PROXY`
+5. Add environment variables: `DATABASE_URL`, `MONGODB_URL`, `REDIS_URL`, `CORS_ORIGINS`, `AGRONAUTAS_ROUTE_PREFIX`, `AGRONAUTAS_RUNTIME_MODE`, `TRUST_PROXY`, `AGRONAUTAS_RUNTIME_REQUIRED`, `AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS`
 
 ### Database (Railway)
 1. Create PostgreSQL, MongoDB, and Redis services
@@ -162,7 +162,7 @@ make clean       # Clean up (removes volumes and node_modules)
 ## Health Checks
 
 - `GET /health` and `GET /agronautas/health` - Basic liveness check
-- `GET /ready` and `GET /agronautas/ready` - Readiness check (Postgres/Redis required; Mongo optional by default)
+- `GET /ready` and `GET /agronautas/ready` - Readiness check (Postgres/Redis required; Mongo optional by default; worker required only when `AGRONAUTAS_RUNTIME_REQUIRED=true`)
 
 ## Agronautas deploy notes
 
@@ -171,6 +171,8 @@ make clean       # Clean up (removes volumes and node_modules)
 - Demo mode is controlled on the backend with `AGRONAUTAS_RUNTIME_MODE=demo`; the frontend keeps a single API service and only tests use local mocks.
 - Set `TRUST_PROXY=true` (or a numeric/string Express value) when the API is behind Render/Railway/Vercel proxies so rate limiting uses forwarded IPs correctly.
 - `CORS_ORIGINS` accepts exact comma-separated origins and exposes `X-Agronautas-Mode` for runtime inspection.
+- `docker-compose up --build api worker postgres redis` now boots PostGIS plus reproducible bootstrap SQL for Corrientes boundaries/localities; Mongo stays available under the optional Compose profile.
+- Keep `env.env` and `apps/api/tsconfig.tsbuildinfo` out of commits; they are local/generated artifacts, not release inputs.
 
 ## Architecture
 

@@ -129,6 +129,7 @@ model AlertSnapshot {
 
   @@index([fieldId, createdAt(sort: Desc)])
   @@index([riskSnapshotId])
+  @@unique([fieldId, riskSnapshotId, alertType])
   @@map("alert_snapshots")
 }
 

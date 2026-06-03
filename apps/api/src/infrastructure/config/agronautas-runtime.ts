@@ -8,6 +8,8 @@ export interface AgronautasRuntimeConfig {
   routePrefix: string
   trustProxy: boolean | number | string
   optionalReadinessServices: string[]
+  runtimeRequired: boolean
+  workerHeartbeatMaxAgeSeconds: number
 }
 
 export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env): AgronautasRuntimeConfig {
@@ -16,6 +18,8 @@ export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env)
     routePrefix: normalizeRoutePrefix(env['AGRONAUTAS_ROUTE_PREFIX']),
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),
     optionalReadinessServices: parseCsv(env['READINESS_OPTIONAL_SERVICES'], DEFAULT_OPTIONAL_READINESS_SERVICES),
+    runtimeRequired: parseBoolean(env['AGRONAUTAS_RUNTIME_REQUIRED'], false),
+    workerHeartbeatMaxAgeSeconds: parsePositiveInteger(env['AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS'], 180),
   }
 }
 
@@ -55,4 +59,17 @@ function parseCsv(value: string | undefined, fallback: string[]): string[] {
     .filter(Boolean)
 
   return items?.length ? items : fallback
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'true') return true
+  if (normalized === 'false') return false
+  return fallback
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }

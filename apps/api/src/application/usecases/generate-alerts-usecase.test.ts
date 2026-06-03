@@ -34,13 +34,18 @@ test('GenerateAlertsUseCase derives prioritized alerts only from fresh snapshots
       async getLatestForField() { return [] },
       async listTimeline() { return [] },
     },
-    { now: () => new Date('2026-06-03T06:00:00.000Z'), idGenerator: () => 'alert-seed' },
+    { now: () => new Date('2026-06-03T06:00:00.000Z') },
   )
 
   const result = await useCase.execute({ fieldId: 'field-1', triggeredBy: 'api' })
 
   assert.equal(result.status, 'generated')
   assert.equal(result.alerts.length, 3)
+  assert.deepEqual(result.alerts.map((alert) => alert.alertId).sort(), [
+    'field-1:snapshot-1:flood',
+    'field-1:snapshot-1:thermal_stress',
+    'field-1:snapshot-1:water_stress',
+  ])
   assert.equal(result.alerts[0]?.priority, 1)
   assert.equal(saved.length, 3)
 })
