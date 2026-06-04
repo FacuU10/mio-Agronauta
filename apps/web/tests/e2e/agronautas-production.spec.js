@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test('agronautas smoke documenta que la release gate real vive en API/readiness y no en stubs de red', async ({ page }) => {
-  await page.route('**/api/agronautas/runtime', async (route) => {
+  await page.route('**/api/agronautas/**/runtime', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -9,7 +9,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/fields', async (route) => {
+  await page.route('**/api/agronautas/**/fields', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback()
     await route.fulfill({
       status: 201,
@@ -18,7 +18,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/fields/field-prod-1', async (route) => {
+  await page.route('**/api/agronautas/**/fields/field-prod-1', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -26,7 +26,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/fields/field-prod-1/risk/current', async (route) => {
+  await page.route('**/api/agronautas/**/fields/field-prod-1/risk/current', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -43,7 +43,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/fields/field-prod-1/alerts/current', async (route) => {
+  await page.route('**/api/agronautas/**/fields/field-prod-1/alerts/current', async (route) => {
     await route.fulfill({
       status: 202,
       contentType: 'application/json',
@@ -61,7 +61,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.goto('/')
+  await page.goto('/demo')
   await page.getByTestId('agronautas-submit-intake').click()
 
   await expect(page.getByText('Snapshot stale detectado')).toBeVisible()

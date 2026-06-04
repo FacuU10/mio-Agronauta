@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test'
 
 test('agronautas muestra snapshot stale con evidencia persistida', async ({ page }) => {
+  await page.route('**/api/agronautas/**/runtime', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' }),
+    })
+  })
+
   await page.route('**/fields', async (route) => {
     if (route.request().method() !== 'POST' || !route.request().url().endsWith('/fields')) {
       await route.fallback()
@@ -96,7 +104,7 @@ test('agronautas muestra snapshot stale con evidencia persistida', async ({ page
     })
   })
 
-  await page.goto('/')
+  await page.goto('/demo')
   await page.getByTestId('agronautas-submit-intake').click()
 
   await expect(page.getByText('Snapshot stale detectado')).toBeVisible()
