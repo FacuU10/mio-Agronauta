@@ -403,11 +403,6 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const response = await groundedChat.execute(fieldId, parsed.data)
     return res.json(response)
   })
-    }
-
-    const response = await groundedChat.execute(req.params.fieldId, parsed.data)
-    return res.json(response)
-  })
 
   return router
 
