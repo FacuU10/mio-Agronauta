@@ -5,7 +5,7 @@ import { JSDOM } from 'jsdom'
 import { render, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { QueryProvider } from '@/lib/query-client'
 import { AgronautasPageClient } from './page-client'
-import { createAgronautasMockService } from '@/lib/agronautas/service'
+import { createAgronautasMockService, type AgronautasService } from '@/lib/agronautas/service'
 import { useAgronautasStore } from '@/store/agronautas-store'
 
 function setupDom() {
@@ -121,5 +121,47 @@ test('chat degradado expone motivo honesto', async () => {
   await waitFor(() => {
     assert.ok(view.getByText(/Groq no está configurado/i))
     assert.ok(view.getByText('Degradado'))
+  })
+})
+
+test('localidad seed Mercedes renderiza contexto útil sin placeholders vacíos', async () => {
+  const base = createAgronautasMockService()
+  const seededService: AgronautasService = {
+    ...base,
+    async getField(fieldId) {
+      return { ...(await base.getField(fieldId)), locality: 'Mercedes', externalFieldId: 'corrientes-demo-mercedes' }
+    },
+    async getWeatherTimeline(fieldId) {
+      return {
+        fieldId,
+        items: [{ provider: 'open-meteo', observedAt: '2026-06-03T09:00:00.000Z', freshnessHours: 2, confidence: 0.82, staleCause: null, temperatureC: 26.4, rainfallMm7d: 63.5, humidityPct: 81 }],
+      }
+    },
+    async askFieldChat(fieldId, input) {
+      return {
+        ...(await base.askFieldChat(fieldId, input)),
+        answer: 'Mercedes mantiene contexto grounded con clima Open-Meteo persistido y riesgo explicable.',
+      }
+    },
+  }
+
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={seededService} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+  await waitFor(() => {
+    assert.ok(view.getByText('corrientes-demo-mercedes'))
+    assert.ok(view.getByText('Mercedes'))
+    assert.ok(view.getByText(/lluvia 7d 63.5mm/i))
+  })
+
+  fireEvent.change(view.getByLabelText('Pregunta'), { target: { value: 'Explicá el riesgo actual' } })
+  fireEvent.click(view.getByRole('button', { name: 'Preguntar al chat' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/contexto grounded/i))
   })
 })

@@ -9,6 +9,9 @@
     "lint": "eslint . --ext .ts --max-warnings 0",
     "lint:security": "eslint . --ext .ts --config .eslintrc.security.json",
     "test": "node --import tsx --test src/**/*.test.ts",
+    "seed:corrientes-demo": "tsx src/scripts/seed-corrientes-rice-demo.ts --mode=fetch",
+    "seed:corrientes-demo:offline": "tsx src/scripts/seed-corrientes-rice-demo.ts --offline-fixtures",
+    "seed:corrientes-demo:cleanup": "tsx src/scripts/seed-corrientes-rice-demo.ts --cleanup",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "clean": "rm -rf dist"

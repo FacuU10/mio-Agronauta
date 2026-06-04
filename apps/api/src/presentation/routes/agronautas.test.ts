@@ -371,6 +371,80 @@ test('POST /fields/:id/chat cae a modo degradado cuando Groq no está disponible
   assert.equal(json.unavailableReason, 'groq_unavailable')
 })
 
+test('seeded Corrientes demo rows can power overview, weather, alerts, status and chat', async () => {
+  const fieldStore = new Map<string, Field>()
+  const contextStore = new Map<string, FieldContext>()
+  const field = new Field({
+    id: 'corrientes-demo-mercedes',
+    externalFieldId: 'corrientes-demo-mercedes',
+    crop: 'rice',
+    hectares: 42.5,
+    localityName: 'Mercedes',
+    provinceCode: 'AR-W',
+    centroid: { lat: -29.1846, lng: -58.0759 },
+    boundaryMetadata: {
+      sourceName: 'seed',
+      sourceUrl: 'https://api.open-meteo.com/',
+      sourceVersion: 'corrientes-demo-v1',
+      normalizationStatus: 'verified-demo-centroid',
+    },
+  })
+  fieldStore.set(field.props.id, field)
+  contextStore.set(field.props.id, new FieldContext({ fieldId: field.props.id, growthStage: 'tillering', localityCanonical: 'Mercedes', localityConfidence: 1, contextPayload: { demoBoundary: 'demo-only' } }))
+
+  const snapshot = new RiskSnapshotFoundation({
+    snapshotId: 'corrientes-demo-risk-mercedes',
+    fieldId: field.props.id,
+    runId: 'corrientes-demo-climate-mercedes',
+    score: 71,
+    confidence: 0.8,
+    computedAt: new Date('2026-06-03T09:00:00.000Z'),
+    validUntil: new Date('2026-06-03T15:00:00.000Z'),
+    ruleVersion: 'corrientes-demo-risk-v1',
+    drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.45, value: 0.78 }],
+    evidenceRefs: ['signal_ingestion_runs:open-meteo:climate:corrientes-demo-climate-mercedes', 'field_contexts:corrientes-demo-mercedes'],
+    degradationReasons: [],
+  })
+
+  const app = createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    fieldContextRepository: createFieldContextRepository(contextStore),
+    riskSnapshotRepository: {
+      async save() {},
+      async getLatest() { return snapshot },
+      async listTimeline() { return [snapshot] },
+    },
+    signalSummaryRepository: {
+      async getLatestClimateSummary() { return null },
+      async getLatestSatelliteSummary() { return null },
+      async listClimateTimeline() {
+        return [{ provider: 'open-meteo', observedAt: new Date('2026-06-03T09:00:00.000Z'), freshnessHours: 2, confidence: 0.82, provenance: ['signal_ingestion_runs:open-meteo:climate'], temperatureC: 26.4, rainfallMm7d: 63.5, humidityPct: 81 }]
+      },
+    },
+    alertSnapshotRepository: {
+      async saveMany() {},
+      async getLatestForField() { return [{ alertId: 'corrientes-demo-flood-mercedes', fieldId: field.props.id, basedOnSnapshotId: snapshot.props.snapshotId, runId: snapshot.props.runId, type: 'flood', priority: 1, confidence: 0.76, freshness: 'fresh', degradationReasons: [] }] },
+      async listTimeline() { return [{ alertId: 'corrientes-demo-flood-mercedes', fieldId: field.props.id, basedOnSnapshotId: snapshot.props.snapshotId, runId: snapshot.props.runId, type: 'flood', priority: 1, confidence: 0.76, freshness: 'fresh', degradationReasons: [] }] },
+    },
+  })
+
+  const [overview, weather, status, chat] = await Promise.all([
+    request(app, `/agronautas/fields/${field.props.id}`),
+    request(app, `/agronautas/fields/${field.props.id}/weather/timeline`),
+    request(app, `/agronautas/fields/${field.props.id}/status`),
+    request(app, `/agronautas/fields/${field.props.id}/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', message: 'Explicá el riesgo actual' }) }),
+  ])
+
+  assert.equal(overview.status, 200)
+  assert.equal((await overview.json() as { locality: string }).locality, 'Mercedes')
+  assert.equal(weather.status, 200)
+  assert.equal((await weather.json() as { items: Array<{ provider: string }> }).items[0]?.provider, 'open-meteo')
+  assert.equal(status.status, 200)
+  assert.equal((await status.json() as { riskStatus: string }).riskStatus, 'fresh')
+  assert.equal(chat.status, 200)
+  assert.equal((await chat.json() as { supportingFacts: Array<{ label: string }> }).supportingFacts[0]?.label, 'Score')
+})
+
 function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRouter>[0]> = {}) {
   const app = express()
   app.use(express.json())

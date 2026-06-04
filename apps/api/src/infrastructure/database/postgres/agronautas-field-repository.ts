@@ -127,7 +127,14 @@ export class PostgresFieldContextRepository implements FieldContextRepository {
     await this.pool.query(
       `INSERT INTO field_contexts (
         id, field_id, growth_stage, nearest_station_id, locality_canonical, locality_confidence, context_payload
-      ) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::jsonb)`,
+      ) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::jsonb)
+      ON CONFLICT (field_id) DO UPDATE SET
+        growth_stage = EXCLUDED.growth_stage,
+        nearest_station_id = EXCLUDED.nearest_station_id,
+        locality_canonical = EXCLUDED.locality_canonical,
+        locality_confidence = EXCLUDED.locality_confidence,
+        context_payload = EXCLUDED.context_payload,
+        updated_at = NOW()`,
       [
         context.props.fieldId,
         context.props.growthStage ?? null,
