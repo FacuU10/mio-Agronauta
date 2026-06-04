@@ -174,3 +174,23 @@ model AgronautasJobRun {
   @@index([runId])
   @@map("agronautas_job_runs")
 }
+
+model DemoContactSubmission {
+  id            String   @id @default(cuid())
+  name          String
+  email         String
+  phone         String?
+  organization  String?
+  role          String?
+  hectaresRange String?
+  locality      String?
+  message       String?
+  sourcePath    String
+  userAgent     String?
+  ipHash        String?
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([email])
+  @@map("demo_contact_submissions")
+}

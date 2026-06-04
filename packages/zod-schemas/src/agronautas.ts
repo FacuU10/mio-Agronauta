@@ -25,6 +25,9 @@ export const agronautasContractErrorCodes = [
   'WORKER_UNAVAILABLE',
 ] as const
 
+const trimmedString = (max: number) => z.string().trim().min(1).max(max)
+const optionalTrimmedString = (max: number) => z.string().trim().max(max).optional().transform((value) => value && value.length > 0 ? value : undefined)
+
 export const corrientesRiceZoneBoundarySource = {
   sourceName: 'IDERA / IGN / Gobierno de Corrientes (placeholder de normalización)',
   sourceUrl: 'https://www.idera.gob.ar/',
@@ -36,6 +39,25 @@ export const corrientesRiceZoneBoundarySource = {
 const contractVersionSchema = z.literal(AGRONAUTAS_CONTRACT_VERSION)
 const degradationReasonSchema = z.enum(degradationReasons)
 const growthStageSchema = z.enum(agronautasGrowthStages)
+
+export const demoContactSubmissionSchema = z.object({
+  contractVersion: contractVersionSchema,
+  name: trimmedString(120),
+  email: z.string().trim().email().max(160),
+  phone: optionalTrimmedString(40),
+  organization: optionalTrimmedString(120),
+  role: optionalTrimmedString(120),
+  hectaresRange: optionalTrimmedString(80),
+  locality: optionalTrimmedString(120),
+  message: optionalTrimmedString(1000),
+  website: z.string().trim().max(120).optional().default(''),
+})
+
+export const demoContactSubmissionResponseSchema = z.object({
+  contractVersion: contractVersionSchema,
+  submissionId: z.string().min(1).max(80),
+  status: z.literal('received'),
+})
 
 export const fieldIntakeSchema = z.object({
   contractVersion: contractVersionSchema,
@@ -247,3 +269,5 @@ export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>
 export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>
+export type DemoContactSubmission = z.infer<typeof demoContactSubmissionSchema>
+export type DemoContactSubmissionResponse = z.infer<typeof demoContactSubmissionResponseSchema>

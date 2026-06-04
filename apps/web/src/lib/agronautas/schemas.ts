@@ -2,6 +2,8 @@ import { z } from 'zod'
 import {
   AGRONAUTAS_CONTRACT_VERSION,
   alertSnapshotSchema,
+  demoContactSubmissionResponseSchema,
+  demoContactSubmissionSchema,
   fieldIntakeSchema,
   groundedChatRequestSchema,
   groundedChatResponseSchema,
@@ -15,6 +17,8 @@ import {
 export {
   AGRONAUTAS_CONTRACT_VERSION,
   alertSnapshotSchema,
+  demoContactSubmissionResponseSchema,
+  demoContactSubmissionSchema,
   fieldIntakeSchema,
   groundedChatRequestSchema,
   groundedChatResponseSchema,
@@ -78,6 +82,8 @@ export type RiskCurrent = z.infer<typeof riskCurrentSchema>
 export type AlertsCurrent = z.infer<typeof alertsCurrentSchema>
 export type ContractError = z.infer<typeof contractErrorSchema>
 export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>
+export type DemoContactSubmission = z.infer<typeof demoContactSubmissionSchema>
+export type DemoContactSubmissionResponse = z.infer<typeof demoContactSubmissionResponseSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema>
 export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>

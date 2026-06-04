@@ -1,9 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Router, type Request, type Response } from 'express'
 import {
   agronautasContractErrorSchema,
   alertSnapshotSchema,
   copilotContextSchema,
+  demoContactSubmissionResponseSchema,
+  demoContactSubmissionSchema,
   fieldIntakeSchema,
   groundedChatRequestSchema,
   monitoringStatusSchema,
@@ -17,6 +19,7 @@ import type {
   AgronautasJobRunRepository,
   AgronautasRuntimeDispatcher,
   AlertSnapshotRepository,
+  DemoContactSubmissionRepository,
   FieldContextRepository,
   FieldRepository,
   RecomputeLockRepository,
@@ -24,6 +27,7 @@ import type {
   SignalSummaryRepository,
 } from '../../domain/repositories/agronautas'
 import { PostgresAlertSnapshotRepository } from '../../infrastructure/database/postgres/agronautas-alert-snapshot-repository'
+import { PostgresDemoContactSubmissionRepository } from '../../infrastructure/database/postgres/demo-contact-submission-repository'
 import { PostgresFieldContextRepository, PostgresFieldRepository } from '../../infrastructure/database/postgres/agronautas-field-repository'
 import { PostgresAgronautasJobRunRepository } from '../../infrastructure/database/postgres/agronautas-job-run-repository'
 import { PostgresRiskSnapshotRepository } from '../../infrastructure/database/postgres/agronautas-risk-snapshot-repository'
@@ -45,6 +49,7 @@ interface AgronautasRouterDeps {
   runtimeDispatcher: AgronautasRuntimeDispatcher
   jobRunRepository: AgronautasJobRunRepository
   alertSnapshotRepository: AlertSnapshotRepository
+  demoContactSubmissionRepository: DemoContactSubmissionRepository
   isVersionedNamespace: boolean
 }
 
@@ -58,6 +63,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     runtimeDispatcher: deps.runtimeDispatcher ?? new RedisAgronautasRuntimeDispatcher(),
     jobRunRepository: deps.jobRunRepository ?? new PostgresAgronautasJobRunRepository(),
     alertSnapshotRepository: deps.alertSnapshotRepository ?? new PostgresAlertSnapshotRepository(),
+    demoContactSubmissionRepository: deps.demoContactSubmissionRepository ?? new PostgresDemoContactSubmissionRepository(),
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
   }
 
@@ -92,6 +98,28 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       compatibilityPrefix: resolved.isVersionedNamespace ? runtimeConfig.routePrefix : `${runtimeConfig.routePrefix}/v1`,
       contractVersion: '1.0.0',
     })
+  })
+
+  router.post('/contact/demo', async (req, res) => {
+    const parsed = demoContactSubmissionSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+
+    const submission = parsed.data
+    if (submission.website.trim().length > 0) {
+      return res.status(201).json(receivedResponse('ignored-honeypot'))
+    }
+
+    try {
+      const { submissionId } = await resolved.demoContactSubmissionRepository.save({
+        ...submission,
+        sourcePath: readSourcePath(req),
+        userAgent: readHeader(req, 'user-agent'),
+        ipHash: hashIp(req.ip),
+      })
+      return res.status(201).json(receivedResponse(submissionId))
+    } catch {
+      return respondContractError(res, 500, 'INVALID_CONTRACT', 'No pudimos recibir tu solicitud. Intentá nuevamente en unos minutos.')
+    }
   })
 
   router.post('/fields', requireWrite, async (req, res) => {
@@ -420,6 +448,14 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   }
 }
 
+function receivedResponse(submissionId: string) {
+  return demoContactSubmissionResponseSchema.parse({
+    contractVersion: '1.0.0',
+    submissionId,
+    status: 'received',
+  })
+}
+
 function respondContractError(
   res: Response,
   status: number,
@@ -459,6 +495,30 @@ function deriveAlertStatus(alerts: Array<{ freshness: 'fresh' | 'stale' | 'degra
   if (alerts.some((alert) => alert.freshness === 'stale')) return 'stale'
   if (alerts.some((alert) => alert.freshness === 'degraded')) return 'degraded'
   return 'fresh'
+}
+
+function readSourcePath(req: Request): string {
+  const fromHeader = readHeader(req, 'x-source-path')
+  if (fromHeader) return fromHeader
+
+  const referer = readHeader(req, 'referer')
+  if (!referer) return '/probar-demo'
+
+  try {
+    return new URL(referer).pathname || '/probar-demo'
+  } catch {
+    return '/probar-demo'
+  }
+}
+
+function readHeader(req: Request, name: string): string | undefined {
+  const value = req.header(name)?.trim()
+  return value && value.length > 0 ? value : undefined
+}
+
+function hashIp(ip: string | undefined): string | undefined {
+  if (!ip) return undefined
+  return createHash('sha256').update(ip).digest('hex')
 }
 
 function requireFieldId(req: Request, res: Response): string | undefined {

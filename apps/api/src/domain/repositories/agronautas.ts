@@ -1,3 +1,4 @@
+import type { DemoContactSubmission } from '@repo/zod-schemas'
 import type {
   ClimateSummary,
   Field,
@@ -26,6 +27,16 @@ export interface FieldRepository {
 export interface FieldContextRepository {
   save(context: FieldContext): Promise<void>
   getLatest(fieldId: string): Promise<FieldContext | null>
+}
+
+export interface DemoContactSubmissionRecord extends DemoContactSubmission {
+  sourcePath: string
+  userAgent?: string
+  ipHash?: string
+}
+
+export interface DemoContactSubmissionRepository {
+  save(record: DemoContactSubmissionRecord): Promise<{ submissionId: string }>
 }
 
 export interface SignalSummaryRepository {

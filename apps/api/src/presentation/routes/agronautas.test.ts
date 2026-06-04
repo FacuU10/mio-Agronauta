@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import type { FieldContextRepository, FieldRepository, SupportedCoverageResult } from '../../domain/repositories/agronautas'
+import type { DemoContactSubmissionRepository, FieldContextRepository, FieldRepository, SupportedCoverageResult } from '../../domain/repositories/agronautas'
 import { Field, FieldContext, RiskSnapshotFoundation, type ClimateSummary, type SatelliteSummary } from '../../domain/entities/agronautas'
 import { createAgronautasRouter } from './agronautas'
 
@@ -101,6 +101,86 @@ test('POST /fields acepta alta válida en Corrientes', async () => {
   assert.equal(json.coverage.locality, 'Mercedes')
   assert.equal(fieldStore.size, 1)
   assert.equal(contextStore.size, 1)
+})
+
+test('POST /contact/demo persiste solicitudes válidas', async () => {
+  const persisted: Array<{ email: string; sourcePath: string; ipHash?: string }> = []
+  const app = createTestApp({
+    demoContactSubmissionRepository: {
+      async save(record) {
+        persisted.push(record)
+        return { submissionId: 'demo-sub-1' }
+      },
+    },
+  })
+
+  const response = await request(app, '/agronautas/contact/demo', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-source-path': '/probar-demo' },
+    body: JSON.stringify({ contractVersion: '1.0.0', name: 'Ada', email: 'ada@example.com', website: '' }),
+  })
+
+  assert.equal(response.status, 201)
+  assert.deepEqual(await response.json(), { contractVersion: '1.0.0', submissionId: 'demo-sub-1', status: 'received' })
+  assert.equal(persisted.length, 1)
+  assert.equal(persisted[0]?.email, 'ada@example.com')
+  assert.equal(persisted[0]?.sourcePath, '/probar-demo')
+  assert.ok(persisted[0]?.ipHash)
+})
+
+test('POST /contact/demo rechaza payload inválido y no persiste', async () => {
+  let saveCalls = 0
+  const response = await request(createTestApp({
+    demoContactSubmissionRepository: { async save() { saveCalls += 1; return { submissionId: 'unused' } } },
+  }), '/agronautas/contact/demo', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', name: '', email: 'bad-email', website: '' }),
+  })
+
+  assert.equal(response.status, 400)
+  assert.equal(saveCalls, 0)
+})
+
+test('POST /contact/demo acepta honeypot sin persistir', async () => {
+  let saveCalls = 0
+  const response = await request(createTestApp({
+    demoContactSubmissionRepository: { async save() { saveCalls += 1; return { submissionId: 'unused' } } },
+  }), '/agronautas/contact/demo', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', name: 'Ada', email: 'ada@example.com', website: 'bot' }),
+  })
+
+  assert.equal(response.status, 201)
+  assert.deepEqual(await response.json(), { contractVersion: '1.0.0', submissionId: 'ignored-honeypot', status: 'received' })
+  assert.equal(saveCalls, 0)
+})
+
+test('POST /agronautas/v1/contact/demo mantiene acceso versionado', async () => {
+  const app = express()
+  app.use(express.json())
+  app.use('/agronautas/v1', createAgronautasRouter({
+    isVersionedNamespace: true,
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() }),
+    fieldContextRepository: createFieldContextRepository(new Map()),
+    riskSnapshotRepository: { async save() {}, async getLatest() { return null }, async listTimeline() { return [] } },
+    signalSummaryRepository: { async getLatestClimateSummary(): Promise<ClimateSummary | null> { return null }, async getLatestSatelliteSummary(): Promise<SatelliteSummary | null> { return null }, async listClimateTimeline() { return [] } },
+    recomputeLockRepository: { async acquire() { return { acquired: true, metadata: { runId: 'run-1', jobId: 'job-1', requestId: 'req-1', correlationId: 'req-1', triggeredBy: 'api', contractVersion: '1.0.0' } } }, async release() {} },
+    runtimeDispatcher: { async dispatchRiskRecompute() {} },
+    jobRunRepository: { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
+    alertSnapshotRepository: { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
+    demoContactSubmissionRepository: { async save() { return { submissionId: 'demo-sub-v1' } } },
+  }))
+
+  const response = await request(app, '/agronautas/v1/contact/demo', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', name: 'Ada', email: 'ada@example.com', website: '' }),
+  })
+
+  assert.equal(response.status, 201)
+  assert.deepEqual(await response.json(), { contractVersion: '1.0.0', submissionId: 'demo-sub-v1', status: 'received' })
 })
 
 test('POST /fields rechaza punto fuera de alcance', async () => {
@@ -497,6 +577,9 @@ test('POST /fields/:id/chat cae a modo degradado cuando Groq no está disponible
 })
 
 test('seeded Corrientes demo rows can power overview, weather, alerts, status and chat', async () => {
+  const referenceNow = new Date()
+  const snapshotComputedAt = new Date(referenceNow.getTime() - 2 * 60 * 60 * 1000)
+  const snapshotValidUntil = new Date(referenceNow.getTime() + 4 * 60 * 60 * 1000)
   const fieldStore = new Map<string, Field>()
   const contextStore = new Map<string, FieldContext>()
   const field = new Field({
@@ -523,8 +606,8 @@ test('seeded Corrientes demo rows can power overview, weather, alerts, status an
     runId: 'corrientes-demo-climate-mercedes',
     score: 71,
     confidence: 0.8,
-    computedAt: new Date('2026-06-03T09:00:00.000Z'),
-    validUntil: new Date('2026-06-03T15:00:00.000Z'),
+    computedAt: snapshotComputedAt,
+    validUntil: snapshotValidUntil,
     ruleVersion: 'corrientes-demo-risk-v1',
     drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.45, value: 0.78 }],
     evidenceRefs: ['signal_ingestion_runs:open-meteo:climate:corrientes-demo-climate-mercedes', 'field_contexts:corrientes-demo-mercedes'],
@@ -543,7 +626,7 @@ test('seeded Corrientes demo rows can power overview, weather, alerts, status an
       async getLatestClimateSummary() { return null },
       async getLatestSatelliteSummary() { return null },
       async listClimateTimeline() {
-        return [{ provider: 'open-meteo', observedAt: new Date('2026-06-03T09:00:00.000Z'), freshnessHours: 2, confidence: 0.82, provenance: ['signal_ingestion_runs:open-meteo:climate'], temperatureC: 26.4, rainfallMm7d: 63.5, humidityPct: 81 }]
+        return [{ provider: 'open-meteo', observedAt: snapshotComputedAt, freshnessHours: 2, confidence: 0.82, provenance: ['signal_ingestion_runs:open-meteo:climate'], temperatureC: 26.4, rainfallMm7d: 63.5, humidityPct: 81 }]
       },
     },
     alertSnapshotRepository: {
@@ -590,8 +673,13 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     runtimeDispatcher: overrides.runtimeDispatcher ?? { async dispatchRiskRecompute() {} },
     jobRunRepository: overrides.jobRunRepository ?? { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
     alertSnapshotRepository: overrides.alertSnapshotRepository ?? { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
+    demoContactSubmissionRepository: overrides.demoContactSubmissionRepository ?? createDemoContactSubmissionRepository(),
   }))
   return app
+}
+
+function createDemoContactSubmissionRepository(): DemoContactSubmissionRepository {
+  return { async save() { return { submissionId: 'demo-submission-default' } } }
 }
 
 function createFieldRepository(input: { coverage: SupportedCoverageResult; fieldStore: Map<string, Field> }): FieldRepository {

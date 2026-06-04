@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('landing matches source anchors and routes the single CTA to /demo', async ({ page }) => {
+test('landing matches source anchors and routes demo CTAs to /probar-demo while /demo stays direct', async ({ page }) => {
   await page.setViewportSize({ width: 1700, height: 1200 })
   await page.goto('/')
 
@@ -10,9 +10,9 @@ test('landing matches source anchors and routes the single CTA to /demo', async 
   await expect(page.getByText(/organización o rol/i)).toHaveCount(0)
   await expect(page.getByText(/solicitar contacto/i)).toHaveCount(0)
 
-  const demoLinks = page.locator('a[href="/demo"]')
-  await expect(demoLinks).toHaveCount(1)
-  await expect(demoLinks.first()).toHaveText('Demo')
+  const desktopDemoLinks = page.getByRole('link', { name: /probar demo|agendar demo/i })
+  await expect(desktopDemoLinks).toHaveCount(3)
+  await expect(page.getByRole('link', { name: /probar demo/i }).first()).toBeVisible()
 
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.getByRole('button', { name: /abrir menú/i }).click()
@@ -21,6 +21,7 @@ test('landing matches source anchors and routes the single CTA to /demo', async 
   await expect(page.getByRole('link', { name: 'Data' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Insurtech' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Roadmap' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /probar demo/i }).last()).toBeVisible()
   await page.getByRole('button', { name: /cerrar menú/i }).click()
 
   const indicators = page.locator('button[aria-label^="Ir a slide"]')
@@ -31,6 +32,9 @@ test('landing matches source anchors and routes the single CTA to /demo', async 
   await expect(indicators.nth(0)).toHaveClass(/bg-emerald-500/)
 
   await page.setViewportSize({ width: 1700, height: 1200 })
-  await demoLinks.first().click()
+  await page.getByRole('link', { name: /probar demo/i }).first().click()
+  await expect(page).toHaveURL(/\/probar-demo$/)
+
+  await page.goto('/demo')
   await expect(page).toHaveURL(/\/demo$/)
 })

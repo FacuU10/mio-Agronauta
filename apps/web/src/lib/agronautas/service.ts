@@ -1,6 +1,8 @@
 import { alertSnapshotSchema, riskSnapshotSchema, type FieldIntake } from '@repo/zod-schemas'
 import { ApiError, apiClient } from '@/lib/api-client'
 import {
+  demoContactSubmissionResponseSchema,
+  demoContactSubmissionSchema,
   monitoringStatusSchema,
   recomputeRequestResultSchema,
   riskTimelineResponseSchema,
@@ -14,7 +16,16 @@ import {
   riskCurrentSchema,
   runtimeInfoSchema,
 } from './schemas'
-import type { AlertsCurrent, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { AlertsCurrent, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+
+export async function submitDemoContact(input: DemoContactSubmission): Promise<DemoContactSubmissionResponse> {
+  demoContactSubmissionSchema.parse(input)
+  return demoContactSubmissionResponseSchema.parse(await apiClient('/contact/demo', {
+    method: 'POST',
+    headers: { 'X-Source-Path': typeof window !== 'undefined' ? window.location.pathname : '/probar-demo' },
+    body: JSON.stringify(input),
+  }))
+}
 
 export interface AgronautasService {
   getRuntime(): Promise<RuntimeInfo>

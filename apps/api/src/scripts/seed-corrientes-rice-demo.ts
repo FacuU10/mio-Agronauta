@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { fileURLToPath } from 'node:url'
+import { basename } from 'node:path'
 import { Field, FieldContext, RiskSnapshotFoundation, type DegradationReason, type RiskDriver } from '../domain/entities/agronautas'
 import type { AlertSnapshotRecord, SignalIngestionRunRecord } from '../domain/repositories/agronautas'
 import { PostgresAlertSnapshotRepository } from '../infrastructure/database/postgres/agronautas-alert-snapshot-repository'
@@ -482,7 +482,9 @@ async function main() {
   }
 }
 
-const scriptPath = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false
+const scriptPath = process.argv[1]
+  ? basename(process.argv[1]) === 'seed-corrientes-rice-demo.ts' || basename(process.argv[1]) === 'seed-corrientes-rice-demo.js'
+  : false
 if (scriptPath) {
   void main()
 }

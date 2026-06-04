@@ -28,12 +28,12 @@ beforeEach(() => {
   cleanup()
 })
 
-test('landing preserva anchors del source y expone exactamente un CTA a /demo', () => {
+test('landing preserva anchors del source y redirige CTAs a /probar-demo', () => {
   const markup = renderToStaticMarkup(<LandingHomepage initialShowSplash={false} />)
 
-  const demoLinks = markup.match(/href="\/demo"/g) ?? []
+  const demoLinks = markup.match(/href="\/probar-demo"/g) ?? []
 
-  assert.equal(demoLinks.length, 1)
+  assert.equal(demoLinks.length, 3)
   assert.match(markup, /AGRONAUTA RISK ENGINE/)
   assert.match(markup, /REDUCCIÓN DE/)
   assert.match(markup, /Agronautas/)
@@ -42,7 +42,8 @@ test('landing preserva anchors del source y expone exactamente un CTA a /demo', 
   assert.match(markup, /Hoja de Ruta/)
   assert.match(markup, /\/landing\/source\/logo\.webp/)
   assert.match(markup, /\/landing\/source\/imagen1\.webp/)
-  assert.match(markup, />Demo</)
+  assert.match(markup, />Probar demo</)
+  assert.match(markup, />Agendar demo</)
 })
 
 test('landing elimina el flujo contact-first heredado', () => {
