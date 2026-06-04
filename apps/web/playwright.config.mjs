@@ -10,7 +10,7 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: 'pnpm start',
+        command: 'npx next start .',
         port: 3000,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,

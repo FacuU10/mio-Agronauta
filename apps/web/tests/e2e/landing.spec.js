@@ -1,23 +1,36 @@
 import { expect, test } from '@playwright/test'
 
-test('landing publica CTA exacta y navega a la demo', async ({ page }) => {
-  await page.route('**/api/agronautas/**/runtime', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' }),
-    })
-  })
-
+test('landing matches source anchors and routes the single CTA to /demo', async ({ page }) => {
+  await page.setViewportSize({ width: 1700, height: 1200 })
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: /reduce la incertidumbre productiva/i })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'REDUCCIÓN DE INCERTIDUMBRE', exact: true })).toBeVisible({ timeout: 10000 })
+  await expect(page.getByRole('heading', { name: /agronautas risk engine/i })).toBeVisible()
 
-  const cta = page.getByRole('link', { name: 'prueba la version demo' }).first()
-  await expect(cta).toBeVisible()
-  await expect(cta).toHaveAttribute('href', '/demo')
+  await expect(page.getByText(/organización o rol/i)).toHaveCount(0)
+  await expect(page.getByText(/solicitar contacto/i)).toHaveCount(0)
 
-  await cta.click()
+  const demoLinks = page.locator('a[href="/demo"]')
+  await expect(demoLinks).toHaveCount(1)
+  await expect(demoLinks.first()).toHaveText('Demo')
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.getByRole('button', { name: /abrir menú/i }).click()
+  await expect(page.getByRole('link', { name: 'Risk Engine' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Soluciones' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Data' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Insurtech' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Roadmap' })).toBeVisible()
+  await page.getByRole('button', { name: /cerrar menú/i }).click()
+
+  const indicators = page.locator('button[aria-label^="Ir a slide"]')
+  await expect(indicators).toHaveCount(3)
+  await page.getByRole('button', { name: /siguiente slide/i }).click()
+  await expect(indicators.nth(1)).toHaveClass(/bg-emerald-500/)
+  await page.getByRole('button', { name: /slide anterior/i }).click()
+  await expect(indicators.nth(0)).toHaveClass(/bg-emerald-500/)
+
+  await page.setViewportSize({ width: 1700, height: 1200 })
+  await demoLinks.first().click()
   await expect(page).toHaveURL(/\/demo$/)
-  await expect(page.getByTestId('agronautas-submit-intake')).toBeVisible()
 })
