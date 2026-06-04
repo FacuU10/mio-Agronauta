@@ -20,6 +20,9 @@ export const agronautasContractErrorCodes = [
   'UNSUPPORTED_CROP',
   'MISSING_CONTEXT',
   'STALE_SNAPSHOT',
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'WORKER_UNAVAILABLE',
 ] as const
 
 export const corrientesRiceZoneBoundarySource = {

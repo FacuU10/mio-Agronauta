@@ -24,7 +24,7 @@ test('Field rejects coordinates outside world bounds', () => {
   )
 })
 
-test('Risk snapshot foundation derives degraded freshness and medium risk', () => {
+test('Risk snapshot foundation derives degraded freshness and medium risk before expiry', () => {
   const snapshot = new RiskSnapshotFoundation({
     snapshotId: 'snap-1',
     fieldId: 'field-1',
@@ -32,7 +32,7 @@ test('Risk snapshot foundation derives degraded freshness and medium risk', () =
     score: 55,
     confidence: 0.68,
     computedAt: new Date('2026-06-03T00:00:00.000Z'),
-    validUntil: new Date('2026-06-03T08:00:00.000Z'),
+    validUntil: new Date('2099-06-03T08:00:00.000Z'),
     ruleVersion: 'risk-v0',
     degradationReasons: ['satellite_data_stale'],
     evidenceRefs: ['signal_ingestion_runs:provider-a:satellite'],

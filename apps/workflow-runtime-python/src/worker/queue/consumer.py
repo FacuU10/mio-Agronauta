@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from worker.core.config import get_settings
 from worker.core.telemetry import build_logger, traced_operation
 from worker.graph.base import build_graph
+from worker.runtime.agronautas_jobs import handle_agronautas_job
 
 
 class WorkflowQueueConsumer:
@@ -31,6 +32,15 @@ class WorkflowQueueConsumer:
 
     async def handle_job(self, job: dict[str, Any]) -> dict[str, Any]:
         self.validator.validate(job)
+        if job.get("workflowId") == "agronautas-risk-recompute":
+            with traced_operation(
+                "agronautas-risk-recompute.process",
+                {"jobId": job["jobId"], "runId": job["runId"], "requestId": job["trace"]["traceId"]},
+            ):
+                result = await handle_agronautas_job(job, self.redis, self.logger)
+                await self.redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
+                return result
+
         with traced_operation("workflow-job.process", {"jobId": job["jobId"], "workflowId": job["workflowId"]}):
             graph = await build_graph()
             state = {

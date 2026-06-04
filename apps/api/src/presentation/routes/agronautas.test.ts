@@ -6,6 +6,79 @@ import type { FieldContextRepository, FieldRepository, SupportedCoverageResult }
 import { Field, FieldContext, RiskSnapshotFoundation, type ClimateSummary, type SatelliteSummary } from '../../domain/entities/agronautas'
 import { createAgronautasRouter } from './agronautas'
 
+test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async () => {
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  const response = await request(createTestApp(), '/agronautas/fields/field-1/risk/current')
+  assert.equal(response.status, 401)
+  assert.deepEqual(await response.json(), {
+    contractVersion: '1.0.0',
+    code: 'UNAUTHORIZED',
+    message: 'Missing or invalid bearer token',
+    retryable: false,
+  })
+
+  delete process.env['AGRONAUTAS_AUTH_ENABLED']
+  delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+})
+
+test('POST /fields/:id/recompute devuelve 403 contractual para rol reader', async () => {
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  const response = await request(createTestApp(), '/agronautas/fields/field-1/recompute', {
+    method: 'POST',
+    headers: { authorization: 'Bearer reader-token' },
+  })
+  assert.equal(response.status, 403)
+  const json = await response.json() as { code: string; retryable: boolean }
+  assert.equal(json.code, 'FORBIDDEN')
+  assert.equal(json.retryable, false)
+
+  delete process.env['AGRONAUTAS_AUTH_ENABLED']
+  delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+})
+
+test('GET /agronautas/v1/runtime preserva compatibilidad versionada', async () => {
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  process.env['AGRONAUTAS_ROUTE_PREFIX'] = '/agronautas'
+
+  const app = express()
+  app.use(express.json())
+  app.use('/agronautas/v1', createAgronautasRouter({
+    isVersionedNamespace: true,
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() }),
+    fieldContextRepository: createFieldContextRepository(new Map()),
+    riskSnapshotRepository: { async save() {}, async getLatest() { return null }, async listTimeline() { return [] } },
+    signalSummaryRepository: {
+      async getLatestClimateSummary(): Promise<ClimateSummary | null> { return null },
+      async getLatestSatelliteSummary(): Promise<SatelliteSummary | null> { return null },
+      async listClimateTimeline() { return [] },
+    },
+    recomputeLockRepository: { async acquire() { return { acquired: true, metadata: { runId: 'run-1', jobId: 'job-1', requestId: 'req-1', correlationId: 'req-1', triggeredBy: 'api', contractVersion: '1.0.0' } } }, async release() {} },
+    runtimeDispatcher: { async dispatchRiskRecompute() {} },
+    jobRunRepository: { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
+    alertSnapshotRepository: { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
+  }))
+  const response = await request(app, '/agronautas/v1/runtime', {
+    headers: { authorization: 'Bearer reader-token' },
+  })
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    mode: 'real',
+    routePrefix: '/agronautas/v1',
+    compatibilityPrefix: '/agronautas',
+    contractVersion: '1.0.0',
+  })
+
+  delete process.env['AGRONAUTAS_AUTH_ENABLED']
+  delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  delete process.env['AGRONAUTAS_ROUTE_PREFIX']
+})
+
 test('POST /fields acepta alta válida en Corrientes', async () => {
   const fieldStore = new Map<string, Field>()
   const contextStore = new Map<string, FieldContext>()
@@ -88,7 +161,12 @@ test('GET /fields/:id/alerts/current responde stale y encola recompute sin dupli
       async listTimeline() { return [] },
     },
     recomputeLockRepository: {
-      async acquire(fieldId) { lockCalls.push(fieldId); return lockCalls.length === 1 },
+      async acquire(fieldId) {
+        lockCalls.push(fieldId)
+        return lockCalls.length === 1
+          ? { acquired: true, metadata: { runId: 'run-1', jobId: 'job-1', requestId: 'req-1', correlationId: 'req-1', triggeredBy: 'alert-refresh', contractVersion: '1.0.0' } }
+          : { acquired: false, metadata: { runId: 'run-1', jobId: 'job-1', requestId: 'req-1', correlationId: 'req-1', triggeredBy: 'alert-refresh', contractVersion: '1.0.0' } }
+      },
       async release() {},
     },
   })
@@ -155,7 +233,7 @@ test('GET /fields/:id/copilot/context expone referencias persistidas sin recalcu
       async listTimeline() { return [] },
     },
     recomputeLockRepository: {
-      async acquire(fieldId) { lockCalls.push(fieldId); return true },
+      async acquire(fieldId) { lockCalls.push(fieldId); return { acquired: true, metadata: { runId: 'run-ctx', jobId: 'job-ctx', requestId: 'req-ctx', correlationId: 'req-ctx', triggeredBy: 'api', contractVersion: '1.0.0' } } },
       async release() {},
     },
   })
@@ -182,14 +260,61 @@ test('GET /fields/:id/copilot/context expone referencias persistidas sin recalcu
 test('GET /agronautas/runtime expone modo y prefijo activos', async () => {
   process.env['AGRONAUTAS_RUNTIME_MODE'] = 'demo'
   process.env['AGRONAUTAS_ROUTE_PREFIX'] = '/agronautas'
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
 
-  const response = await request(createTestApp(), '/agronautas/runtime')
+  const response = await request(createTestApp(), '/agronautas/runtime', {
+    headers: { authorization: 'Bearer reader-token' },
+  })
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('x-agronautas-mode'), 'demo')
-  assert.deepEqual(await response.json(), { mode: 'demo', routePrefix: '/agronautas', contractVersion: '1.0.0' })
+  assert.equal(response.headers.get('x-agronautas-route-compatibility'), '/agronautas/v1')
+  assert.deepEqual(await response.json(), { mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' })
 
   delete process.env['AGRONAUTAS_RUNTIME_MODE']
   delete process.env['AGRONAUTAS_ROUTE_PREFIX']
+  delete process.env['AGRONAUTAS_AUTH_ENABLED']
+  delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+})
+
+test('GET /fields/:id/alerts/current no persiste alertas nuevas cuando el snapshot sigue stale', async () => {
+  const snapshot = new RiskSnapshotFoundation({
+    snapshotId: 'snap-stale-1',
+    fieldId: 'field-stale-1',
+    runId: 'run-stale-1',
+    score: 84,
+    confidence: 0.83,
+    computedAt: new Date('2026-06-03T00:00:00.000Z'),
+    validUntil: new Date('2026-06-03T01:00:00.000Z'),
+    ruleVersion: 'risk-v0',
+    drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 1, value: 0.9 }],
+    evidenceRefs: ['signal_ingestion_runs:weather-api:climate:run-stale-1'],
+    degradationReasons: [],
+  })
+  let saveManyCalls = 0
+
+  const app = createTestApp({
+    riskSnapshotRepository: {
+      async save() {},
+      async getLatest() { return snapshot },
+      async listTimeline() { return [snapshot] },
+    },
+    alertSnapshotRepository: {
+      async saveMany() { saveManyCalls += 1 },
+      async getLatestForField() {
+        return [{ alertId: 'field-stale-1:snap-prev:flood', fieldId: 'field-stale-1', basedOnSnapshotId: 'snap-prev', runId: 'run-prev', type: 'flood', priority: 1, confidence: 0.74, freshness: 'fresh', degradationReasons: [] }]
+      },
+      async listTimeline() { return [] },
+    },
+    recomputeLockRepository: {
+      async acquire() { return { acquired: false, metadata: { runId: 'run-stale-1', jobId: 'job-stale-1', requestId: 'req-stale-1', correlationId: 'req-stale-1', triggeredBy: 'alert-refresh', contractVersion: '1.0.0' } } },
+      async release() {},
+    },
+  })
+
+  const response = await request(app, '/agronautas/fields/field-stale-1/alerts/current')
+  assert.equal(response.status, 202)
+  assert.equal(saveManyCalls, 0)
 })
 
 test('modo demo responde contratos backend-driven sin depender de repositorios', async () => {
@@ -229,7 +354,9 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
       async getLatestSatelliteSummary(): Promise<SatelliteSummary | null> { return null },
       async listClimateTimeline() { return [] },
     },
-    recomputeLockRepository: overrides.recomputeLockRepository ?? { async acquire() { return true }, async release() {} },
+    recomputeLockRepository: overrides.recomputeLockRepository ?? { async acquire() { return { acquired: true, metadata: { runId: 'run-1', jobId: 'job-1', requestId: 'req-1', correlationId: 'req-1', triggeredBy: 'api', contractVersion: '1.0.0' } } }, async release() {} },
+    runtimeDispatcher: overrides.runtimeDispatcher ?? { async dispatchRiskRecompute() {} },
+    jobRunRepository: overrides.jobRunRepository ?? { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
     alertSnapshotRepository: overrides.alertSnapshotRepository ?? { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
   }))
   return app

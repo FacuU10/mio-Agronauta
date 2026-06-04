@@ -34,12 +34,16 @@ export class ComputeFieldRiskUseCase {
   async execute(input: ComputeFieldRiskInput): Promise<ComputeFieldRiskResult> {
     const computedAt = this.now()
     const runId = this.idGenerator()
-    const lockAcquired = await this.recomputeLockRepository.acquire(input.fieldId, RECOMPUTE_LOCK_TTL_SECONDS, {
+    const lock = await this.recomputeLockRepository.acquire(input.fieldId, RECOMPUTE_LOCK_TTL_SECONDS, {
       runId,
-      triggeredBy: input.triggeredBy,
+      jobId: `risk-${runId}`,
+      requestId: runId,
+      correlationId: runId,
+      triggeredBy: input.triggeredBy === 'scheduler' ? 'api' : input.triggeredBy,
+      contractVersion: '1.0.0',
     })
 
-    if (!lockAcquired) {
+    if (!lock.acquired) {
       const existingSnapshot = await this.riskSnapshotRepository.getLatest(input.fieldId)
       if (!existingSnapshot) {
         throw new Error(`No snapshot available while recompute is already in progress for field ${input.fieldId}`)
@@ -85,7 +89,7 @@ export class ComputeFieldRiskUseCase {
       return {
         snapshot,
         status: 'computed',
-        lockAcquired: true,
+         lockAcquired: true,
       }
     } finally {
       await this.recomputeLockRepository.release(input.fieldId)

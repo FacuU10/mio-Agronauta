@@ -51,6 +51,7 @@ export const contractErrorSchema = z.object({
 export const runtimeInfoSchema = z.object({
   mode: z.enum(['real', 'demo']),
   routePrefix: z.string().min(1),
+  compatibilityPrefix: z.string().min(1).optional(),
   contractVersion: z.literal(AGRONAUTAS_CONTRACT_VERSION),
 })
 

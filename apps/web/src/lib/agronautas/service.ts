@@ -21,18 +21,18 @@ export interface AgronautasService {
 
 export function createAgronautasApiService(): AgronautasService {
   return {
-    getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/agronautas/runtime')),
-    createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/agronautas/fields', { method: 'POST', body: JSON.stringify(input) })),
-    getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/agronautas/fields/${fieldId}`)),
-    getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/risk/current`)),
-    getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/alerts/current`)),
+    getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
+    createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
+    getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/fields/${fieldId}`)),
+    getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/fields/${fieldId}/risk/current`)),
+    getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(`/fields/${fieldId}/alerts/current`)),
   }
 }
 
 export function createAgronautasMockService(): AgronautasService {
   return {
     async getRuntime() {
-      return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
+      return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
     },
     async createFieldIntake(input) {
       if (input.location.lat < -32 || input.location.lat > -27 || input.location.lng < -60.5 || input.location.lng > -56) {

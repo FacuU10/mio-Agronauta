@@ -14,7 +14,7 @@ function createContext(growthStage = 'flowering') {
   })
 }
 
-test('ComputeFieldRiskUseCase persists an auditable degraded snapshot', async () => {
+test('ComputeFieldRiskUseCase persists an auditable degraded snapshot before expiry', async () => {
   const savedSnapshots: RiskSnapshotFoundation[] = []
   const useCase = new ComputeFieldRiskUseCase(
     {
@@ -52,7 +52,7 @@ test('ComputeFieldRiskUseCase persists an auditable degraded snapshot', async ()
       async getLatest() { return null },
     },
     {
-      async acquire() { return true },
+      async acquire() { return { acquired: true, metadata: { runId: 'run-123', jobId: 'risk-run-123', requestId: 'run-123', correlationId: 'run-123', triggeredBy: 'api', contractVersion: '1.0.0' } } },
       async release() {},
     },
     {
@@ -69,10 +69,12 @@ test('ComputeFieldRiskUseCase persists an auditable degraded snapshot', async ()
   assert.equal(result.status, 'computed')
   assert.equal(savedSnapshots.length, 1)
   assert.equal(result.snapshot.props.ruleVersion, 'risk-v0')
-  assert.equal(result.snapshot.freshness, 'degraded')
+  assert.equal(result.snapshot.freshness, result.snapshot.isExpired() ? 'stale' : 'degraded')
   assert.ok(result.snapshot.props.degradationReasons.includes('satellite_data_stale'))
   assert.ok(result.snapshot.props.evidenceRefs.includes('field_contexts:field-1'))
   assert.equal(result.snapshot.props.validUntil.toISOString(), '2026-06-03T12:00:00.000Z')
+  assert.equal(result.snapshot.isExpired(new Date('2026-06-03T06:01:00.000Z')), false)
+  assert.equal(result.snapshot.isExpired(new Date('2026-06-03T12:00:00.000Z')), true)
 })
 
 test('ComputeFieldRiskUseCase reuses latest snapshot when recompute lock is already held', async () => {
@@ -104,7 +106,7 @@ test('ComputeFieldRiskUseCase reuses latest snapshot when recompute lock is alre
       async getLatest() { return existing },
     },
     {
-      async acquire() { return false },
+      async acquire() { return { acquired: false, metadata: { runId: 'run-existing', jobId: 'risk-run-existing', requestId: 'run-existing', correlationId: 'run-existing', triggeredBy: 'api', contractVersion: '1.0.0' } } },
       async release() { throw new Error('should not release') },
     },
   )

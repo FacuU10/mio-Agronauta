@@ -149,3 +149,28 @@ model CopilotThreadRef {
   @@index([fieldId, updatedAt(sort: Desc)])
   @@map("copilot_thread_refs")
 }
+
+model AgronautasJobRun {
+  id              String   @id @default(cuid())
+  jobId           String   @unique
+  runId           String
+  fieldId         String
+  status          String
+  triggeredBy     String
+  contractVersion String
+  requestId       String
+  correlationId   String
+  runtimeMode     String
+  queuedAt        DateTime
+  startedAt       DateTime?
+  heartbeatAt     DateTime?
+  completedAt     DateTime?
+  errorCode       String?
+  errorMessage    String?
+  resultPayload   Json
+  createdAt       DateTime @default(now())
+
+  @@index([fieldId, queuedAt(sort: Desc)])
+  @@index([runId])
+  @@map("agronautas_job_runs")
+}

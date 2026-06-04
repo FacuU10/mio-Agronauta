@@ -34,7 +34,7 @@
       "minLength": 1
     },
     "kind": {
-      "enum": ["ingest", "transform", "render", "publish"]
+      "enum": ["ingest", "transform", "render", "publish", "agronautas-risk-recompute"]
     },
     "status": {
       "enum": ["pending", "leased", "running", "waiting", "succeeded", "failed", "cancelled"]
@@ -100,30 +100,37 @@
       "additionalProperties": false
     },
     "payload": {
-      "type": "object",
-      "required": ["assetId", "inputUri"],
-      "properties": {
-        "assetId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "inputUri": {
-          "type": "string",
-          "format": "uri"
-        },
-        "outputUri": {
-          "type": "string",
-          "format": "uri"
-        },
-        "params": {
+      "oneOf": [
+        {
           "type": "object",
+          "required": ["assetId", "inputUri"],
+          "properties": {
+            "assetId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "inputUri": {
+              "type": "string",
+              "format": "uri"
+            },
+            "outputUri": {
+              "type": "string",
+              "format": "uri"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "assetMetadata": {
+              "$ref": "./asset-metadata.schema.json"
+            }
+          },
           "additionalProperties": true
         },
-        "assetMetadata": {
-          "$ref": "./asset-metadata.schema.json"
+        {
+          "$ref": "./agronautas-runtime-recompute-job.schema.json"
         }
-      },
-      "additionalProperties": true
+      ]
     },
     "labels": {
       "type": "object",

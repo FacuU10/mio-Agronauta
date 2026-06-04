@@ -8,6 +8,24 @@ import { AgronautasPageClient } from './page-client'
 import { createAgronautasMockService } from '@/lib/agronautas/service'
 import { useAgronautasStore } from '@/store/agronautas-store'
 
+test('apiClient usa BFF versionado por defecto', async () => {
+  const capturedUrls: string[] = []
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    capturedUrls.push(String(input))
+    return new Response(JSON.stringify({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  const { createAgronautasApiService } = await import('@/lib/agronautas/service')
+  await createAgronautasApiService().getRuntime()
+  assert.equal(capturedUrls[0], '/api/agronautas/v1/runtime')
+
+  globalThis.fetch = previousFetch
+})
+
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
   globalThis.window = dom.window as unknown as Window & typeof globalThis

@@ -172,6 +172,8 @@ make clean       # Clean up (removes volumes and node_modules)
 - Set `TRUST_PROXY=true` (or a numeric/string Express value) when the API is behind Render/Railway/Vercel proxies so rate limiting uses forwarded IPs correctly.
 - `CORS_ORIGINS` accepts exact comma-separated origins and exposes `X-Agronautas-Mode` for runtime inspection.
 - `docker-compose up --build api worker postgres redis` now boots PostGIS plus reproducible bootstrap SQL for Corrientes boundaries/localities; Mongo stays available under the optional Compose profile.
+- Before release, validate the hardening gate with focused suites: `node --import tsx --test apps/api/src/presentation/routes/agronautas.test.ts apps/api/src/presentation/routes/health.test.ts apps/api/src/infrastructure/database/postgres/agronautas-alert-snapshot-repository.test.ts apps/api/src/application/usecases/compute-field-risk-usecase.test.ts apps/api/src/domain/entities/agronautas.test.ts` and `pnpm --filter web test -- src/components/agronautas/page-client.test.tsx`.
+- `apps/web/tests/e2e/agronautas-production.spec.js` remains supplemental documentation smoke; the current release gate is API/web integration coverage plus Compose bootstrap/readiness until a fully automated real-stack Playwright lane is wired in CI.
 - Keep `env.env` and `apps/api/tsconfig.tsbuildinfo` out of commits; they are local/generated artifacts, not release inputs.
 
 ## Architecture
