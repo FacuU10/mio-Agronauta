@@ -172,7 +172,7 @@
       "required": ["contractVersion", "code", "message", "retryable"],
       "properties": {
         "contractVersion": { "const": "1.0.0" },
-        "code": { "enum": ["INVALID_CONTRACT", "OUT_OF_SUPPORTED_AREA", "UNSUPPORTED_CROP", "MISSING_CONTEXT", "STALE_SNAPSHOT"] },
+        "code": { "enum": ["INVALID_CONTRACT", "OUT_OF_SUPPORTED_AREA", "UNSUPPORTED_CROP", "MISSING_CONTEXT", "STALE_SNAPSHOT", "UNAUTHORIZED", "FORBIDDEN", "WORKER_UNAVAILABLE"] },
         "message": { "type": "string", "minLength": 1, "maxLength": 240 },
         "retryable": { "type": "boolean" },
         "details": { "type": "object", "additionalProperties": true }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Router, type Request, type Response } from 'express'
 import {
   agronautasContractErrorSchema,
@@ -13,6 +14,8 @@ import { GenerateAlertsUseCase, toAlertContracts, toStaleAlertContracts, toStore
 import { RequestRiskRecomputeUseCase } from '../../application/usecases/request-risk-recompute-usecase'
 import { GroundedChatUseCase } from '../../application/usecases/grounded-chat-usecase'
 import type {
+  AgronautasJobRunRepository,
+  AgronautasRuntimeDispatcher,
   AlertSnapshotRepository,
   FieldContextRepository,
   FieldRepository,
@@ -22,12 +25,16 @@ import type {
 } from '../../domain/repositories/agronautas'
 import { PostgresAlertSnapshotRepository } from '../../infrastructure/database/postgres/agronautas-alert-snapshot-repository'
 import { PostgresFieldContextRepository, PostgresFieldRepository } from '../../infrastructure/database/postgres/agronautas-field-repository'
+import { PostgresAgronautasJobRunRepository } from '../../infrastructure/database/postgres/agronautas-job-run-repository'
 import { PostgresRiskSnapshotRepository } from '../../infrastructure/database/postgres/agronautas-risk-snapshot-repository'
 import { PostgresSignalSummaryRepository } from '../../infrastructure/database/postgres/agronautas-signal-summary-repository'
 import { RedisRecomputeLockRepository } from '../../infrastructure/database/redis/agronautas-recompute-lock-repository'
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import { createGroqChatProvider } from '../../infrastructure/integrations/groq/client'
+import { RedisAgronautasRuntimeDispatcher } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
 import { createDemoAlerts, createDemoCopilotContext, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
+import { getAgronautasAuthConfig, requireAgronautasScope } from '../middleware/agronautas-auth'
+import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
 
 interface AgronautasRouterDeps {
   fieldRepository: FieldRepository
@@ -35,7 +42,10 @@ interface AgronautasRouterDeps {
   riskSnapshotRepository: RiskSnapshotRepository
   signalSummaryRepository: SignalSummaryRepository
   recomputeLockRepository: RecomputeLockRepository
+  runtimeDispatcher: AgronautasRuntimeDispatcher
+  jobRunRepository: AgronautasJobRunRepository
   alertSnapshotRepository: AlertSnapshotRepository
+  isVersionedNamespace: boolean
 }
 
 export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {}): Router {
@@ -45,13 +55,16 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     riskSnapshotRepository: deps.riskSnapshotRepository ?? new PostgresRiskSnapshotRepository(),
     signalSummaryRepository: deps.signalSummaryRepository ?? new PostgresSignalSummaryRepository(),
     recomputeLockRepository: deps.recomputeLockRepository ?? new RedisRecomputeLockRepository(),
+    runtimeDispatcher: deps.runtimeDispatcher ?? new RedisAgronautasRuntimeDispatcher(),
+    jobRunRepository: deps.jobRunRepository ?? new PostgresAgronautasJobRunRepository(),
     alertSnapshotRepository: deps.alertSnapshotRepository ?? new PostgresAlertSnapshotRepository(),
+    isVersionedNamespace: deps.isVersionedNamespace ?? false,
   }
 
   const router = Router()
   const createFieldIntake = new CreateFieldIntakeUseCase(resolved.fieldRepository, resolved.fieldContextRepository)
   const generateAlerts = new GenerateAlertsUseCase(resolved.riskSnapshotRepository, resolved.alertSnapshotRepository)
-  const requestRecompute = new RequestRiskRecomputeUseCase(resolved.recomputeLockRepository)
+  const requestRecompute = new RequestRiskRecomputeUseCase(resolved.recomputeLockRepository, resolved.runtimeDispatcher, resolved.jobRunRepository)
   const groundedChat = new GroundedChatUseCase({
     fieldRepository: resolved.fieldRepository,
     riskSnapshotRepository: resolved.riskSnapshotRepository,
@@ -59,21 +72,29 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     groqProvider: createGroqChatProvider(),
   })
   const runtimeConfig = getAgronautasRuntimeConfig()
+  const authConfig = getAgronautasAuthConfig()
+  const requireRead = requireAgronautasScope('read', authConfig)
+  const requireWrite = requireAgronautasScope('write', authConfig)
+  const requireRecompute = requireAgronautasScope('recompute', authConfig)
 
   router.use((req, res, next) => {
     res.setHeader('X-Agronautas-Mode', runtimeConfig.mode)
+    if (!resolved.isVersionedNamespace) {
+      res.setHeader('X-Agronautas-Route-Compatibility', `${runtimeConfig.routePrefix}/v1`)
+    }
     next()
   })
 
-  router.get('/runtime', (req, res) => {
+  router.get('/runtime', requireRead, (req, res) => {
     return res.json({
       mode: runtimeConfig.mode,
-      routePrefix: runtimeConfig.routePrefix,
+      routePrefix: resolved.isVersionedNamespace ? `${runtimeConfig.routePrefix}/v1` : runtimeConfig.routePrefix,
+      compatibilityPrefix: resolved.isVersionedNamespace ? runtimeConfig.routePrefix : `${runtimeConfig.routePrefix}/v1`,
       contractVersion: '1.0.0',
     })
   })
 
-  router.post('/fields', async (req, res) => {
+  router.post('/fields', requireWrite, async (req, res) => {
     const parsed = fieldIntakeSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
 
@@ -99,12 +120,15 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
   })
 
-  router.get('/fields/:fieldId', async (req, res) => {
+  router.get('/fields/:fieldId', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
-      return res.json(createDemoFieldOverview(req.params.fieldId))
+      return res.json(createDemoFieldOverview(fieldId))
     }
 
-    const field = await resolved.fieldRepository.findById(req.params.fieldId)
+    const field = await resolved.fieldRepository.findById(fieldId)
     if (!field) return res.status(404).json({ error: 'Field not found' })
 
     return res.json({
@@ -118,16 +142,20 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     })
   })
 
-  router.get('/fields/:fieldId/risk/current', async (req, res) => {
+  router.get('/fields/:fieldId/risk/current', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
-      return res.json({ status: 'stale', snapshot: createDemoRiskSnapshot(req.params.fieldId), recompute: { status: 'enqueued' } })
+      return res.json({ status: 'stale', snapshot: createDemoRiskSnapshot(fieldId), recompute: { status: 'enqueued' } })
     }
 
-    const snapshot = await resolved.riskSnapshotRepository.getLatest(req.params.fieldId)
+    const snapshot = await resolved.riskSnapshotRepository.getLatest(fieldId)
     if (!snapshot) return res.status(404).json({ error: 'Risk snapshot not found' })
 
     const stale = snapshot.isExpired()
-    const recompute = stale ? await requestRecompute.execute(req.params.fieldId, 'api') : null
+    const recompute = stale ? await safeRequestRecompute(fieldId, 'api', req, res) : null
+    if (stale && recompute === null) return
     return res.json({
       status: stale ? 'stale' : snapshot.freshness,
       snapshot: riskSnapshotSchema.parse(snapshot.toContract()),
@@ -135,24 +163,30 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     })
   })
 
-  router.get('/fields/:fieldId/risk/timeline', async (req, res) => {
+  router.get('/fields/:fieldId/risk/timeline', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
-      return res.json({ fieldId: req.params.fieldId, items: [createDemoRiskSnapshot(req.params.fieldId)] })
+      return res.json({ fieldId, items: [createDemoRiskSnapshot(fieldId)] })
     }
 
     const limit = parseLimit(req)
-    const snapshots = await resolved.riskSnapshotRepository.listTimeline?.(req.params.fieldId, limit) ?? []
-    return res.json({ fieldId: req.params.fieldId, items: snapshots.map((snapshot) => riskSnapshotSchema.parse(snapshot.toContract())) })
+    const snapshots = await resolved.riskSnapshotRepository.listTimeline?.(fieldId, limit) ?? []
+    return res.json({ fieldId, items: snapshots.map((snapshot) => riskSnapshotSchema.parse(snapshot.toContract())) })
   })
 
   router.get('/fields/:fieldId/status', async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
-      const snapshot = createDemoRiskSnapshot(req.params.fieldId)
-      const alerts = createDemoAlerts(req.params.fieldId)
+      const snapshot = createDemoRiskSnapshot(fieldId)
+      const alerts = createDemoAlerts(fieldId)
 
       return res.json(monitoringStatusSchema.parse({
         contractVersion: '1.0.0',
-        fieldId: req.params.fieldId,
+        fieldId,
         fieldStatus: 'stale',
         riskStatus: 'stale',
         alertsStatus: 'stale',
@@ -164,9 +198,9 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
 
     const [field, snapshot, alerts] = await Promise.all([
-      resolved.fieldRepository.findById(req.params.fieldId),
-      resolved.riskSnapshotRepository.getLatest(req.params.fieldId),
-      resolved.alertSnapshotRepository.getLatestForField(req.params.fieldId),
+      resolved.fieldRepository.findById(fieldId),
+      resolved.riskSnapshotRepository.getLatest(fieldId),
+      resolved.alertSnapshotRepository.getLatestForField(fieldId),
     ])
 
     if (!field) return res.status(404).json({ error: 'Field not found' })
@@ -177,7 +211,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
 
     return res.json(monitoringStatusSchema.parse({
       contractVersion: '1.0.0',
-      fieldId: req.params.fieldId,
+      fieldId,
       fieldStatus: !snapshot ? 'missing_data' : snapshot.freshness === 'fresh' && alertsStatus === 'fresh' ? 'ready' : 'stale',
       riskStatus,
       alertsStatus,
@@ -188,10 +222,13 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }))
   })
 
-  router.get('/fields/:fieldId/weather/timeline', async (req, res) => {
+  router.get('/fields/:fieldId/weather/timeline', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
       return res.json({
-        fieldId: req.params.fieldId,
+        fieldId,
         items: [{
           provider: 'open-meteo',
           observedAt: '2026-06-03T00:00:00.000Z',
@@ -206,9 +243,9 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
 
     const limit = parseLimit(req)
-    const timeline = await resolved.signalSummaryRepository.listClimateTimeline?.(req.params.fieldId, limit) ?? []
+    const timeline = await resolved.signalSummaryRepository.listClimateTimeline?.(fieldId, limit) ?? []
     return res.json({
-      fieldId: req.params.fieldId,
+      fieldId,
       items: timeline.map((item) => ({
         provider: item.provider,
         observedAt: item.observedAt.toISOString(),
@@ -222,22 +259,26 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     })
   })
 
-  router.get('/fields/:fieldId/alerts/current', async (req, res) => {
+  router.get('/fields/:fieldId/alerts/current', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
       return res.status(202).json({
         status: 'stale',
-        snapshot: createDemoRiskSnapshot(req.params.fieldId),
-        alerts: createDemoAlerts(req.params.fieldId),
+        snapshot: createDemoRiskSnapshot(fieldId),
+        alerts: createDemoAlerts(fieldId),
         recompute: { status: 'already_in_progress' },
       })
     }
 
-    const result = await generateAlerts.execute({ fieldId: req.params.fieldId, triggeredBy: 'api' })
+    const result = await generateAlerts.execute({ fieldId, triggeredBy: 'api' })
     if (result.status === 'missing-snapshot') return res.status(404).json({ error: 'Risk snapshot not found' })
 
     if (result.status === 'stale-snapshot') {
-      const recompute = await requestRecompute.execute(req.params.fieldId, 'alert-refresh')
-      const latestAlerts = await resolved.alertSnapshotRepository.getLatestForField(req.params.fieldId)
+      const recompute = await safeRequestRecompute(fieldId, 'alert-refresh', req, res)
+      if (!recompute) return
+      const latestAlerts = await resolved.alertSnapshotRepository.getLatestForField(fieldId)
       return res.status(202).json({
         status: 'stale',
         snapshot: result.snapshot ? riskSnapshotSchema.parse(result.snapshot.toContract()) : null,
@@ -253,35 +294,45 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     })
   })
 
-  router.get('/fields/:fieldId/alerts/timeline', async (req, res) => {
+  router.get('/fields/:fieldId/alerts/timeline', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
-      return res.json({ fieldId: req.params.fieldId, items: createDemoAlerts(req.params.fieldId) })
+      return res.json({ fieldId, items: createDemoAlerts(fieldId) })
     }
 
     const limit = parseLimit(req)
-    const alerts = await resolved.alertSnapshotRepository.listTimeline(req.params.fieldId, limit)
-    return res.json({ fieldId: req.params.fieldId, items: toStoredAlertContracts(alerts) })
+    const alerts = await resolved.alertSnapshotRepository.listTimeline(fieldId, limit)
+    return res.json({ fieldId, items: toStoredAlertContracts(alerts) })
   })
 
-  router.post('/fields/:fieldId/recompute', async (req, res) => {
+  router.post('/fields/:fieldId/recompute', requireRecompute, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
       return res.status(202).json({ status: 'enqueued', mode: 'demo' })
     }
 
-    const result = await requestRecompute.execute(req.params.fieldId, 'api')
+    const result = await safeRequestRecompute(fieldId, 'api', req, res)
+    if (!result) return
     return res.status(result.status === 'enqueued' ? 202 : 200).json(result)
   })
 
-  router.get('/fields/:fieldId/copilot/context', async (req, res) => {
+  router.get('/fields/:fieldId/copilot/context', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     if (runtimeConfig.mode === 'demo') {
-      return res.json(createDemoCopilotContext(req.params.fieldId))
+      return res.json(createDemoCopilotContext(fieldId))
     }
 
     const [field, context, snapshot, alerts] = await Promise.all([
-      resolved.fieldRepository.findById(req.params.fieldId),
-      resolved.fieldContextRepository.getLatest(req.params.fieldId),
-      resolved.riskSnapshotRepository.getLatest(req.params.fieldId),
-      resolved.alertSnapshotRepository.getLatestForField(req.params.fieldId),
+      resolved.fieldRepository.findById(fieldId),
+      resolved.fieldContextRepository.getLatest(fieldId),
+      resolved.riskSnapshotRepository.getLatest(fieldId),
+      resolved.alertSnapshotRepository.getLatestForField(fieldId),
     ])
 
     if (!field) return res.status(404).json({ error: 'Field not found' })
@@ -328,6 +379,9 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   })
 
   router.post('/fields/:fieldId/chat', async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
     const parsed = groundedChatRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
 
@@ -335,7 +389,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     if (/(clima futuro exacto|rendimiento garantizado|especul)/i.test(message)) {
       return res.status(422).json({
         contractVersion: '1.0.0',
-        fieldId: req.params.fieldId,
+        fieldId,
         answer: 'Esa pregunta queda fuera del alcance del MVP porque no está respaldada por los datasets aprobados.',
         executedAction: 'FINAL_RESPONSE',
         supportingFacts: [],
@@ -346,23 +400,53 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       })
     }
 
+    const response = await groundedChat.execute(fieldId, parsed.data)
+    return res.json(response)
+  })
+    }
+
     const response = await groundedChat.execute(req.params.fieldId, parsed.data)
     return res.json(response)
   })
 
   return router
+
+  async function safeRequestRecompute(fieldId: string, triggeredBy: 'api' | 'alert-refresh', req: Request, res: Response) {
+    try {
+      return await requestRecompute.execute(fieldId, triggeredBy, { requestId: readRequestId(req) })
+    } catch (error) {
+      if (error instanceof WorkerUnavailableError) {
+        respondContractError(res, 503, 'WORKER_UNAVAILABLE', error.message, { ...error.details, fieldId }, true)
+        return null
+      }
+
+      throw error
+    }
+  }
 }
 
-function respondContractError(res: Response, status: number, code: 'INVALID_CONTRACT' | 'OUT_OF_SUPPORTED_AREA', message: string, details?: Record<string, unknown>) {
+function respondContractError(
+  res: Response,
+  status: number,
+  code: 'INVALID_CONTRACT' | 'OUT_OF_SUPPORTED_AREA' | 'WORKER_UNAVAILABLE',
+  message: string,
+  details?: Record<string, unknown>,
+  retryable = false,
+) {
   return res.status(status).json(
     agronautasContractErrorSchema.parse({
       contractVersion: '1.0.0',
       code,
       message,
-      retryable: false,
+      retryable,
       details,
     }),
   )
+}
+
+function readRequestId(req: Request): string {
+  const header = req.header('x-request-id')?.trim()
+  return header && header.length > 0 ? header : randomUUID()
 }
 
 function parseLimit(req: Request): number {
@@ -380,6 +464,16 @@ function deriveAlertStatus(alerts: Array<{ freshness: 'fresh' | 'stale' | 'degra
   if (alerts.some((alert) => alert.freshness === 'stale')) return 'stale'
   if (alerts.some((alert) => alert.freshness === 'degraded')) return 'degraded'
   return 'fresh'
+}
+
+function requireFieldId(req: Request, res: Response): string | undefined {
+  const fieldId = req.params['fieldId']
+  if (typeof fieldId === 'string' && fieldId.length > 0) {
+    return fieldId
+  }
+
+  respondContractError(res, 400, 'INVALID_CONTRACT', 'Field id is required')
+  return undefined
 }
 
 export type { AgronautasRouterDeps }

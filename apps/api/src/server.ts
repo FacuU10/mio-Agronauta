@@ -30,6 +30,7 @@ export function createApp(): Application {
   app.use(healthRouter)
   app.use(runtimeConfig.routePrefix, healthRouter)
   app.use(runtimeConfig.routePrefix, createAgronautasRouter())
+  app.use(`${runtimeConfig.routePrefix}/v1`, createAgronautasRouter({ isVersionedNamespace: true }))
 
   // 404 handler
   app.use((req, res) => {

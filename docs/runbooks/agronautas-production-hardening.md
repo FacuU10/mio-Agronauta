@@ -1,22 +1,43 @@
 # Agronautas production hardening runbook
 
-## Release gate
+## Objetivo
 
-1. `pnpm --filter api test`
-2. `pnpm --filter web test`
+Cerrar el gate operativo del MVP Agronautas con rutas endurecidas, readiness veraz, bootstrap reproducible y cobertura suficiente para release.
+
+## Bootstrap local reproducible
+
+1. `cp .env.example .env`
+2. `pnpm install`
 3. `docker-compose up --build postgres redis api worker`
-4. `GET /ready` must return `200` when Postgres/Redis are healthy and Mongo is absent.
-5. If `AGRONAUTAS_RUNTIME_REQUIRED=true`, `/ready` must also report a healthy worker heartbeat.
+4. Si se quiere validar la capacidad futura Mongo, agregar `--profile optional mongodb`
 
-## Bootstrap
+El bootstrap de PostGIS y seeds vive en `infra/bootstrap/agronautas/001-postgis-schema.sql` y `infra/bootstrap/agronautas/002-corrientes-seeds.sql`.
 
-- PostGIS and the Corrientes bootstrap SQL live in `infra/bootstrap/agronautas/`.
-- `docker-compose` mounts those scripts into `/docker-entrypoint-initdb.d` so local, CI, and release rehearsals share the same seed source.
-- Mongo remains an optional profile: `docker-compose --profile optional up mongodb`.
+## Release gate actual
 
-## Operational notes
+- `GET /health` debe responder 200 como liveness puro.
+- `GET /ready` debe responder 200 sólo si PostgreSQL y Redis están sanos; el worker bloquea sólo cuando `AGRONAUTAS_RUNTIME_REQUIRED=true`.
+- Mongo debe aparecer como capability opcional/degradada cuando no está disponible.
+- Los flujos `GET /agronautas/fields/:fieldId/risk/current` y `GET /agronautas/fields/:fieldId/alerts/current` no deben duplicar recomputes ni persistir alertas nuevas sobre snapshots stale.
 
-- Alert ids are deterministic: `{fieldId}:{snapshotId}:{alertType}`.
-- `alert_snapshots` must preserve the uniqueness boundary `(field_id, risk_snapshot_id, alert_type)`.
-- `/health` is liveness only; `/ready` is the operational gate.
-- Keep `env.env` and `apps/api/tsconfig.tsbuildinfo` out of commits.
+## Validación mínima antes de release
+
+### API
+
+`node --import tsx --test apps/api/src/presentation/routes/agronautas.test.ts apps/api/src/presentation/routes/health.test.ts apps/api/src/infrastructure/database/postgres/agronautas-alert-snapshot-repository.test.ts apps/api/src/application/usecases/compute-field-risk-usecase.test.ts apps/api/src/domain/entities/agronautas.test.ts`
+
+### Web
+
+`pnpm --filter web test -- src/components/agronautas/page-client.test.tsx`
+
+### Opcional / manual fuerte
+
+- `pnpm --filter web test:e2e`
+- inspeccionar `GET /agronautas/runtime` y `GET /ready` sobre el stack Compose levantado
+
+## Señales operativas esperadas
+
+- `X-Agronautas-Mode` y `X-Agronautas-Route-Compatibility` presentes en runtime/API.
+- Errores contractuales `UNAUTHORIZED`, `FORBIDDEN` y `WORKER_UNAVAILABLE` para auth/runtime.
+- Recompute reutiliza el run en vuelo cuando el lock ya existe.
+- Alertas se upsertean por `(field_id, risk_snapshot_id, alert_type)`.

@@ -1,5 +1,5 @@
-import { AgronautasPageClient } from '@/components/agronautas/page-client'
+import { LandingHomepage } from '@/components/landing/homepage'
 
 export default function HomePage() {
-  return <AgronautasPageClient />
+  return <LandingHomepage />
 }

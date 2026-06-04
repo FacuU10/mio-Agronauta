@@ -31,16 +31,16 @@ export interface AgronautasService {
 
 export function createAgronautasApiService(): AgronautasService {
   return {
-    getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/agronautas/runtime')),
-    createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/agronautas/fields', { method: 'POST', body: JSON.stringify(input) })),
-    getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/agronautas/fields/${fieldId}`)),
-    getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/risk/current`)),
-    getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/alerts/current`)),
-    getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/risk/timeline`)),
-    getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/weather/timeline`)),
-    getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/status`)),
-    requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/recompute`, { method: 'POST' })),
-    askFieldChat: async (fieldId, input) => groundedChatResponseSchema.parse(await apiClient(`/agronautas/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
+    getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
+    createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
+    getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/fields/${fieldId}`)),
+    getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/fields/${fieldId}/risk/current`)),
+    getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(`/fields/${fieldId}/alerts/current`)),
+    getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/risk/timeline`)),
+    getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/weather/timeline`)),
+    getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(`/fields/${fieldId}/status`)),
+    requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(`/fields/${fieldId}/recompute`, { method: 'POST' })),
+    askFieldChat: async (fieldId, input) => groundedChatResponseSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
   }
 }
 
@@ -49,7 +49,7 @@ export function createAgronautasMockService(): AgronautasService {
 
   return {
     async getRuntime() {
-      return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
+      return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
     },
     async createFieldIntake(input) {
       if (input.location.lat < -32 || input.location.lat > -27 || input.location.lng < -60.5 || input.location.lng > -56) {

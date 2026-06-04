@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-const API_BASE_URL = process.env['NEXT_PUBLIC_API_URL'] || 'http://localhost:3001'
+const DEFAULT_API_BASE_URL = '/api/agronautas/v1'
 
 export class ApiError extends Error {
   constructor(
@@ -44,7 +44,9 @@ export async function apiClient<T>(
   options: FetchOptions = {},
   schema?: z.ZodSchema<T>
 ): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint}`
+  const baseUrl = resolveApiBaseUrl()
+  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`
+  const url = `${baseUrl}${normalizedEndpoint}`
 
   try {
     const response = await fetchWithTimeout(url, {
@@ -77,4 +79,13 @@ export async function apiClient<T>(
     }
     throw new Error(`API request failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
+}
+
+function resolveApiBaseUrl(): string {
+  const configured = process.env['NEXT_PUBLIC_API_URL']?.trim()
+  if (configured) {
+    return configured.replace(/\/+$/, '')
+  }
+
+  return DEFAULT_API_BASE_URL
 }

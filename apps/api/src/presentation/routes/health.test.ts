@@ -57,6 +57,35 @@ test('GET /ready exposes worker requirement when runtime is mandatory', async ()
   assert.equal(body.worker?.heartbeatMaxAgeSeconds, 120)
 })
 
+test('GET /ready fails only on active dependencies and still reports Mongo as optional capability', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => false,
+    checkRedis: async () => false,
+    getConfig: () => ({
+      mode: 'real',
+      routePrefix: '/agronautas',
+      trustProxy: false,
+      optionalReadinessServices: ['mongodb'],
+      runtimeRequired: false,
+      workerHeartbeatMaxAgeSeconds: 180,
+    }),
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  assert.equal(response.status, 503)
+  const body = await response.json() as {
+    degraded: string[]
+    requiredChecks: { redis: boolean }
+    capabilities: { mongodb: { status: string; required: boolean } }
+  }
+  assert.equal(body.requiredChecks.redis, false)
+  assert.ok(body.degraded.includes('mongodb'))
+  assert.equal(body.capabilities.mongodb.status, 'optional_degraded')
+  assert.equal(body.capabilities.mongodb.required, false)
+})
+
 async function request(app: express.Express, path: string) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))

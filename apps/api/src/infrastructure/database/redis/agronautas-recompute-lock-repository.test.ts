@@ -16,14 +16,24 @@ test('acquire uses NX with TTL to avoid duplicate recompute', async () => {
     async del() {
       return 1
     },
+    async get() {
+      return null
+    },
   } as never)
 
-  const acquired = await repository.acquire('field-42', 120, { runId: 'run-7', provider: 'weather-api' })
+  const acquired = await repository.acquire('field-42', 120, {
+    runId: 'run-7',
+    jobId: 'job-7',
+    requestId: 'req-7',
+    correlationId: 'corr-7',
+    triggeredBy: 'api',
+    contractVersion: '1.0.0',
+  })
 
-  assert.equal(acquired, true)
+  assert.equal(acquired.acquired, true)
   assert.deepEqual(calls[0], [
     'agronautas:risk-recompute:field-42',
-    JSON.stringify({ fieldId: 'field-42', runId: 'run-7', provider: 'weather-api' }),
+    JSON.stringify({ fieldId: 'field-42', runId: 'run-7', jobId: 'job-7', requestId: 'req-7', correlationId: 'corr-7', triggeredBy: 'api', contractVersion: '1.0.0' }),
     'EX',
     120,
     'NX',

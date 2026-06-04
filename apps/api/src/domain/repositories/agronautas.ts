@@ -77,7 +77,64 @@ export interface AlertSnapshotRepository {
   listTimeline(fieldId: string, limit: number): Promise<AlertSnapshotRecord[]>
 }
 
+export interface RecomputeLockMetadata {
+  runId: string
+  jobId: string
+  requestId: string
+  correlationId: string
+  triggeredBy: 'api' | 'alert-refresh'
+  contractVersion: string
+}
+
+export interface RecomputeLockAcquireResult {
+  acquired: boolean
+  metadata: RecomputeLockMetadata
+}
+
 export interface RecomputeLockRepository {
-  acquire(fieldId: string, ttlSeconds: number, metadata: Record<string, string>): Promise<boolean>
+  acquire(fieldId: string, ttlSeconds: number, metadata: RecomputeLockMetadata): Promise<RecomputeLockAcquireResult>
   release(fieldId: string): Promise<void>
+}
+
+export interface AgronautasRuntimeDispatchCommand {
+  contractVersion: string
+  jobId: string
+  runId: string
+  fieldId: string
+  triggeredBy: 'api' | 'alert-refresh'
+  requestId: string
+  correlationId: string
+  requestedAt: Date
+  runtimeMode: 'real' | 'demo'
+}
+
+export interface AgronautasRuntimeDispatcher {
+  dispatchRiskRecompute(command: AgronautasRuntimeDispatchCommand): Promise<void>
+}
+
+export interface AgronautasJobRunRecord {
+  jobId: string
+  runId: string
+  fieldId: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  triggeredBy: 'api' | 'alert-refresh'
+  contractVersion: string
+  requestId: string
+  correlationId: string
+  runtimeMode: 'real' | 'demo'
+  queuedAt: Date
+  startedAt?: Date
+  heartbeatAt?: Date
+  completedAt?: Date
+  errorCode?: string
+  errorMessage?: string
+  resultPayload?: Record<string, unknown>
+}
+
+export interface AgronautasJobRunRepository {
+  saveQueuedRun(record: AgronautasJobRunRecord): Promise<void>
+  markRunning(jobId: string, startedAt: Date): Promise<void>
+  markHeartbeat(jobId: string, heartbeatAt: Date): Promise<void>
+  markCompleted(jobId: string, completedAt: Date, resultPayload: Record<string, unknown>): Promise<void>
+  markFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void>
 }

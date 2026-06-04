@@ -9,7 +9,7 @@ test('PostgresAlertSnapshotRepository upserts by deterministic snapshot lineage 
       calls.push({ sql, params: params ?? [] })
       return { rows: [] }
     },
-  })
+  } as any)
 
   await repository.saveMany([{
     alertId: 'field-1:snap-1:flood',
