@@ -1,5 +1,8 @@
+import 'express-async-errors'
 import express, { Application } from 'express'
 import dotenv from 'dotenv'
+import { globalErrorHandler, notFoundHandler } from './presentation/middleware/error-handler'
+import { httpLogger, logger } from './infrastructure/observability/logger'
 import { helmetMiddleware } from './presentation/middleware/helmet'
 import { rateLimitMiddleware } from './presentation/middleware/rate-limit'
 import { corsMiddleware } from './presentation/middleware/cors'
@@ -17,6 +20,8 @@ export function createApp(): Application {
 
   app.set('trust proxy', runtimeConfig.trustProxy)
 
+  app.use(httpLogger)
+
   // Security middleware
   app.use(helmetMiddleware)
   app.use(corsMiddleware)
@@ -32,10 +37,8 @@ export function createApp(): Application {
   app.use(runtimeConfig.routePrefix, createAgronautasRouter())
   app.use(`${runtimeConfig.routePrefix}/v1`, createAgronautasRouter({ isVersionedNamespace: true }))
 
-  // 404 handler
-  app.use((req, res) => {
-    res.status(404).json({ error: 'Not Found' })
-  })
+  app.use(notFoundHandler)
+  app.use(globalErrorHandler)
 
   return app
 }
@@ -44,6 +47,6 @@ export function startServer(): void {
   const app = createApp()
 
   app.listen(PORT, () => {
-    console.log(`API server listening on http://localhost:${PORT}`)
+    logger.info({ port: PORT }, 'API server listening')
   })
 }

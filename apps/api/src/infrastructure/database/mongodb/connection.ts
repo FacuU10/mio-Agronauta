@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { logger } from '../../observability/logger'
 
 let isConnected = false
 
@@ -15,19 +16,19 @@ export async function connectMongoDB(): Promise<void> {
     })
 
     isConnected = true
-    console.log('MongoDB connected successfully')
+    logger.info('MongoDB connected successfully')
 
     mongoose.connection.on('error', (err) => {
-      console.error('MongoDB connection error:', err)
+      logger.error({ err }, 'MongoDB connection error')
       isConnected = false
     })
 
     mongoose.connection.on('disconnected', () => {
-      console.warn('MongoDB disconnected')
+      logger.warn('MongoDB disconnected')
       isConnected = false
     })
   } catch (error) {
-    console.error('Failed to connect to MongoDB:', error)
+    logger.error({ err: error }, 'Failed to connect to MongoDB')
     throw error
   }
 }
@@ -39,7 +40,7 @@ export async function checkMongoDB(): Promise<boolean> {
     }
     return mongoose.connection.readyState === 1
   } catch (error) {
-    console.error('MongoDB health check failed:', error)
+    logger.error({ err: error }, 'MongoDB health check failed')
     return false
   }
 }

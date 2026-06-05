@@ -1,5 +1,6 @@
 import CircuitBreaker from 'opossum'
 import { Request, Response, NextFunction } from 'express'
+import { logger } from '../../infrastructure/observability/logger'
 
 interface CircuitBreakerOptions {
   timeout: number // Time in ms before timing out
@@ -23,15 +24,15 @@ export function createCircuitBreaker<T>(
   })
 
   breaker.on('open', () => {
-    console.warn('[Circuit Breaker] Circuit opened - too many failures')
+    logger.warn('Circuit breaker opened - too many failures')
   })
 
   breaker.on('halfOpen', () => {
-    console.info('[Circuit Breaker] Circuit half-open - testing service')
+    logger.info('Circuit breaker half-open - testing service')
   })
 
   breaker.on('close', () => {
-    console.info('[Circuit Breaker] Circuit closed - service recovered')
+    logger.info('Circuit breaker closed - service recovered')
   })
 
   return breaker

@@ -1,4 +1,5 @@
 import Redis from 'ioredis'
+import { logger } from '../../observability/logger'
 
 let redisClient: Redis
 
@@ -20,11 +21,11 @@ export function getRedisClient(): Redis {
     })
 
     redisClient.on('error', (err) => {
-      console.error('Redis connection error:', err)
+      logger.error({ err }, 'Redis connection error')
     })
 
     redisClient.on('connect', () => {
-      console.log('Redis connected successfully')
+      logger.info('Redis connected successfully')
     })
   }
 
@@ -37,7 +38,7 @@ export async function checkRedis(): Promise<boolean> {
     const result = await client.ping()
     return result === 'PONG'
   } catch (error) {
-    console.error('Redis health check failed:', error)
+    logger.error({ err: error }, 'Redis health check failed')
     return false
   }
 }

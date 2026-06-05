@@ -1,4 +1,5 @@
 import { Pool, PoolConfig } from 'pg'
+import { logger } from '../../observability/logger'
 
 let pool: Pool
 
@@ -18,7 +19,7 @@ export function getPostgresPool(): Pool {
     pool = createPool()
 
     pool.on('error', (err) => {
-      console.error('Unexpected error on idle PostgreSQL client', err)
+      logger.error({ err }, 'Unexpected error on idle PostgreSQL client')
     })
   }
   return pool
@@ -30,7 +31,7 @@ export async function checkPostgres(): Promise<boolean> {
     const result = await pool.query('SELECT 1')
     return result.rowCount === 1
   } catch (error) {
-    console.error('PostgreSQL health check failed:', error)
+    logger.error({ err: error }, 'PostgreSQL health check failed')
     return false
   }
 }

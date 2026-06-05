@@ -1,13 +1,14 @@
 import cluster from 'cluster'
 import os from 'os'
+import { logger } from './infrastructure/observability/logger'
 import { startServer } from './server'
 
 const numCPUs = os.cpus().length
 const WORKERS = process.env['NODE_ENV'] === 'production' ? numCPUs : 1
 
 if (cluster.isPrimary) {
-  console.log(`Master ${process.pid} is running`)
-  console.log(`Spawning ${WORKERS} worker(s)...`)
+  logger.info({ pid: process.pid }, 'Cluster primary started')
+  logger.info({ workers: WORKERS }, 'Spawning API workers')
 
   // Fork workers
   for (let i = 0; i < WORKERS; i++) {
@@ -15,11 +16,11 @@ if (cluster.isPrimary) {
   }
 
   cluster.on('exit', (worker, code, signal) => {
-    console.log(`Worker ${worker.process.pid} died (${signal || code}). Restarting...`)
+    logger.warn({ workerPid: worker.process.pid, code, signal }, 'API worker exited, restarting')
     cluster.fork()
   })
 } else {
   // Workers can share TCP connection
   startServer()
-  console.log(`Worker ${process.pid} started`)
+  logger.info({ pid: process.pid }, 'API worker started')
 }

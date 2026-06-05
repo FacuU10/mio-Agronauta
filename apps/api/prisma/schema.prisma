@@ -42,6 +42,7 @@ model Field {
   riskSnapshots     RiskSnapshot[]
   alertSnapshots    AlertSnapshot[]
   copilotThreadRefs CopilotThreadRef[]
+  jobRuns           AgronautasJobRun[]
 
   @@index([provinceCode, localityName])
   @@index([centroid], type: Gist)
@@ -82,6 +83,7 @@ model SignalIngestionRun {
 
   @@index([provider, signalType, observedAt])
   @@index([fieldId, startedAt(sort: Desc)])
+  @@index([fieldId, signalType, status, observedAt(sort: Desc), startedAt(sort: Desc)])
   @@map("signal_ingestion_runs")
 }
 
@@ -128,6 +130,7 @@ model AlertSnapshot {
   riskSnapshot       RiskSnapshot      @relation(fields: [riskSnapshotId], references: [id], onDelete: Cascade)
 
   @@index([fieldId, createdAt(sort: Desc)])
+  @@index([fieldId, createdAt(sort: Desc), priority, confidence(sort: Desc)])
   @@index([riskSnapshotId])
   @@unique([fieldId, riskSnapshotId, alertType])
   @@map("alert_snapshots")
@@ -169,8 +172,11 @@ model AgronautasJobRun {
   errorMessage    String?
   resultPayload   Json
   createdAt       DateTime @default(now())
+  field           Field    @relation(fields: [fieldId], references: [id], onDelete: Cascade)
 
   @@index([fieldId, queuedAt(sort: Desc)])
+  @@index([fieldId, status, queuedAt(sort: Desc)])
+  @@index([status, queuedAt(sort: Desc)])
   @@index([runId])
   @@map("agronautas_job_runs")
 }

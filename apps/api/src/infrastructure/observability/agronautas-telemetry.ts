@@ -1,3 +1,5 @@
+import { logger } from './logger'
+
 interface RuntimeTelemetry {
   serviceName: string
 }
@@ -7,26 +9,13 @@ function createRuntimeTelemetry(serviceName: string): RuntimeTelemetry {
 }
 
 function logEvent(runtime: RuntimeTelemetry, name: string, level: 'info' | 'warn' | 'error', attributes: Record<string, unknown>): void {
-  const line = JSON.stringify({
+  logger[level]({
     channel: 'golden.telemetry.v1',
     serviceName: runtime.serviceName,
     name,
     level,
-    timestamp: new Date().toISOString(),
     attributes,
-  })
-
-  switch (level) {
-    case 'error':
-      console.error(line)
-      break
-    case 'warn':
-      console.warn(line)
-      break
-    default:
-      console.log(line)
-      break
-  }
+  }, name)
 }
 
 export interface AgronautasTelemetry {

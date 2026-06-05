@@ -7,6 +7,7 @@ import { PostgresFieldContextRepository, PostgresFieldRepository } from '../infr
 import { getPostgresPool, closePostgresPool } from '../infrastructure/database/postgres/pool'
 import { PostgresRiskSnapshotRepository } from '../infrastructure/database/postgres/agronautas-risk-snapshot-repository'
 import { PostgresSignalIngestionRepository } from '../infrastructure/database/postgres/agronautas-signal-ingestion-repository'
+import { logger } from '../infrastructure/observability/logger'
 import { corrientesDemoLocalities, type CorrientesDemoLocality } from './corrientes-demo-localities'
 
 interface SeedOptions {
@@ -472,11 +473,11 @@ async function main() {
   try {
     const result = await runSeed(options)
     if (options.cleanup) {
-      console.log('Corrientes demo seed cleanup completed.')
+      logger.info('Corrientes demo seed cleanup completed.')
       return
     }
 
-    console.table(result)
+    logger.info({ rows: result }, 'Corrientes demo seed completed')
   } finally {
     await closePostgresPool()
   }
