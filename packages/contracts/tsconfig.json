@@ -1,0 +1,11 @@
+{
+  "extends": "../typescript-config/node.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": ".",
+    "outDir": "./dist"
+  },
+  "include": ["tests/**/*.ts"],
+  "exclude": ["dist", "node_modules"],
+  "references": [{ "path": "../zod-schemas" }]
+}

@@ -14,7 +14,7 @@ export class AgronautasRuntimeDispatcherError extends Error {
 }
 
 export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispatcher {
-  constructor(private readonly redis: Pick<Redis, 'lpush'> = getRedisClient()) {}
+  constructor(private redis?: Pick<Redis, 'lpush'>) {}
 
   async dispatchRiskRecompute(command: AgronautasRuntimeDispatchCommand): Promise<void> {
     telemetry.onDispatchAttempt({
@@ -27,7 +27,7 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
 
     try {
       const job = createAgronautasRiskRecomputeJob(command)
-      await this.redis.lpush(RUNTIME_QUEUE_NAME, JSON.stringify(job))
+      await this.getRedis().lpush(RUNTIME_QUEUE_NAME, JSON.stringify(job))
       telemetry.onDispatchPublished({
         fieldId: command.fieldId,
         runId: command.runId,
@@ -45,6 +45,11 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
       })
       throw new AgronautasRuntimeDispatcherError('Failed to dispatch Agronautas recompute job', error)
     }
+  }
+
+  private getRedis(): Pick<Redis, 'lpush'> {
+    this.redis ??= getRedisClient()
+    return this.redis
   }
 }
 

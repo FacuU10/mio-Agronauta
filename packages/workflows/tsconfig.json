@@ -1,0 +1,15 @@
+{
+  "extends": "../typescript-config/node.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"],
+  "references": [
+    { "path": "../config" },
+    { "path": "../contracts" },
+    { "path": "../observability" }
+  ]
+}

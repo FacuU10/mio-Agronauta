@@ -2,14 +2,17 @@ import rateLimit from 'express-rate-limit'
 import RedisStore from 'rate-limit-redis'
 import { getRedisClient } from '../../infrastructure/database/redis/client'
 
-const redisClient = getRedisClient()
+const shouldUseMemoryStore = process.env['RATE_LIMIT_STORE'] === 'memory'
+
+const redisStore = shouldUseMemoryStore
+  ? undefined
+  : new RedisStore({
+      sendCommand: (command: string, ...args: string[]) => getRedisClient().call(command, ...args) as Promise<any>,
+      prefix: 'rl:',
+    })
 
 export const rateLimitMiddleware = rateLimit({
-  store: new RedisStore({
-    // @ts-expect-error - RedisStore types mismatch with ioredis
-    client: redisClient,
-    prefix: 'rl:',
-  }),
+  ...(redisStore ? { store: redisStore } : {}),
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
   message: {

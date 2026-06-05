@@ -10,12 +10,13 @@ export function buildRecomputeLockKey(fieldId: string): string {
 }
 
 export class RedisRecomputeLockRepository implements RecomputeLockRepository {
-  constructor(private readonly redis: Pick<Redis, 'set' | 'del' | 'get'> = getRedisClient()) {}
+  constructor(private redis?: Pick<Redis, 'set' | 'del' | 'get'>) {}
 
   async acquire(fieldId: string, ttlSeconds: number, metadata: RecomputeLockMetadata): Promise<RecomputeLockAcquireResult> {
     const key = buildRecomputeLockKey(fieldId)
     const payload = JSON.stringify({ fieldId, ...metadata })
-    const result = await this.redis.set(key, payload, 'EX', ttlSeconds, 'NX')
+    const redis = this.getRedis()
+    const result = await redis.set(key, payload, 'EX', ttlSeconds, 'NX')
     const acquired = result === 'OK'
 
     telemetry.onLockAcquired({ fieldId, ttlSeconds, acquired })
@@ -23,7 +24,7 @@ export class RedisRecomputeLockRepository implements RecomputeLockRepository {
       return { acquired: true, metadata }
     }
 
-    const existing = await this.redis.get(key)
+    const existing = await redis.get(key)
     if (!existing) {
       return { acquired: false, metadata }
     }
@@ -32,6 +33,11 @@ export class RedisRecomputeLockRepository implements RecomputeLockRepository {
   }
 
   async release(fieldId: string): Promise<void> {
-    await this.redis.del(buildRecomputeLockKey(fieldId))
+    await this.getRedis().del(buildRecomputeLockKey(fieldId))
+  }
+
+  private getRedis(): Pick<Redis, 'set' | 'del' | 'get'> {
+    this.redis ??= getRedisClient()
+    return this.redis
   }
 }

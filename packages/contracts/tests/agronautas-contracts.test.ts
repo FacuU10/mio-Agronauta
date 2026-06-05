@@ -14,7 +14,7 @@ import {
   degradationReasons,
   fieldIntakeSchema,
   riskSnapshotSchema,
-} from '../../zod-schemas/src/agronautas'
+} from '../../zod-schemas/src/agronautas.js'
 
 const contractsRoot = join(import.meta.dirname, '..')
 const schema = JSON.parse(readFileSync(join(contractsRoot, 'schemas', 'agronautas-contracts.v1.schema.json'), 'utf8'))
