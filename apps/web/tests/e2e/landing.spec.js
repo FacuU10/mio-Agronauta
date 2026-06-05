@@ -3,9 +3,20 @@ import { expect, test } from '@playwright/test'
 test('landing matches source anchors and routes demo CTAs to /probar-demo while /demo stays direct', async ({ page }) => {
   await page.setViewportSize({ width: 1700, height: 1200 })
   await page.goto('/')
+  await page.waitForLoadState('networkidle')
 
   await expect(page.getByRole('heading', { name: 'REDUCCIÓN DE INCERTIDUMBRE', exact: true })).toBeVisible({ timeout: 10000 })
   await expect(page.getByRole('heading', { name: /agronautas risk engine/i })).toBeVisible()
+
+  const brandedImages = page.locator('img[src*="/_next/image"]')
+  await expect(brandedImages.first()).toBeVisible()
+  await expect(page.getByAltText('Agronautas').first()).toBeVisible()
+  expect(await brandedImages.count()).toBeGreaterThanOrEqual(4)
+
+  const imageReadiness = await brandedImages.evaluateAll((images) =>
+    images.slice(0, 3).every((image) => image.complete && image.naturalWidth > 0)
+  )
+  expect(imageReadiness).toBe(true)
 
   await expect(page.getByText(/organización o rol/i)).toHaveCount(0)
   await expect(page.getByText(/solicitar contacto/i)).toHaveCount(0)

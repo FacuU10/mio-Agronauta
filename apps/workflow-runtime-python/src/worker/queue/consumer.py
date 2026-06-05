@@ -7,11 +7,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 from redis.asyncio import Redis
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from worker.core.config import get_settings
 from worker.core.telemetry import build_logger, traced_operation
 from worker.graph.base import build_graph
-from worker.runtime.agronautas_jobs import handle_agronautas_job
 
 
 class WorkflowQueueConsumer:
@@ -24,11 +24,32 @@ class WorkflowQueueConsumer:
         schema_path = self.settings.resolved_contracts_root / "workflow-job.schema.json"
         self.validator = Draft202012Validator(json.loads(Path(schema_path).read_text(encoding="utf-8")))
         self.queue_name = f"bull:{queue_name}:wait"
+        self.processing_queue_name = self._processing_queue_name(queue_name)
+        self.dead_letter_queue_name = self._dead_letter_queue_name(queue_name)
+        self.results_key = f"bull:{queue_name}:results"
+        self.max_recovery_attempts = 3
+
+    @staticmethod
+    def _processing_queue_name(queue_name: str) -> str:
+        return f"bull:{queue_name}:processing"
+
+    @staticmethod
+    def _dead_letter_queue_name(queue_name: str) -> str:
+        return f"bull:{queue_name}:dead-letter"
 
     async def consume_forever(self) -> None:
         while True:
-            _, payload = await self.redis.blpop(self.queue_name, timeout=0)
-            await self.handle_job(json.loads(payload))
+            payload = await self.redis.blmove(self.queue_name, self.processing_queue_name, 0, "LEFT", "RIGHT")
+            if payload is None:
+                continue
+
+            try:
+                job = json.loads(payload)
+                await self.handle_job(job)
+                await self._ack(payload)
+            except Exception as exc:
+                self.logger.exception("job.failed", extra={"queue": self.queue_name, "error": str(exc)})
+                await self._handle_failure(payload, exc)
 
     async def handle_job(self, job: dict[str, Any]) -> dict[str, Any]:
         self.validator.validate(job)
@@ -37,12 +58,11 @@ class WorkflowQueueConsumer:
                 "agronautas-risk-recompute.process",
                 {"jobId": job["jobId"], "runId": job["runId"], "requestId": job["trace"]["traceId"]},
             ):
-                result = await handle_agronautas_job(job, self.redis, self.logger)
+                result = await self._run_agronautas_job(job)
                 await self.redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
                 return result
 
         with traced_operation("workflow-job.process", {"jobId": job["jobId"], "workflowId": job["workflowId"]}):
-            graph = await build_graph()
             state = {
                 "job": job,
                 "messages": [],
@@ -50,10 +70,87 @@ class WorkflowQueueConsumer:
                 "output": {},
                 "updated_at": job["createdAt"],
             }
-            result = await graph.ainvoke(state, config={"configurable": {"thread_id": job["runId"]}})
-            await self.redis.hset(f"bull:workflow-jobs:results", job["jobId"], json.dumps(result))
+            result = await self._run_graph_job(state, job["runId"])
+            await self.redis.hset(self.results_key, job["jobId"], json.dumps(result))
             self.logger.info("job.completed", extra={"job_id": job["jobId"], "run_id": job["runId"]})
             return result
+
+    async def _ack(self, payload: str) -> None:
+        await self.redis.lrem(self.processing_queue_name, 1, payload)
+
+    async def _requeue(self, payload: str, reason: str) -> None:
+        job = json.loads(payload)
+        next_payload = self._with_retry_metadata(job, reason)
+        await self._ack(payload)
+        await self.redis.lpush(self.queue_name, next_payload)
+
+    async def _dead_letter(self, payload: str, reason: str) -> None:
+        job = json.loads(payload)
+        attempt = self._current_attempt(job)
+        envelope = {
+            "job": job,
+            "reason": reason,
+            "failedAt": job.get("createdAt"),
+            "attempt": attempt,
+        }
+        await self._ack(payload)
+        await self.redis.rpush(self.dead_letter_queue_name, json.dumps(envelope))
+
+    async def _handle_failure(self, payload: str, exc: Exception) -> None:
+        job = json.loads(payload)
+        max_attempts = self._max_attempts(job)
+        attempt = self._current_attempt(job)
+        reason = f"{type(exc).__name__}: {exc}"
+        if self._is_retryable_exception(exc) and attempt < max_attempts:
+            await self._requeue(payload, reason)
+            return
+
+        await self._dead_letter(payload, reason)
+
+    @staticmethod
+    def _is_retryable_exception(exc: Exception) -> bool:
+        return isinstance(exc, (TimeoutError, ConnectionError))
+
+    def _max_attempts(self, job: dict[str, Any]) -> int:
+        lease = job.get("lease") or {}
+        value = lease.get("maxAttempts")
+        return value if isinstance(value, int) and value > 0 else self.max_recovery_attempts
+
+    def _current_attempt(self, job: dict[str, Any]) -> int:
+        lease = job.get("lease") or {}
+        value = lease.get("attempt")
+        return value if isinstance(value, int) and value > 0 else 1
+
+    def _with_retry_metadata(self, job: dict[str, Any], reason: str) -> str:
+        next_job = json.loads(json.dumps(job))
+        lease = next_job.setdefault("lease", {})
+        lease["attempt"] = self._current_attempt(job) + 1
+        lease["maxAttempts"] = self._max_attempts(job)
+        labels = next_job.setdefault("labels", {})
+        labels["retry_reason"] = reason[:256]
+        next_job["status"] = "waiting"
+        return json.dumps(next_job)
+
+    async def _execute_with_retry(self, operation, *args):
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=0.5, max=8),
+            retry=retry_if_exception_type((TimeoutError, ConnectionError)),
+            reraise=True,
+        )
+        async def _runner():
+            return await operation(*args)
+
+        return await _runner()
+
+    async def _run_agronautas_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        from worker.runtime.agronautas_jobs import handle_agronautas_job
+
+        return await self._execute_with_retry(handle_agronautas_job, job, self.redis, self.logger)
+
+    async def _run_graph_job(self, state: dict[str, Any], run_id: str) -> dict[str, Any]:
+        graph = await build_graph()
+        return await self._execute_with_retry(graph.ainvoke, state, {"configurable": {"thread_id": run_id}})
 
 
 async def main() -> None:
