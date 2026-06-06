@@ -1,27 +1,58 @@
+import type { Request } from 'express'
 import rateLimit from 'express-rate-limit'
 import RedisStore from 'rate-limit-redis'
 import { getRedisClient } from '../../infrastructure/database/redis/client'
 
-const shouldUseMemoryStore = process.env['RATE_LIMIT_STORE'] === 'memory'
+type SkipPredicate = (req: Request) => boolean
 
-const redisStore = shouldUseMemoryStore
-  ? undefined
-  : new RedisStore({
-      sendCommand: (command: string, ...args: string[]) => getRedisClient().call(command, ...args) as Promise<any>,
-      prefix: 'rl:',
-    })
+function shouldUseMemoryStore(): boolean {
+  return process.env['RATE_LIMIT_STORE'] === 'memory'
+}
 
-export const rateLimitMiddleware = rateLimit({
-  ...(redisStore ? { store: redisStore } : {}),
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: {
-    error: 'Too many requests from this IP, please try again later.',
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => {
-    // Skip rate limiting for health checks
-    return req.path === '/health' || req.path === '/ready'
-  },
-})
+function createRedisStore() {
+  if (shouldUseMemoryStore()) return undefined
+
+  return new RedisStore({
+    sendCommand: (command: string, ...args: string[]) => getRedisClient().call(command, ...args) as Promise<any>,
+    prefix: 'rl:',
+  })
+}
+
+function createBaseRateLimit(options: {
+  windowMs: number
+  max: number
+  message: { error: string }
+  skip?: SkipPredicate
+}) {
+  const store = createRedisStore()
+  return rateLimit({
+    ...(store ? { store } : {}),
+    windowMs: options.windowMs,
+    max: options.max,
+    message: options.message,
+    standardHeaders: true,
+    legacyHeaders: false,
+    ...(options.skip ? { skip: options.skip } : {}),
+  })
+}
+
+export function createRateLimitMiddleware() {
+  return createBaseRateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: {
+      error: 'Too many requests from this IP, please try again later.',
+    },
+    skip: (req: Request) => req.path === '/health' || req.path === '/ready',
+  })
+}
+
+export function createChatRateLimitMiddleware() {
+  return createBaseRateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    message: {
+      error: 'Too many chat requests from this IP, please retry in one minute.',
+    },
+  })
+}

@@ -38,6 +38,7 @@ import { createGroqChatProvider } from '../../infrastructure/integrations/groq/c
 import { RedisAgronautasRuntimeDispatcher } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
 import { createDemoAlerts, createDemoCopilotContext, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
 import { getAgronautasAuthConfig, requireAgronautasScope } from '../middleware/agronautas-auth'
+import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
 
 interface AgronautasRouterDeps {
@@ -79,6 +80,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   })
   const runtimeConfig = getAgronautasRuntimeConfig()
   const authConfig = getAgronautasAuthConfig()
+  const chatRateLimitMiddleware = createChatRateLimitMiddleware()
   const requireRead = requireAgronautasScope('read', authConfig)
   const requireWrite = requireAgronautasScope('write', authConfig)
   const requireRecompute = requireAgronautasScope('recompute', authConfig)
@@ -406,7 +408,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json(payload)
   })
 
-  router.post('/fields/:fieldId/chat', async (req, res) => {
+  router.post('/fields/:fieldId/chat', chatRateLimitMiddleware, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 

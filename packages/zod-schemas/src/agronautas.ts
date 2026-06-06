@@ -205,7 +205,7 @@ export const groundedChatActionTypeSchema = z.enum([
 
 export const groundedChatRequestSchema = z.object({
   contractVersion: contractVersionSchema,
-  message: z.string().min(1).max(800),
+  message: z.string().trim().min(1).max(500),
   comparisonFieldId: z.string().min(1).max(80).optional(),
 })
 

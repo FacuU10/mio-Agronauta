@@ -576,6 +576,49 @@ test('POST /fields/:id/chat cae a modo degradado cuando Groq no está disponible
   assert.equal(json.unavailableReason, 'groq_unavailable')
 })
 
+test('POST /fields/:id/chat aplica rate limit por IP sin afectar otros endpoints', async () => {
+  process.env['RATE_LIMIT_STORE'] = 'memory'
+  const app = createTestApp()
+
+  let limitedResponse: Response | undefined
+  for (let attempt = 0; attempt < 11; attempt += 1) {
+    const response = await request(app, '/agronautas/fields/field-1/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.10' },
+      body: JSON.stringify({ contractVersion: '1.0.0', message: 'Explicá el riesgo actual' }),
+    })
+
+    if (attempt < 10) {
+      assert.equal(response.status, 200)
+    } else {
+      limitedResponse = response
+    }
+  }
+
+  assert.ok(limitedResponse)
+  assert.equal(limitedResponse.status, 429)
+  assert.match(await limitedResponse.text(), /chat|demasiadas|too many/i)
+
+  const unaffected = await request(app, '/agronautas/runtime', {
+    headers: { 'x-forwarded-for': '203.0.113.10' },
+  })
+
+  assert.equal(unaffected.status, 200)
+  delete process.env['RATE_LIMIT_STORE']
+})
+
+test('POST /fields/:id/chat rechaza mensajes oversized con error contractual', async () => {
+  const response = await request(createTestApp(), '/agronautas/fields/field-1/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: 'x'.repeat(501) }),
+  })
+
+  assert.equal(response.status, 400)
+  const json = await response.json() as { code: string }
+  assert.equal(json.code, 'INVALID_CONTRACT')
+})
+
 test('seeded Corrientes demo rows can power overview, weather, alerts, status and chat', async () => {
   const referenceNow = new Date()
   const snapshotComputedAt = new Date(referenceNow.getTime() - 2 * 60 * 60 * 1000)
@@ -655,6 +698,8 @@ test('seeded Corrientes demo rows can power overview, weather, alerts, status an
 
 function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRouter>[0]> = {}) {
   const app = express()
+  process.env['RATE_LIMIT_STORE'] = 'memory'
+  app.set('trust proxy', 1)
   app.use(express.json())
   app.use('/agronautas', createAgronautasRouter({
     fieldRepository: overrides.fieldRepository ?? createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() }),

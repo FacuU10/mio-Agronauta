@@ -76,6 +76,24 @@
         "alertIds": ["alert-001"],
         "degradationReasons": ["satellite_data_stale"]
       }
+    },
+    {
+      "name": "grounded-chat-request-valid",
+      "contract": "GroundedChatRequest",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "message": "Riesgo actual del lote"
+      }
+    },
+    {
+      "name": "grounded-chat-request-oversized",
+      "contract": "GroundedChatRequest",
+      "valid": false,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
     }
   ]
 }

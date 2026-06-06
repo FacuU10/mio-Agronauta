@@ -4,7 +4,7 @@ import dotenv from 'dotenv'
 import { globalErrorHandler, notFoundHandler } from './presentation/middleware/error-handler'
 import { httpLogger, logger } from './infrastructure/observability/logger'
 import { helmetMiddleware } from './presentation/middleware/helmet'
-import { rateLimitMiddleware } from './presentation/middleware/rate-limit'
+import { createRateLimitMiddleware } from './presentation/middleware/rate-limit'
 import { corsMiddleware } from './presentation/middleware/cors'
 import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
@@ -25,7 +25,7 @@ export function createApp(): Application {
   // Security middleware
   app.use(helmetMiddleware)
   app.use(corsMiddleware)
-  app.use(rateLimitMiddleware)
+  app.use(createRateLimitMiddleware())
 
   // Body parsing
   app.use(express.json())

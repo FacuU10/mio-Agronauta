@@ -44,6 +44,8 @@ def _validate(schema: dict, payload):
             return False
         if len(payload) < schema.get("minLength", 0):
             return False
+        if "maxLength" in schema and len(payload) > schema["maxLength"]:
+            return False
         return True
     if schema_type == "number":
         if not isinstance(payload, (int, float)) or isinstance(payload, bool):

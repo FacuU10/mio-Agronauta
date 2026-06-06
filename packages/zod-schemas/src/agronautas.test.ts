@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AGRONAUTAS_CONTRACT_VERSION, demoContactSubmissionSchema } from './agronautas'
+import { AGRONAUTAS_CONTRACT_VERSION, demoContactSubmissionSchema, groundedChatRequestSchema } from './agronautas'
 
 test('demo contact schema acepta payload válido y trimmea campos', () => {
   const parsed = demoContactSubmissionSchema.parse({
@@ -53,4 +53,18 @@ test('demo contact schema rechaza mensaje oversized y acepta honeypot poblado co
 
   assert.equal(oversized.success, false)
   assert.equal(honeypot.website, 'bot-value')
+})
+
+test('grounded chat schema trimmea y limita el mensaje a 500 caracteres', () => {
+  const parsed = groundedChatRequestSchema.parse({
+    contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+    message: '  Riesgo actual del lote  ',
+  })
+  const oversized = groundedChatRequestSchema.safeParse({
+    contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+    message: 'x'.repeat(501),
+  })
+
+  assert.equal(parsed.message, 'Riesgo actual del lote')
+  assert.equal(oversized.success, false)
 })
