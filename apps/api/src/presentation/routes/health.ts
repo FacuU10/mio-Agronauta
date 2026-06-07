@@ -5,12 +5,51 @@ import { checkRedis } from '../../infrastructure/database/redis/client'
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import { PostgresAgronautasRuntimeReadinessRepository } from '../../infrastructure/database/postgres/agronautas-runtime-readiness-repository'
 
+export const READINESS_DEPENDENCY_TIMEOUT_MS = 2000
+
+export interface ReadinessDependencyResult {
+  service: string
+  ok: boolean
+  timedOut: boolean
+  error?: string
+}
+
 interface HealthRouterDeps {
   checkPostgres: () => Promise<boolean>
   checkMongoDB: () => Promise<boolean>
   checkRedis: () => Promise<boolean>
   getConfig: typeof getAgronautasRuntimeConfig
   getWorkerReadiness: (maxHeartbeatAgeSeconds: number) => Promise<Awaited<ReturnType<PostgresAgronautasRuntimeReadinessRepository['getWorkerReadiness']>> | null>
+  readinessTimeoutMs: number
+}
+
+export async function withReadinessTimeout(
+  service: string,
+  check: () => Promise<boolean>,
+  timeoutMs = READINESS_DEPENDENCY_TIMEOUT_MS,
+): Promise<ReadinessDependencyResult> {
+  let timeout: NodeJS.Timeout | undefined
+
+  try {
+    const timeoutResult = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(`${service} readiness check timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+    })
+
+    const ok = await Promise.race([check(), timeoutResult])
+    return { service, ok: ok === true, timedOut: false }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown readiness check error'
+    return {
+      service,
+      ok: false,
+      timedOut: message.includes('timed out'),
+      error: message,
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router {
@@ -22,6 +61,7 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
     checkRedis,
     getConfig: getAgronautasRuntimeConfig,
     getWorkerReadiness: async (maxHeartbeatAgeSeconds) => workerReadinessRepository.getWorkerReadiness(maxHeartbeatAgeSeconds),
+    readinessTimeoutMs: READINESS_DEPENDENCY_TIMEOUT_MS,
     ...deps,
   }
 
@@ -32,20 +72,20 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
   router.get('/ready', async (req: Request, res: Response) => {
     try {
       const config = resolved.getConfig()
-      const [postgresOk, mongoOk, redisOk, worker] = await Promise.all([
-        resolved.checkPostgres(),
-        resolved.checkMongoDB(),
-        resolved.checkRedis(),
+      const [postgres, mongo, redis, worker] = await Promise.all([
+        withReadinessTimeout('postgres', resolved.checkPostgres, resolved.readinessTimeoutMs),
+        withReadinessTimeout('mongodb', resolved.checkMongoDB, resolved.readinessTimeoutMs),
+        withReadinessTimeout('redis', resolved.checkRedis, resolved.readinessTimeoutMs),
         config.runtimeRequired
           ? resolved.getWorkerReadiness(config.workerHeartbeatMaxAgeSeconds)
           : Promise.resolve(null),
       ])
 
-      const optionalServices = new Set(config.optionalReadinessServices)
+      const optionalServices = new Set([...config.optionalReadinessServices, 'mongodb'])
       const dependencyChecks = {
-        postgres: postgresOk,
-        redis: redisOk,
-        mongodb: mongoOk,
+        postgres: postgres.ok,
+        redis: redis.ok,
+        mongodb: mongo.ok,
         worker: config.runtimeRequired ? worker?.workerHealthy ?? false : true,
       }
 
@@ -56,6 +96,9 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
       }
 
       const ready = Object.values(requiredChecks).every(Boolean)
+      const failedRequiredChecks = Object.entries(requiredChecks)
+        .filter(([, ok]) => !ok)
+        .map(([service]) => service)
       const degraded = Object.entries(dependencyChecks)
         .filter(([service, ok]) => optionalServices.has(service) && !ok)
         .map(([service]) => service)
@@ -66,8 +109,14 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         routePrefix: config.routePrefix,
         checks: dependencyChecks,
         requiredChecks,
+        failedRequiredChecks,
         optionalChecks: [...optionalServices],
         degraded,
+        checkDetails: {
+          postgres,
+          redis,
+          mongodb: mongo,
+        },
         worker: config.runtimeRequired
           ? {
               required: true,
@@ -90,8 +139,8 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         capabilities: {
           mongodb: {
             required: !optionalServices.has('mongodb'),
-            healthy: mongoOk,
-            status: mongoOk ? 'available' : 'optional_degraded',
+            healthy: mongo.ok,
+            status: mongo.ok ? 'available' : 'optional_degraded',
             note: 'Mongo se preserva como capacidad futura y no bloquea el MVP Agronautas por defecto.',
           },
         },
