@@ -92,7 +92,7 @@ test('visualización stale advierte recompute en curso', async () => {
   fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
 
   await waitFor(() => {
-    assert.ok(view.getByText('Snapshot stale detectado'))
+    assert.ok(view.getAllByText(/Último dato obtenido:/i).length >= 1)
     assert.ok(view.getByText(/recompute enqueued/i))
   })
 

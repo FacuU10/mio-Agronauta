@@ -76,12 +76,60 @@ export const runtimeInfoSchema = z.object({
   contractVersion: z.literal(AGRONAUTAS_CONTRACT_VERSION),
 })
 
+export const hydrologySourceSchema = z.enum(['PNA', 'INA', 'INMET', 'SMN'])
+
+export const hydrologyItemSchema = z.object({
+  source: hydrologySourceSchema,
+  stationId: z.string().min(1),
+  observedAt: z.string().min(1),
+  ingestedAt: z.string().min(1),
+  lastSuccessfulObservedAt: z.string().nullable(),
+  value: z.number(),
+  unit: z.string().min(1),
+  metric: z.enum(['river_height_m', 'rain_mm', 'storm_alert']),
+  quality: z.enum(['observed', 'forecast', 'estimated', 'missing']),
+  freshness: z.enum(['fresh', 'stale', 'degraded']),
+  tendency: z.string().optional(),
+  forecastHorizonDays: z.number().optional(),
+  confidence: z.enum(['normal', 'speculative']).optional(),
+  sourceUrl: z.string().url().nullable().optional(),
+})
+
+export const hydrologyDashboardSchema = z.object({
+  contractVersion: z.literal('hydrology-dashboard-v1'),
+  fieldId: z.string().min(1),
+  zone: z.enum(['Mercedes', 'Ituzaingó', 'Virasoro']).nullable(),
+  sources: z.array(hydrologySourceSchema),
+  stations: z.array(z.object({
+    id: z.string().min(1),
+    source: hydrologySourceSchema,
+    stationName: z.string().min(1),
+    riverName: z.string().nullable(),
+    zone: z.enum(['Mercedes', 'Ituzaingó', 'Virasoro']).nullable(),
+    sourceUrl: z.string().url().nullable().optional(),
+  })),
+  status: z.object({
+    riskLevel: z.enum(['low', 'moderate', 'high', 'unknown']),
+    freshness: z.enum(['fresh', 'stale', 'degraded']),
+    quality: z.enum(['observed', 'forecast', 'estimated', 'missing']),
+    recommendation: z.string().min(1),
+    lastSuccessfulObservedAt: z.string().nullable(),
+  }),
+  heights: z.array(hydrologyItemSchema),
+  trends: z.array(hydrologyItemSchema),
+  forecasts: z.array(hydrologyItemSchema),
+  rain: z.array(hydrologyItemSchema),
+  alerts: z.array(hydrologyItemSchema),
+})
+
 export type FieldCreated = z.infer<typeof fieldCreatedSchema>
 export type FieldOverview = z.infer<typeof fieldOverviewSchema>
 export type RiskCurrent = z.infer<typeof riskCurrentSchema>
 export type AlertsCurrent = z.infer<typeof alertsCurrentSchema>
 export type ContractError = z.infer<typeof contractErrorSchema>
 export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>
+export type HydrologyDashboard = z.infer<typeof hydrologyDashboardSchema>
+export type HydrologyItem = z.infer<typeof hydrologyItemSchema>
 export type DemoContactSubmission = z.infer<typeof demoContactSubmissionSchema>
 export type DemoContactSubmissionResponse = z.infer<typeof demoContactSubmissionResponseSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>

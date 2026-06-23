@@ -13,10 +13,11 @@ import {
   fieldCreatedSchema,
   fieldOverviewSchema,
   groundedChatResponseSchema,
+  hydrologyDashboardSchema,
   riskCurrentSchema,
   runtimeInfoSchema,
 } from './schemas'
-import type { AlertsCurrent, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { AlertsCurrent, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
 
 export async function submitDemoContact(input: DemoContactSubmission): Promise<DemoContactSubmissionResponse> {
   demoContactSubmissionSchema.parse(input)
@@ -36,8 +37,10 @@ export interface AgronautasService {
   getRiskTimeline(fieldId: string): Promise<RiskTimelineResponse>
   getWeatherTimeline(fieldId: string): Promise<WeatherTimelineResponse>
   getMonitoringStatus(fieldId: string): Promise<MonitoringStatus>
+  getHydrologyDashboard(fieldId: string): Promise<HydrologyDashboard>
   requestRecompute(fieldId: string): Promise<RecomputeRequestResult>
   askFieldChat(fieldId: string, input: GroundedChatRequest): Promise<GroundedChatResponse>
+  askHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onToken: (token: string) => void): Promise<void>
 }
 
 export function createAgronautasApiService(): AgronautasService {
@@ -50,8 +53,10 @@ export function createAgronautasApiService(): AgronautasService {
     getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/risk/timeline`)),
     getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/weather/timeline`)),
     getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(`/fields/${fieldId}/status`)),
+    getHydrologyDashboard: async (fieldId) => hydrologyDashboardSchema.parse(await apiClient(`/fields/${fieldId}/hydrology/dashboard`)),
     requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(`/fields/${fieldId}/recompute`, { method: 'POST' })),
     askFieldChat: async (fieldId, input) => groundedChatResponseSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
+    askHydrologyCopilot: (fieldId, input, onToken) => streamHydrologyCopilot(fieldId, input, onToken),
   }
 }
 
@@ -174,6 +179,9 @@ export function createAgronautasMockService(): AgronautasService {
         degradationReasons: risk.snapshot.degradationReasons,
       })
     },
+    async getHydrologyDashboard(fieldId) {
+      return hydrologyDashboardSchema.parse(createMockHydrologyDashboard(fieldId))
+    },
     async requestRecompute(fieldId) {
       const attempts = (recomputeRuns.get(fieldId) ?? 0) + 1
       recomputeRuns.set(fieldId, attempts)
@@ -213,6 +221,79 @@ export function createAgronautasMockService(): AgronautasService {
         unavailableReason: isDisabled ? 'groq_disabled' : isFailure ? 'groq_temporarily_unavailable' : undefined,
       })
     },
+    async askHydrologyCopilot(fieldId, input, onToken) {
+      const dashboard = await this.getHydrologyDashboard(fieldId)
+      const answer = input.message.toLowerCase().includes('patria')
+        ? 'Paso de la Patria se referencia dentro de la tarjeta Mercedes. No se mezclan alertas fuera de su zona.'
+        : `Copilot Hidrológico: ${dashboard.zone ?? 'zona sin mapear'} tiene ${dashboard.alerts.length} alerta(s) activas y pronóstico INA hasta ${Math.max(...dashboard.forecasts.map((item) => item.forecastHorizonDays ?? 0))} días. Revisá los días 15 a 30 como planificación especulativa, no certeza operativa.`
+      for (const token of answer.split(' ')) onToken(`${token} `)
+    },
+  }
+}
+
+async function streamHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onToken: (token: string) => void): Promise<void> {
+  const response = await fetch(`/api/agronautas/v1/fields/${fieldId}/copilot/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!response.ok || !response.body) throw new ApiError(response.status, 'No se pudo abrir el streaming del Copilot Hidrológico')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const event of events) {
+      const dataLine = event.split('\n').find((line) => line.startsWith('data:'))
+      if (!dataLine) continue
+      const parsed = JSON.parse(dataLine.replace(/^data:\s*/, '')) as { type?: string; token?: string; error?: string }
+      if (parsed.type === 'token' && parsed.token) onToken(parsed.token)
+      if (parsed.type === 'error') throw new Error(parsed.error ?? 'Error del Copilot Hidrológico')
+    }
+  }
+}
+
+function createMockHydrologyDashboard(fieldId: string): HydrologyDashboard {
+  const base = {
+    observedAt: '2026-06-23T13:30:00.000-03:00',
+    ingestedAt: '2026-06-23T13:35:00.000-03:00',
+    lastSuccessfulObservedAt: '2026-06-23T13:30:00.000-03:00',
+    quality: 'observed' as const,
+    freshness: 'fresh' as const,
+  }
+  const forecasts = [3, 7, 14, 21, 30].map((day, index) => ({
+    ...base,
+    source: 'INA' as const,
+    stationId: 'ina-paso-de-la-patria',
+    value: 4.8 + index * 0.22,
+    unit: 'm',
+    metric: 'river_height_m' as const,
+    quality: 'forecast' as const,
+    forecastHorizonDays: day,
+    confidence: day > 14 ? 'speculative' as const : 'normal' as const,
+    sourceUrl: 'https://www.ina.gob.ar/',
+  }))
+
+  return {
+    contractVersion: 'hydrology-dashboard-v1',
+    fieldId,
+    zone: 'Mercedes',
+    sources: ['PNA', 'INA', 'INMET', 'SMN'],
+    stations: [
+      { id: 'pna-paso-de-la-patria', source: 'PNA', stationName: 'Paso de la Patria', riverName: 'Paraná', zone: 'Mercedes', sourceUrl: 'https://contenidosweb.prefecturanaval.gob.ar/alturas/' },
+      { id: 'ina-paso-de-la-patria', source: 'INA', stationName: 'Paso de la Patria', riverName: 'Paraná', zone: 'Mercedes', sourceUrl: 'https://www.ina.gob.ar/' },
+    ],
+    status: { riskLevel: 'high', freshness: 'fresh', quality: 'observed', recommendation: 'Revisar caminos bajos y movimiento de maquinaria antes de nuevas lluvias.', lastSuccessfulObservedAt: base.lastSuccessfulObservedAt },
+    heights: [{ ...base, source: 'PNA', stationId: 'pna-paso-de-la-patria', value: 5.42, unit: 'm', metric: 'river_height_m', tendency: 'Crece', sourceUrl: 'https://contenidosweb.prefecturanaval.gob.ar/alturas/' }],
+    trends: [{ ...base, source: 'PNA', stationId: 'pna-paso-de-la-patria', value: 0.18, unit: 'm/24h', metric: 'river_height_m', tendency: 'Crece', sourceUrl: 'https://contenidosweb.prefecturanaval.gob.ar/alturas/' }],
+    forecasts,
+    rain: [{ ...base, source: 'SMN', stationId: 'smn-corrientes', value: 46, unit: 'mm/24h', metric: 'rain_mm', sourceUrl: 'https://www.smn.gob.ar/' }],
+    alerts: [{ ...base, source: 'SMN', stationId: 'paso-de-la-patria', value: 1, unit: 'alerta', metric: 'storm_alert', sourceUrl: 'https://www.smn.gob.ar/alertas' }],
   }
 }
 

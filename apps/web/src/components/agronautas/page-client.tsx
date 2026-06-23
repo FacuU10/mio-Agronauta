@@ -23,6 +23,8 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const setLastCreatedFieldId = useAgronautasStore((state) => state.setLastCreatedFieldId)
   const setIntakeError = useAgronautasStore((state) => state.setIntakeError)
   const [chatResponse, setChatResponse] = useState<GroundedChatResponse | undefined>(undefined)
+  const [hydrologyAnswer, setHydrologyAnswer] = useState('')
+  const [hydrologyError, setHydrologyError] = useState<string | null>(null)
   const [chatError, setChatError] = useState<string | null>(null)
 
   const intakeMutation = useMutation({
@@ -67,7 +69,22 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
     },
   })
 
-  const [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery] = useQueries({
+  const hydrologyChatMutation = useMutation({
+    mutationFn: async (message: string) => {
+      if (!selectedFieldId) throw new Error('Seleccioná un lote antes de usar el Copilot Hidrológico')
+      setHydrologyAnswer('')
+      setHydrologyError(null)
+      await resolvedService.askHydrologyCopilot(selectedFieldId, {
+        contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+        message,
+      }, (token) => setHydrologyAnswer((current) => `${current}${token}`))
+    },
+    onError: (error) => {
+      setHydrologyError(error instanceof Error ? error.message : 'No se pudo abrir el Copilot Hidrológico')
+    },
+  })
+
+  const [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, hydrologyQuery] = useQueries({
     queries: [
       {
         queryKey: ['agronautas', 'field', selectedFieldId],
@@ -99,6 +116,11 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
         queryFn: () => resolvedService.getWeatherTimeline(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
       },
+      {
+        queryKey: ['agronautas', 'hydrology-dashboard', selectedFieldId],
+        queryFn: () => resolvedService.getHydrologyDashboard(selectedFieldId as string),
+        enabled: Boolean(selectedFieldId),
+      },
     ],
   })
   const runtimeQuery = useQueries({
@@ -118,16 +140,21 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       status={statusQuery.data}
       riskTimeline={riskTimelineQuery.data}
       weatherTimeline={weatherTimelineQuery.data}
+      hydrologyDashboard={hydrologyQuery.data}
       chatResponse={chatResponse}
+      hydrologyAnswer={hydrologyAnswer}
+      hydrologyError={hydrologyError}
       chatError={chatError}
       isChatPending={chatMutation.isPending}
+      isHydrologyChatPending={hydrologyChatMutation.isPending}
       recomputeStatus={recomputeRequestResultSchema.safeParse(recomputeMutation.data).success ? recomputeMutation.data : undefined}
       isRecomputePending={recomputeMutation.isPending}
-      isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading}
+      isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || hydrologyQuery.isLoading}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}
       onRequestRecompute={() => (selectedFieldId ? recomputeMutation.mutateAsync(selectedFieldId) : Promise.resolve(undefined))}
       onAskChat={(message) => chatMutation.mutateAsync(message)}
+      onAskHydrologyChat={(message) => hydrologyChatMutation.mutateAsync(message)}
     />
   )
 }

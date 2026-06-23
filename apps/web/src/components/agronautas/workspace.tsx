@@ -2,7 +2,7 @@
 
 import React from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
-import type { AlertsCurrent, FieldOverview, GroundedChatResponse, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,15 +24,20 @@ interface WorkspaceProps {
   status?: MonitoringStatus
   riskTimeline?: RiskTimelineResponse
   weatherTimeline?: WeatherTimelineResponse
+  hydrologyDashboard?: HydrologyDashboard
   chatResponse?: GroundedChatResponse
+  hydrologyAnswer: string
+  hydrologyError: string | null
   chatError: string | null
   isChatPending: boolean
+  isHydrologyChatPending: boolean
   recomputeStatus?: RecomputeRequestResult
   isRecomputePending: boolean
   onSelectField: (fieldId: string | null) => void
   onSubmitIntake: (input: FieldIntake) => Promise<unknown>
   onRequestRecompute: () => Promise<unknown>
   onAskChat: (message: string) => Promise<unknown>
+  onAskHydrologyChat: (message: string) => Promise<unknown>
 }
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
@@ -41,8 +46,8 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
       <section className="grid gap-4 rounded-[32px] border border-[var(--border)] bg-[linear-gradient(135deg,#173622_0%,#2c6f45_55%,#dbb369_100%)] px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
         <div className="space-y-4">
           <Badge className="bg-white/15 text-white">Web MVP · Modo {props.runtimeMode === 'demo' ? 'demo' : 'real'}</Badge>
-          <h1 className="max-w-2xl text-3xl font-semibold leading-tight md:text-5xl">Intake guiado, riesgo auditable y alertas frescura-aware para arroz en Corrientes.</h1>
-          <p className="max-w-2xl text-sm text-white/85 md:text-base">La UI usa contratos compartidos, mantiene la lógica pesada fuera del cliente y expone confianza, degradación y evidencia de cada snapshot.</p>
+          <h1 className="max-w-2xl text-3xl font-semibold leading-tight md:text-5xl">Iberá-Alerta: monitoreo centralizado de inundaciones para arroz en Corrientes.</h1>
+          <p className="max-w-2xl text-sm text-white/85 md:text-base">PNA, INA, INMET y SMN en tarjetas locales: altura actual, tendencia 24h, umbrales, alertas por zona y pronósticos HTML sin revisar PDFs estáticos.</p>
         </div>
         <Card className="border-white/10 bg-white/10 text-white backdrop-blur">
           <CardHeader>
@@ -128,7 +133,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, chatResponse, chatError, isChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, hydrologyDashboard, chatResponse, hydrologyAnswer, hydrologyError, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onAskHydrologyChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -164,8 +169,8 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         <Card className="border-amber-200 bg-amber-50" data-testid="agronautas-stale-banner">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div>
-              <p className="text-sm font-semibold text-amber-900">Snapshot stale detectado</p>
-              <p className="text-sm text-amber-800">La UI no promete actualidad falsa y muestra el último snapshot con recompute {recomputeStatus?.status ?? alerts?.recompute?.status ?? risk.recompute?.status ?? 'pendiente'}.</p>
+              <p className="text-sm font-semibold text-amber-900">Último dato obtenido: {formatDateTime(risk.snapshot.computedAt)}</p>
+              <p className="text-sm text-amber-800">La UI no promete actualidad falsa y permite solicitar recompute {recomputeStatus?.status ?? alerts?.recompute?.status ?? risk.recompute?.status ?? 'pendiente'}.</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => onSelectField(selectedFieldId)}>Refrescar vista</Button>
@@ -174,6 +179,8 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
           </CardContent>
         </Card>
       ) : null}
+
+      <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyAnswer={hydrologyAnswer} hydrologyError={hydrologyError} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card data-testid="agronautas-status-card">
@@ -308,6 +315,141 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
   )
 }
 
+function HydrologyPanel({ dashboard, locality, hydrologyAnswer, hydrologyError, isHydrologyChatPending, onAskHydrologyChat }: { dashboard?: HydrologyDashboard; locality: string | null; hydrologyAnswer: string; hydrologyError: string | null; isHydrologyChatPending: boolean; onAskHydrologyChat: (message: string) => Promise<unknown> }) {
+  const zone = dashboard?.zone ?? locality ?? 'Zona no mapeada'
+  const height = dashboard?.heights[0]
+  const trend = dashboard?.trends[0] ?? height
+  const lastSuccessful = dashboard?.status.lastSuccessfulObservedAt ?? height?.lastSuccessfulObservedAt ?? null
+
+  return (
+    <section className="grid gap-6" data-testid="ibera-alerta-panel">
+      <Card className="border-emerald-200 bg-emerald-50/50">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle>Iberá-Alerta · Tarjeta hidrológica {zone}</CardTitle>
+              <CardDescription>Monitoreo centralizado PNA + INA + INMET + SMN para decisiones agrícolas y logísticas.</CardDescription>
+            </div>
+            <Badge variant={dashboard?.status.riskLevel === 'high' ? 'destructive' : dashboard?.status.riskLevel === 'moderate' ? 'warning' : 'success'}>{toRiskLabel(dashboard?.status.riskLevel)}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-5">
+          <div className="grid gap-3 md:grid-cols-4">
+            <HydrologyFact label="Altura actual" value={height ? `${height.value.toFixed(2)} ${height.unit}` : 'Sin dato'} detail={height?.stationId ?? 'PNA'} />
+            <HydrologyFact label="Tendencia 24h" value={toTendencyLabel(trend?.tendency)} detail={trend ? `${trend.value} ${trend.unit}` : 'Sin variación'} />
+            <HydrologyFact label="Umbral de alerta" value={thresholdForZone(zone).alert} detail="Referencia local operativa" />
+            <HydrologyFact label="Umbral evacuación" value={thresholdForZone(zone).evacuation} detail="Referencia para logística crítica" />
+          </div>
+
+          <p className="rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm font-medium text-emerald-900">Último dato obtenido: {formatDateTime(lastSuccessful)}</p>
+
+          <div className="grid gap-4 lg:grid-cols-[1fr,1.2fr]">
+            <LocalAlertsCard dashboard={dashboard} zone={zone} />
+            <ForecastCard forecasts={dashboard?.forecasts ?? []} />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FutureFeatureCard title="Sentinel-1 inline" description="Próximamente: capa radar integrada en el mapa de Iberá-Alerta. Fase 1 no muestra links externos ni redirecciones." />
+            <FutureFeatureCard title="Simulación interactiva" description="Próximamente: escenarios de inundación dentro del panel. Fase 1 evita controles hidráulicos personalizados." />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card data-testid="ibera-alerta-copilot-card">
+        <CardHeader>
+          <CardTitle>Copilot Hidrológico</CardTitle>
+          <CardDescription>Seleccioná el lote activo y preguntá en español sobre riesgo de crecida, caminos, maquinaria o alertas locales. La respuesta se transmite en vivo con contexto oficial.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <form
+            className="grid gap-3"
+            onSubmit={async (event) => {
+              event.preventDefault()
+              const message = String(new FormData(event.currentTarget).get('hydrologyMessage') ?? '').trim()
+              if (!message) return
+              await onAskHydrologyChat(message)
+            }}
+          >
+            <Field label="Pregunta hidrológica" name="hydrologyMessage" placeholder="¿Qué riesgo de crecida tiene mi lote en los próximos 7 días?" />
+            <Button type="submit" disabled={isHydrologyChatPending}>{isHydrologyChatPending ? 'Transmitiendo respuesta...' : 'Preguntar al Copilot Hidrológico'}</Button>
+          </form>
+          {hydrologyError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{hydrologyError}</p> : null}
+          {hydrologyAnswer ? <p className="rounded-2xl border border-[var(--border)] bg-[var(--muted)]/40 p-4 text-sm">{hydrologyAnswer}</p> : null}
+        </CardContent>
+      </Card>
+    </section>
+  )
+}
+
+function LocalAlertsCard({ dashboard, zone }: { dashboard?: HydrologyDashboard; zone: string }) {
+  const alerts = dashboard?.alerts ?? []
+  return (
+    <Card className="bg-white">
+      <CardHeader>
+        <CardTitle>Alertas locales · {zone}</CardTitle>
+        <CardDescription>Las alertas aparecen solo dentro de la tarjeta de su zona o estación de referencia.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3 text-sm">
+        {alerts.length ? alerts.map((alert) => (
+          <div key={`${alert.source}-${alert.stationId}-${alert.observedAt}`} className="rounded-2xl border border-[var(--border)] p-3">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <p className="font-medium">{stationLabel(alert.stationId)} · {alert.source}</p>
+              <Badge variant="warning">Activa</Badge>
+            </div>
+            <p className="text-[var(--muted-foreground)]">Valor {alert.value} {alert.unit}. Último dato obtenido: {formatDateTime(alert.lastSuccessfulObservedAt)}</p>
+          </div>
+        )) : <p className="text-[var(--muted-foreground)]">No hay alertas activas para esta zona.</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ForecastCard({ forecasts }: { forecasts: HydrologyItem[] }) {
+  const visibleForecasts = forecasts.filter((item) => (item.forecastHorizonDays ?? 0) <= 30)
+  return (
+    <Card className="bg-white">
+      <CardHeader>
+        <CardTitle>Pronóstico INA en tabla HTML</CardTitle>
+        <CardDescription>Alturas a 7-30 días visibles en el panel para evitar descargar y revisar PDFs estáticos.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {visibleForecasts.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[520px] text-left text-sm">
+              <thead className="text-[var(--muted-foreground)]">
+                <tr className="border-b border-[var(--border)]">
+                  <th className="py-2 pr-3">Horizonte</th>
+                  <th className="py-2 pr-3">Altura prevista</th>
+                  <th className="py-2 pr-3">Confianza</th>
+                  <th className="py-2 pr-3">Último dato obtenido</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleForecasts.map((item) => (
+                  <tr key={`${item.stationId}-${item.forecastHorizonDays}`} className="border-b border-[var(--border)]/70">
+                    <td className="py-2 pr-3">Día {item.forecastHorizonDays}</td>
+                    <td className="py-2 pr-3 font-medium">{item.value.toFixed(2)} {item.unit}</td>
+                    <td className="py-2 pr-3">{item.confidence === 'speculative' ? 'Planificación especulativa / baja confianza' : 'Normal'}</td>
+                    <td className="py-2 pr-3">{formatDateTime(item.lastSuccessfulObservedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="text-sm text-[var(--muted-foreground)]">Sin pronóstico INA disponible para esta estación.</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+function HydrologyFact({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return <div className="rounded-2xl border border-emerald-200 bg-white p-4"><p className="text-sm text-[var(--muted-foreground)]">{label}</p><p className="text-2xl font-semibold text-emerald-950">{value}</p><p className="text-sm text-[var(--muted-foreground)]">{detail}</p></div>
+}
+
+function FutureFeatureCard({ title, description }: { title: string; description: string }) {
+  return <div className="rounded-2xl border border-dashed border-[var(--border)] bg-white p-4"><Badge variant="outline">Próximamente</Badge><p className="mt-3 font-medium">{title}</p><p className="text-sm text-[var(--muted-foreground)]">{description}</p></div>
+}
+
 function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <Card>
@@ -345,4 +487,45 @@ function toAlertLabel(type: string) {
     case 'thermal_stress': return 'Estrés térmico'
     default: return type
   }
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return 'Sin fecha disponible'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
+function toRiskLabel(level: HydrologyDashboard['status']['riskLevel'] | undefined) {
+  switch (level) {
+    case 'high': return 'Riesgo alto'
+    case 'moderate': return 'Riesgo moderado'
+    case 'low': return 'Riesgo bajo'
+    default: return 'Riesgo sin clasificar'
+  }
+}
+
+function toTendencyLabel(tendency: string | undefined) {
+  const normalized = tendency?.toLowerCase()
+  if (normalized?.includes('crece') || normalized?.includes('rising')) return 'Crece'
+  if (normalized?.includes('baja') || normalized?.includes('falling')) return 'Baja'
+  if (normalized?.includes('estable') || normalized?.includes('stable')) return 'Estable'
+  return tendency ?? 'Sin tendencia'
+}
+
+function thresholdForZone(zone: string) {
+  if (zone.toLowerCase().includes('ituzaing')) return { alert: '3,50 m', evacuation: '4,20 m' }
+  if (zone.toLowerCase().includes('virasoro')) return { alert: 'Lluvia 70 mm/24h', evacuation: 'Corte de acceso' }
+  return { alert: '5,60 m', evacuation: '6,20 m' }
+}
+
+function stationLabel(stationId: string) {
+  return stationId.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
 }
