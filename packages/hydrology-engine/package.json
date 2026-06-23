@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@repo/zod-schemas": "workspace:*",
+    "groq-sdk": "^0.7.0",
     "pg": "^8.11.3"
   },
   "devDependencies": {

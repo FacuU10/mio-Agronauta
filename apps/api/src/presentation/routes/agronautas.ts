@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { Router, type Request, type Response } from 'express'
+import { Router, type NextFunction, type Request, type Response } from 'express'
 import {
   agronautasContractErrorSchema,
   alertSnapshotSchema,
@@ -11,6 +11,7 @@ import {
   monitoringStatusSchema,
   riskSnapshotSchema,
 } from '@repo/zod-schemas'
+import { HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
 import { GenerateAlertsUseCase, toAlertContracts, toStaleAlertContracts, toStoredAlertContracts } from '../../application/usecases/generate-alerts-usecase'
 import { RequestRiskRecomputeUseCase } from '../../application/usecases/request-risk-recompute-usecase'
@@ -40,6 +41,11 @@ import { createDemoAlerts, createDemoCopilotContext, createDemoFieldCreated, cre
 import { getAgronautasAuthConfig, requireAgronautasScope } from '../middleware/agronautas-auth'
 import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
+import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
+import type { Field } from '../../domain/entities/agronautas'
+
+type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
+type RequestWithField = Request & { field?: Field }
 
 interface AgronautasRouterDeps {
   fieldRepository: FieldRepository
@@ -51,6 +57,8 @@ interface AgronautasRouterDeps {
   jobRunRepository: AgronautasJobRunRepository
   alertSnapshotRepository: AlertSnapshotRepository
   demoContactSubmissionRepository: DemoContactSubmissionRepository
+  hydrologyRepository: Pick<HydrologyRepository, 'getDenseContextForField'>
+  hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
   isVersionedNamespace: boolean
 }
 
@@ -65,6 +73,8 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     jobRunRepository: deps.jobRunRepository ?? new PostgresAgronautasJobRunRepository(),
     alertSnapshotRepository: deps.alertSnapshotRepository ?? new PostgresAlertSnapshotRepository(),
     demoContactSubmissionRepository: deps.demoContactSubmissionRepository ?? new PostgresDemoContactSubmissionRepository(),
+    hydrologyRepository: deps.hydrologyRepository ?? new HydrologyRepository(getPostgresPool()),
+    hydrologyCopilotService: deps.hydrologyCopilotService ?? new HydrologyCopilotService(),
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
   }
 
@@ -190,6 +200,28 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       status: stale ? 'stale' : snapshot.freshness,
       snapshot: riskSnapshotSchema.parse(snapshot.toContract()),
       recompute,
+    })
+  })
+
+  router.get('/fields/:fieldId/hydrology/dashboard', requireRead, requireFieldAccess(resolved.fieldRepository), async (req: RequestWithField, res: Response) => {
+    const field = req.field
+    if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+
+    const context = await resolved.hydrologyRepository.getDenseContextForField(field.props.id, fieldBoundaryWkt(field))
+    return res.json(toHydrologyDashboardResponse(context))
+  })
+
+  router.get('/fields/:fieldId/hydrology/alerts', requireRead, requireFieldAccess(resolved.fieldRepository), async (req: RequestWithField, res: Response) => {
+    const field = req.field
+    if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+
+    const context = await resolved.hydrologyRepository.getDenseContextForField(field.props.id, fieldBoundaryWkt(field))
+    return res.json({
+      contractVersion: 'hydrology-alerts-v1',
+      fieldId: context.fieldId,
+      zone: context.zone,
+      lastSuccessfulObservedAt: context.snapshot.lastSuccessfulObservedAt,
+      alerts: context.telemetry.filter((item: HydrologyDenseContextV1['telemetry'][number]) => item.metric === 'storm_alert').map(toHydrologyItem),
     })
   })
 
@@ -408,6 +440,33 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json(payload)
   })
 
+  router.post('/fields/:fieldId/copilot/chat', requireRead, requireFieldAccess(resolved.fieldRepository), chatRateLimitMiddleware, async (req: RequestWithField, res: Response) => {
+    const field = req.field
+    if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+
+    const parsed = groundedChatRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+
+    const context = await resolved.hydrologyRepository.getDenseContextForField(field.props.id, fieldBoundaryWkt(field))
+    res.status(200)
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-cache, no-transform')
+    res.setHeader('Connection', 'keep-alive')
+    res.flushHeaders?.()
+
+    try {
+      for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context })) {
+        res.write(`event: ${event.type}\n`)
+        res.write(`data: ${JSON.stringify(event.data)}\n\n`)
+      }
+      return res.end()
+    } catch (error) {
+      res.write('event: error\n')
+      res.write(`data: ${JSON.stringify({ message: 'El copiloto hidrológico no está disponible.', reason: error instanceof Error ? error.message : 'unknown_error' })}\n\n`)
+      return res.end()
+    }
+  })
+
   router.post('/fields/:fieldId/chat', chatRateLimitMiddleware, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
@@ -497,6 +556,66 @@ function deriveAlertStatus(alerts: Array<{ freshness: 'fresh' | 'stale' | 'degra
   if (alerts.some((alert) => alert.freshness === 'stale')) return 'stale'
   if (alerts.some((alert) => alert.freshness === 'degraded')) return 'degraded'
   return 'fresh'
+}
+
+function requireFieldAccess(fieldRepository: FieldRepository) {
+  return async (req: RequestWithField, res: Response, next: NextFunction) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+
+    const field = await fieldRepository.findById(fieldId)
+    if (!field) return res.status(404).json({ error: 'Field not found' })
+
+    req.field = field
+    return next()
+  }
+}
+
+function fieldBoundaryWkt(field: Field): string {
+  return field.props.polygonWkt ?? `POINT(${field.props.centroid.lng} ${field.props.centroid.lat})`
+}
+
+function toHydrologyDashboardResponse(context: HydrologyDenseContextV1) {
+  const parsed = context
+  const telemetry = parsed.telemetry.map(toHydrologyItem)
+  return {
+    contractVersion: 'hydrology-dashboard-v1',
+    fieldId: parsed.fieldId,
+    zone: parsed.zone,
+    sources: parsed.sources,
+    stations: parsed.stations,
+    status: {
+      riskLevel: parsed.snapshot.riskLevel,
+      freshness: parsed.snapshot.freshness,
+      quality: parsed.snapshot.quality,
+      recommendation: parsed.snapshot.recommendation,
+      lastSuccessfulObservedAt: parsed.snapshot.lastSuccessfulObservedAt,
+    },
+    heights: telemetry.filter((item: ReturnType<typeof toHydrologyItem>) => item.metric === 'river_height_m' && item.forecastHorizonDays === undefined),
+    trends: telemetry.filter((item: ReturnType<typeof toHydrologyItem>) => item.tendency !== undefined),
+    forecasts: telemetry.filter((item: ReturnType<typeof toHydrologyItem>) => item.source === 'INA' && item.forecastHorizonDays !== undefined),
+    rain: telemetry.filter((item: ReturnType<typeof toHydrologyItem>) => item.metric === 'rain_mm'),
+    alerts: telemetry.filter((item: ReturnType<typeof toHydrologyItem>) => item.metric === 'storm_alert'),
+  }
+}
+
+function toHydrologyItem(item: HydrologyDenseContextV1['telemetry'][number]) {
+  return {
+    source: item.source,
+    stationId: item.stationId,
+    observedAt: item.observedAt,
+    ingestedAt: item.ingestedAt,
+    lastSuccessfulObservedAt: item.lastSuccessfulObservedAt,
+    value: item.value,
+    unit: item.unit,
+    metric: item.metric,
+    quality: item.quality,
+    freshness: item.freshness,
+    tendency: item.tendency,
+    forecastHorizonDays: item.forecastHorizonDays,
+    confidence: item.confidence,
+    sourceUrl: item.sourceUrl,
+  }
 }
 
 function readSourcePath(req: Request): string {

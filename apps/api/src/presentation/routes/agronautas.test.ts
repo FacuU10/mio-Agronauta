@@ -6,6 +6,8 @@ import type { DemoContactSubmissionRepository, FieldContextRepository, FieldRepo
 import { Field, FieldContext, RiskSnapshotFoundation, type ClimateSummary, type SatelliteSummary } from '../../domain/entities/agronautas'
 import { createAgronautasRouter } from './agronautas'
 
+type HydrologyDenseContextV1 = Awaited<ReturnType<NonNullable<NonNullable<Parameters<typeof createAgronautasRouter>[0]>['hydrologyRepository']>['getDenseContextForField']>>
+
 test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async () => {
   process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
@@ -619,6 +621,55 @@ test('POST /fields/:id/chat rechaza mensajes oversized con error contractual', a
   assert.equal(json.code, 'INVALID_CONTRACT')
 })
 
+test('GET /fields/:id/hydrology/dashboard protege lote y expone timestamp exacto sin etiquetas heredadas', async () => {
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  const fieldStore = new Map<string, Field>()
+  const field = testField('field-hydro-1')
+  fieldStore.set(field.props.id, field)
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    hydrologyRepository: { async getDenseContextForField() { return hydrologyContext(field.props.id) } },
+  }), `/agronautas/fields/${field.props.id}/hydrology/dashboard`, {
+    headers: { authorization: 'Bearer reader-token' },
+  })
+
+  assert.equal(response.status, 200)
+  const text = await response.text()
+  assert.match(text, /2026-06-23T10:30:00.000Z/)
+  assert.doesNotMatch(text, /stale-data|datos desactualizados/i)
+  const json = JSON.parse(text) as { status: { lastSuccessfulObservedAt: string }; forecasts: Array<{ confidence: string; forecastHorizonDays: number }> }
+  assert.equal(json.status.lastSuccessfulObservedAt, '2026-06-23T10:30:00.000Z')
+  assert.deepEqual(json.forecasts.map((row) => [row.forecastHorizonDays, row.confidence]), [[20, 'speculative']])
+
+  delete process.env['AGRONAUTAS_AUTH_ENABLED']
+  delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+})
+
+test('POST /fields/:id/copilot/chat streamea SSE de metadatos y tokens hidrológicos', async () => {
+  const fieldStore = new Map<string, Field>()
+  const field = testField('field-hydro-chat-1')
+  fieldStore.set(field.props.id, field)
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    hydrologyRepository: { async getDenseContextForField() { return hydrologyContext(field.props.id) } },
+    hydrologyCopilotService: { async *streamChat() { yield { type: 'metadata', data: { model: 'llama-3-70b-8192' } }; yield { type: 'token', data: 'Respuesta oficial.' }; yield { type: 'done', data: { model: 'llama-3-70b-8192' } } } },
+  }), `/agronautas/fields/${field.props.id}/copilot/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: '¿Cómo impacta en el lote?' }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/)
+  const body = await response.text()
+  assert.match(body, /event: metadata/)
+  assert.match(body, /data: "Respuesta oficial\."/)
+  assert.match(body, /event: done/)
+})
+
 test('seeded Corrientes demo rows can power overview, weather, alerts, status and chat', async () => {
   const referenceNow = new Date()
   const snapshotComputedAt = new Date(referenceNow.getTime() - 2 * 60 * 60 * 1000)
@@ -719,8 +770,29 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     jobRunRepository: overrides.jobRunRepository ?? { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
     alertSnapshotRepository: overrides.alertSnapshotRepository ?? { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
     demoContactSubmissionRepository: overrides.demoContactSubmissionRepository ?? createDemoContactSubmissionRepository(),
+    hydrologyRepository: overrides.hydrologyRepository ?? { async getDenseContextForField(fieldId: string) { return hydrologyContext(fieldId) } },
+    hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: 'llama-3-70b-8192' } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: 'llama-3-70b-8192' } } } },
   }))
   return app
+}
+
+function testField(id: string): Field {
+  return new Field({ id, externalFieldId: id, crop: 'rice', hectares: 12, localityName: 'Mercedes', provinceCode: 'AR-W', centroid: { lat: -29.2, lng: -58.1 }, boundaryMetadata: { sourceName: 'test', sourceUrl: 'https://example.com', sourceVersion: 'v1', normalizationStatus: 'test' } })
+}
+
+function hydrologyContext(fieldId: string): HydrologyDenseContextV1 {
+  return {
+    contractVersion: 'hydrology-dense-context-v1',
+    fieldId,
+    zone: 'Mercedes',
+    sources: ['PNA', 'INA', 'INMET', 'SMN'],
+    stations: [{ stationId: 'pna-mercedes', source: 'PNA', name: 'Mercedes', zone: 'Mercedes' }],
+    snapshot: { riskLevel: 'unknown', freshness: 'degraded', quality: 'ok', recommendation: 'Revisar datos oficiales.', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' },
+    telemetry: [
+      { source: 'PNA', stationId: 'pna-mercedes', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.2, unit: 'm', metric: 'river_height_m', quality: 'ok', freshness: 'degraded', tendency: 'creciente' },
+      { source: 'INA', stationId: 'ina-mercedes', observedAt: '2026-06-24T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.7, unit: 'm', metric: 'river_height_m', quality: 'estimated', freshness: 'fresh', forecastHorizonDays: 20, confidence: 'speculative' },
+    ],
+  }
 }
 
 function createDemoContactSubmissionRepository(): DemoContactSubmissionRepository {
