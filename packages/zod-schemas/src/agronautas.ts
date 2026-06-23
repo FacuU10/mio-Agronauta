@@ -14,6 +14,22 @@ export const degradationReasons = [
 ] as const
 export const agronautasAlertTypes = ['flood', 'water_stress', 'thermal_stress'] as const
 export const agronautasRiskLevels = ['low', 'medium', 'high'] as const
+export const hydrologySources = ['PNA', 'INA', 'INMET', 'SMN'] as const
+export const hydrologyFreshnessStates = ['fresh', 'stale', 'degraded'] as const
+export const hydrologyQualityStates = ['ok', 'estimated', 'degraded', 'missing'] as const
+export const hydrologyTargetZones = ['Mercedes', 'Ituzaingó', 'Virasoro'] as const
+export const hydrologyMetrics = ['river_height_m', 'rain_mm', 'storm_alert'] as const
+export const hydrologyForecastConfidence = ['normal', 'speculative'] as const
+export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
+export const hydrologyExcludedInputs = [
+  'itaipu_discharge',
+  'yacyreta_discharge',
+  'turbined_flow',
+  'spilled_flow',
+  'custom_hydraulic_model',
+  'muskingum_cunge',
+  'discharge_to_height_conversion',
+] as const
 export const agronautasContractErrorCodes = [
   'INVALID_CONTRACT',
   'OUT_OF_SUPPORTED_AREA',
@@ -39,6 +55,36 @@ export const corrientesRiceZoneBoundarySource = {
 const contractVersionSchema = z.literal(AGRONAUTAS_CONTRACT_VERSION)
 const degradationReasonSchema = z.enum(degradationReasons)
 const growthStageSchema = z.enum(agronautasGrowthStages)
+const hydrologySourceSchema = z.enum(hydrologySources)
+const hydrologyFreshnessSchema = z.enum(hydrologyFreshnessStates)
+const hydrologyQualitySchema = z.enum(hydrologyQualityStates)
+const hydrologyTargetZoneSchema = z.enum(hydrologyTargetZones)
+const hydrologyMetricSchema = z.enum(hydrologyMetrics)
+const hydrologyForecastConfidenceSchema = z.enum(hydrologyForecastConfidence)
+
+export const hydrologyExcludedSourceSchema = z.enum(hydrologyExcludedSources)
+export const hydrologyExcludedInputSchema = z.enum(hydrologyExcludedInputs)
+
+export const hydrologyProviderPayloadGuardSchema = z.object({
+  source: z.union([hydrologySourceSchema, hydrologyExcludedSourceSchema]),
+  excludedInputs: z.array(hydrologyExcludedInputSchema).default([]),
+}).superRefine((value, ctx) => {
+  if (value.source === 'DMH_PARAGUAY') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'DMH Paraguay queda fuera de Fase 1; usar PNA/INA/INMET/SMN.',
+      path: ['source'],
+    })
+  }
+
+  if (value.excludedInputs.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Fase 1 excluye descargas de Itaipú/Yacyretá y modelos hidráulicos propios.',
+      path: ['excludedInputs'],
+    })
+  }
+})
 
 export const demoContactSubmissionSchema = z.object({
   contractVersion: contractVersionSchema,
@@ -183,6 +229,71 @@ export const weatherTimelineResponseSchema = z.object({
   items: z.array(weatherTimelineItemSchema),
 })
 
+export const hydrologyStationReferenceSchema = z.object({
+  stationId: z.string().min(1).max(80),
+  source: hydrologySourceSchema,
+  name: z.string().min(1).max(160),
+  river: z.string().min(1).max(120).nullable().optional(),
+  zone: hydrologyTargetZoneSchema.nullable(),
+  sourceUrl: z.string().url().optional(),
+})
+
+export const hydrologyTelemetrySchema = z.object({
+  source: hydrologySourceSchema,
+  stationId: z.string().min(1).max(80),
+  observedAt: z.string().datetime(),
+  ingestedAt: z.string().datetime().optional(),
+  lastSuccessfulObservedAt: z.string().datetime(),
+  value: z.number().nullable(),
+  unit: z.string().min(1).max(24),
+  metric: hydrologyMetricSchema,
+  quality: hydrologyQualitySchema,
+  freshness: hydrologyFreshnessSchema,
+  tendency: z.string().min(1).max(80).optional(),
+  forecastHorizonDays: z.number().int().min(0).max(30).optional(),
+  confidence: hydrologyForecastConfidenceSchema.optional(),
+  sourceUrl: z.string().url().optional(),
+}).superRefine((value, ctx) => {
+  if (value.forecastHorizonDays === undefined) return
+
+  const expectedConfidence = value.forecastHorizonDays > 14 ? 'speculative' : 'normal'
+  if (value.confidence !== expectedConfidence) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: value.forecastHorizonDays > 14
+        ? 'Los pronósticos de 15 a 30 días deben marcarse como planificación especulativa/baja confianza.'
+        : 'Los pronósticos de hasta 14 días deben marcarse con confianza normal.',
+      path: ['confidence'],
+    })
+  }
+})
+
+export const hydrologyRiskSnapshotSchema = z.object({
+  riskLevel: z.enum(['low', 'moderate', 'high', 'unknown']),
+  freshness: hydrologyFreshnessSchema,
+  quality: hydrologyQualitySchema.optional(),
+  recommendation: z.string().min(1).max(500),
+  lastSuccessfulObservedAt: z.string().datetime().nullable(),
+})
+
+export const hydrologyDenseContextV1Schema = z.object({
+  contractVersion: z.literal('hydrology-dense-context-v1'),
+  fieldId: z.string().min(1).max(80),
+  zone: hydrologyTargetZoneSchema.nullable(),
+  sources: z.array(hydrologySourceSchema).default([]),
+  stations: z.array(hydrologyStationReferenceSchema).default([]),
+  snapshot: hydrologyRiskSnapshotSchema,
+  telemetry: z.array(hydrologyTelemetrySchema).default([]),
+}).superRefine((value, ctx) => {
+  if (value.zone === null && (value.sources.length > 0 || value.stations.length > 0 || value.telemetry.length > 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Los lotes fuera de Virasoro, Ituzaingó y Mercedes no deben incluir estaciones, fuentes ni telemetría en Fase 1.',
+      path: ['zone'],
+    })
+  }
+})
+
 export const monitoringStatusSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
@@ -265,6 +376,14 @@ export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema
 export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>
 export type WeatherTimelineItem = z.infer<typeof weatherTimelineItemSchema>
 export type WeatherTimelineResponse = z.infer<typeof weatherTimelineResponseSchema>
+export type HydrologySource = z.infer<typeof hydrologySourceSchema>
+export type HydrologyFreshness = z.infer<typeof hydrologyFreshnessSchema>
+export type HydrologyQuality = z.infer<typeof hydrologyQualitySchema>
+export type HydrologyTargetZone = z.infer<typeof hydrologyTargetZoneSchema>
+export type HydrologyStationReference = z.infer<typeof hydrologyStationReferenceSchema>
+export type HydrologyTelemetry = z.infer<typeof hydrologyTelemetrySchema>
+export type HydrologyRiskSnapshot = z.infer<typeof hydrologyRiskSnapshotSchema>
+export type HydrologyDenseContextV1 = z.infer<typeof hydrologyDenseContextV1Schema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>
