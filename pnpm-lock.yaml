@@ -26,6 +26,9 @@ importers:
       '@prisma/client':
         specifier: ^5.10.2
         version: 5.22.0(prisma@5.22.0)
+      '@repo/hydrology-engine':
+        specifier: workspace:*
+        version: link:../../packages/hydrology-engine
       '@repo/zod-schemas':
         specifier: workspace:*
         version: link:../../packages/zod-schemas
@@ -220,6 +223,34 @@ importers:
       eslint-plugin-security:
         specifier: ^3.0.0
         version: 3.0.1
+
+  packages/hydrology-engine:
+    dependencies:
+      '@repo/zod-schemas':
+        specifier: workspace:*
+        version: link:../zod-schemas
+      pg:
+        specifier: ^8.11.3
+        version: 8.21.0
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^20.11.24
+        version: 20.19.41
+      '@types/pg':
+        specifier: ^8.11.2
+        version: 8.20.0
+      tsx:
+        specifier: ^4.7.1
+        version: 4.22.4
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
 
   packages/observability:
     dependencies:
