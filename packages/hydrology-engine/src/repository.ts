@@ -4,6 +4,31 @@ import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrology
 
 interface Db { query(sql: string, params?: unknown[]): Promise<QueryResult> }
 
+export interface MunicipalityGaugeMappings {
+  primaryPnaPortId: string | null
+  secondaryPnaPortIds: string[]
+  inaStationIds: string[]
+  smnRegionIds: string[]
+  inmetStationIds: string[]
+}
+
+export interface MunicipalityTelemetryView {
+  id: string
+  localityId: string
+  name: string
+  provinceCode: string
+  alertHeightM?: number
+  evacuationHeightM?: number
+  gaugeMappings: MunicipalityGaugeMappings
+  latestTelemetry: HydrologyTelemetry[]
+}
+
+export interface MunicipalityTelemetryDashboard {
+  municipality: Omit<MunicipalityTelemetryView, 'gaugeMappings' | 'latestTelemetry'>
+  gaugeMappings: MunicipalityGaugeMappings
+  latestTelemetry: HydrologyTelemetry[]
+}
+
 export class HydrologyRepository {
   constructor(private readonly db: Db) {}
 
@@ -79,12 +104,127 @@ export class HydrologyRepository {
     }
   }
 
+  async getMunicipalityTelemetryOverview(provinceCode = 'AR-W'): Promise<MunicipalityTelemetryView[]> {
+    const result = await this.db.query(municipalityTelemetrySql('m.province_code = $1'), [provinceCode]) as QueryResult<MunicipalityTelemetryRow>
+    return toMunicipalityTelemetryViews(result.rows)
+  }
+
+  async getMunicipalityTelemetryDashboard(municipalityId: string): Promise<MunicipalityTelemetryDashboard | null> {
+    const result = await this.db.query(municipalityTelemetrySql('m.id = $1'), [municipalityId]) as QueryResult<MunicipalityTelemetryRow>
+    const view = toMunicipalityTelemetryViews(result.rows)[0]
+    if (!view) return null
+    const { gaugeMappings, latestTelemetry, ...municipality } = view
+    return { municipality, gaugeMappings, latestTelemetry }
+  }
+
   async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number }> {
     const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000)
     const telemetry = await this.db.query('DELETE FROM hydrology_telemetry WHERE observed_at < $1', [cutoff])
     const snapshots = await this.db.query('DELETE FROM hydrology_field_risk_snapshots WHERE computed_at < $1', [cutoff])
     return { telemetryDeleted: telemetry.rowCount ?? 0, snapshotsDeleted: snapshots.rowCount ?? 0 }
   }
+}
+
+interface MunicipalityTelemetryRow extends Record<string, unknown> {
+  municipality_id: string
+  locality_id: string
+  municipality_name: string
+  province_code: string
+  alert_height_m: string | number | null
+  evacuation_height_m: string | number | null
+  primary_pna_port_id: string | null
+  secondary_pna_port_ids: string[] | null
+  ina_station_ids: string[] | null
+  smn_region_ids: string[] | null
+  inmet_station_ids: string[] | null
+  station_id: string | null
+}
+
+const municipalityTelemetrySql = (where: string) => `SELECT
+    m.id AS municipality_id,
+    m.locality_id,
+    m.name AS municipality_name,
+    m.province_code,
+    m.alert_height_m,
+    m.evacuation_height_m,
+    mgm.primary_pna_port_id,
+    COALESCE(mgm.secondary_pna_port_ids, '{}') AS secondary_pna_port_ids,
+    COALESCE(mgm.ina_station_ids, '{}') AS ina_station_ids,
+    COALESCE(mgm.smn_region_ids, '{}') AS smn_region_ids,
+    COALESCE(mgm.inmet_station_ids, '{}') AS inmet_station_ids,
+    latest.source,
+    latest.station_id,
+    latest.observed_at,
+    latest.ingested_at,
+    latest.last_successful_observed_at,
+    latest.value,
+    latest.unit,
+    latest.metric,
+    latest.quality,
+    latest.freshness,
+    latest.tendency,
+    latest.forecast_horizon_days,
+    latest.confidence,
+    latest.source_url
+  FROM agronautas_municipalities m
+  LEFT JOIN municipality_gauge_mappings mgm ON mgm.municipality_id = m.id
+  LEFT JOIN LATERAL (
+    SELECT DISTINCT ON (ht.source, ht.station_id, ht.metric, ht.unit, ht.forecast_horizon_days)
+      ht.source,
+      ht.station_id,
+      ht.observed_at,
+      ht.ingested_at,
+      ht.last_successful_observed_at,
+      ht.value,
+      ht.unit,
+      ht.metric,
+      ht.quality,
+      ht.freshness,
+      ht.tendency,
+      ht.forecast_horizon_days,
+      ht.confidence,
+      ht.source_url
+    FROM hydrology_telemetry ht
+    WHERE ht.station_id = ANY(array_remove(
+      ARRAY[mgm.primary_pna_port_id]
+        || COALESCE(mgm.secondary_pna_port_ids, '{}')
+        || COALESCE(mgm.ina_station_ids, '{}')
+        || COALESCE(mgm.smn_region_ids, '{}')
+        || COALESCE(mgm.inmet_station_ids, '{}'),
+      NULL
+    ))
+      AND (ht.forecast_horizon_days IS NULL OR ht.forecast_horizon_days <= 30)
+    ORDER BY ht.source, ht.station_id, ht.metric, ht.unit, ht.forecast_horizon_days, ht.observed_at DESC, ht.ingested_at DESC
+  ) latest ON true
+  WHERE ${where}
+  ORDER BY m.name, latest.source, latest.station_id, latest.metric`
+
+const asNumber = (value: unknown): number | undefined => value === null || value === undefined ? undefined : Number(value)
+const asTextArray = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : []
+
+const toMunicipalityTelemetryViews = (rows: MunicipalityTelemetryRow[]): MunicipalityTelemetryView[] => {
+  const byId = new Map<string, MunicipalityTelemetryView>()
+  for (const row of rows) {
+    const current = byId.get(row.municipality_id) ?? {
+      id: row.municipality_id,
+      localityId: row.locality_id,
+      name: row.municipality_name,
+      provinceCode: row.province_code,
+      alertHeightM: asNumber(row.alert_height_m),
+      evacuationHeightM: asNumber(row.evacuation_height_m),
+      gaugeMappings: {
+        primaryPnaPortId: row.primary_pna_port_id ?? null,
+        secondaryPnaPortIds: asTextArray(row.secondary_pna_port_ids),
+        inaStationIds: asTextArray(row.ina_station_ids),
+        smnRegionIds: asTextArray(row.smn_region_ids),
+        inmetStationIds: asTextArray(row.inmet_station_ids),
+      },
+      latestTelemetry: [],
+    }
+    if (!byId.has(row.municipality_id)) byId.set(row.municipality_id, current)
+    if (row.station_id) current.latestTelemetry.push(toTelemetry(row))
+  }
+  return [...byId.values()]
 }
 
 const toIso = (value: unknown): string => value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString()
