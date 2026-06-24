@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { InaAdapter, InmetAdapter, PnaAdapter, SmnAdapter, HydrologyRepository } from './index'
+import { InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository } from './index'
 
 test('PNA and INA adapters parse heights, tendencies, and cap forecasts at 30 days', () => {
   const now = new Date('2026-06-23T12:00:00.000Z')
@@ -103,4 +103,87 @@ test('HydrologyRepository can fetch one municipality dashboard and preserve miss
   assert.equal(dashboard?.municipality.name, 'Mercedes')
   assert.deepEqual(dashboard?.latestTelemetry, [])
   assert.equal(dashboard?.gaugeMappings.primaryPnaPortId, 'paso_de_los_libres')
+})
+
+test('HydrologyRepository saveTelemetryDeduped skips timestamp-only and epsilon-equivalent values while saving ingestion run', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const latestRows = [
+    { value: '3.42005' },
+    { value: null },
+    { value: '12.5' },
+  ]
+  const db = { async query(sql: string, params: unknown[] = []) {
+    calls.push({ sql, params })
+    if (/SELECT value\s+FROM hydrology_telemetry/i.test(sql)) return { rows: [latestRows.shift()], rowCount: 1, command: '', oid: 0, fields: [] }
+    return { rows: [], rowCount: 1, command: '', oid: 0, fields: [] }
+  } }
+  const repo = new HydrologyRepository(db)
+  const observedAt = new Date('2026-06-23T10:00:00.000Z')
+
+  const summary = await repo.saveTelemetryDeduped([
+    { source: 'PNA', stationId: 'corrientes', metric: 'river_height_m', unit: 'm', value: 3.42, observedAt: new Date('2026-06-23T11:00:00.000Z'), lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh' },
+    { source: 'SMN', stationId: 'alerta-corrientes', metric: 'storm_alert', unit: 'severity', value: null, observedAt, lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh' },
+    { source: 'INMET', stationId: 'br-pr-1', metric: 'rain_mm', unit: 'mm', value: null, observedAt, lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh' },
+  ], { source: 'PNA', stationId: 'corrientes', status: 'success', startedAt: observedAt, recordsIngested: 3 })
+
+  assert.deepEqual(summary, { inserted: 1, unchanged: 2 })
+  assert.equal(calls.filter((call) => /INSERT INTO hydrology_ingestion_runs/i.test(call.sql)).length, 1)
+  assert.equal(calls.filter((call) => /INSERT INTO hydrology_telemetry/i.test(call.sql)).length, 1)
+})
+
+test('HydrologyRepository saveTelemetryDeduped inserts changed numeric values and distinct forecast horizons', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const db = { async query(sql: string, params: unknown[] = []) {
+    calls.push({ sql, params })
+    if (/SELECT value\s+FROM hydrology_telemetry/i.test(sql)) return { rows: [{ value: '3.42' }], rowCount: 1, command: '', oid: 0, fields: [] }
+    return { rows: [], rowCount: 1, command: '', oid: 0, fields: [] }
+  } }
+  const repo = new HydrologyRepository(db)
+  const observedAt = new Date('2026-06-23T10:00:00.000Z')
+
+  const summary = await repo.saveTelemetryDeduped([
+    { source: 'INA', stationId: 'ituzaingo', metric: 'river_height_m', unit: 'm', value: 3.421, observedAt, lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh', forecastHorizonDays: 7 },
+    { source: 'INA', stationId: 'ituzaingo', metric: 'river_height_m', unit: 'm', value: 3.42, observedAt, lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh', forecastHorizonDays: 31 },
+  ], { source: 'INA', stationId: 'ituzaingo', status: 'success', startedAt: observedAt, recordsIngested: 2 })
+
+  assert.deepEqual(summary, { inserted: 1, unchanged: 0 })
+  assert.equal(calls.filter((call) => /INSERT INTO hydrology_telemetry/i.test(call.sql)).length, 1)
+  assert.equal(calls.find((call) => /SELECT value\s+FROM hydrology_telemetry/i.test(call.sql))?.params[4], 7)
+})
+
+test('government HTTP clients set user agent and parse successful official payloads', async () => {
+  const requests: Array<{ url: string; headers: unknown }> = []
+  const fetchOk = async (input: string | URL | Request, init?: Parameters<typeof fetch>[1]) => {
+    requests.push({ url: String(input), headers: init?.headers })
+    const body = String(input).includes('pna')
+      ? '<tr data-station="ituzaingo" data-observed-at="2026-06-23T10:30:00.000Z"><td>Altura: 3,21</td></tr>'
+      : String(input).includes('smn')
+        ? JSON.stringify({ rainfall: [{ stationId: 'posadas', province: 'Misiones', observedAt: '2026-06-23T09:00:00.000Z', rainMm: 80 }] })
+        : String(input).includes('inmet')
+          ? JSON.stringify({ measurements: [{ stationId: 'br-pr-1', uf: 'PR', observedAt: '2026-06-23T09:00:00.000Z', rainMm: 55 }] })
+          : JSON.stringify({ predictions: [{ stationId: 'corrientes', observedAt: '2026-06-23T10:30:00.000Z', heightM: 4.1 }] })
+    return new Response(body, { status: 200 })
+  }
+
+  const results = await Promise.all([
+    new PnaHttpClient({ url: 'https://official.test/pna', fetch: fetchOk }).fetchTelemetry(),
+    new SmnHttpClient({ url: 'https://official.test/smn', fetch: fetchOk }).fetchTelemetry(),
+    new InmetHttpClient({ url: 'https://official.test/inmet', fetch: fetchOk }).fetchTelemetry(),
+    new InaHttpClient({ url: 'https://official.test/ina', fetch: fetchOk }).fetchTelemetry(),
+  ])
+
+  assert.deepEqual(results.map((result) => result.ok), [true, true, true, true])
+  assert.deepEqual(results.map((result) => result.ok ? result.records.length : 0), [1, 1, 1, 1])
+  assert.ok(requests.every((request) => JSON.stringify(request.headers).includes('Ibera-Alerta')))
+})
+
+test('government HTTP clients return parsed failures for network, status, and malformed payload errors', async () => {
+  const networkFailure = await new PnaHttpClient({ url: 'https://official.test/pna', fetch: async () => { throw new Error('socket hang up') } }).fetchTelemetry()
+  const statusFailure = await new SmnHttpClient({ url: 'https://official.test/smn', fetch: async () => new Response('{}', { status: 503, statusText: 'Service Unavailable' }) }).fetchTelemetry()
+  const parseFailure = await new InaHttpClient({ url: 'https://official.test/ina', fetch: async () => new Response('{bad json', { status: 200 }) }).fetchTelemetry()
+
+  assert.deepEqual([networkFailure.ok, statusFailure.ok, parseFailure.ok], [false, false, false])
+  assert.match(networkFailure.ok ? '' : networkFailure.error, /PNA.*socket hang up/)
+  assert.match(statusFailure.ok ? '' : statusFailure.error, /SMN.*503/)
+  assert.match(parseFailure.ok ? '' : parseFailure.error, /INA.*payload/i)
 })

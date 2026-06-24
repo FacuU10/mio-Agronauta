@@ -32,6 +32,34 @@ export interface MunicipalityTelemetryDashboard {
 export class HydrologyRepository {
   constructor(private readonly db: Db) {}
 
+  async saveTelemetryDeduped(records: NormalizedHydrologyTelemetry[], run: IngestionRunInput): Promise<{ inserted: number; unchanged: number }> {
+    let inserted = 0
+    let unchanged = 0
+    const eligibleRecords = records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)
+    for (const record of eligibleRecords) {
+      const latest = await this.db.query(
+        `SELECT value
+           FROM hydrology_telemetry
+          WHERE station_id = $1
+            AND source = $2
+            AND metric = $3
+            AND unit = $4
+            AND forecast_horizon_days IS NOT DISTINCT FROM $5
+          ORDER BY observed_at DESC, ingested_at DESC
+          LIMIT 1`,
+        [record.stationId, record.source, record.metric, record.unit, record.forecastHorizonDays ?? null],
+      ) as QueryResult<{ value: string | number | null }>
+      if (isTelemetryValueUnchanged(latest.rows[0]?.value, record.value)) {
+        unchanged += 1
+        continue
+      }
+      await this.saveTelemetry([record])
+      inserted += 1
+    }
+    await this.saveIngestionRun(run)
+    return { inserted, unchanged }
+  }
+
   async saveTelemetry(records: NormalizedHydrologyTelemetry[]): Promise<void> {
     for (const record of records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)) {
       await this.db.query(
@@ -201,6 +229,13 @@ const municipalityTelemetrySql = (where: string) => `SELECT
 
 const asNumber = (value: unknown): number | undefined => value === null || value === undefined ? undefined : Number(value)
 const asTextArray = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : []
+const TELEMETRY_VALUE_EPSILON = 0.0001
+const isTelemetryValueUnchanged = (stored: string | number | null | undefined, next: number | null): boolean => {
+  if (stored === undefined) return false
+  if (stored === null && next === null) return true
+  if (stored === null || next === null) return false
+  return Math.abs(Number(stored) - next) <= TELEMETRY_VALUE_EPSILON
+}
 
 const toMunicipalityTelemetryViews = (rows: MunicipalityTelemetryRow[]): MunicipalityTelemetryView[] => {
   const byId = new Map<string, MunicipalityTelemetryView>()
