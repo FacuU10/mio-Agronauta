@@ -294,6 +294,71 @@ export const hydrologyDenseContextV1Schema = z.object({
   }
 })
 
+export const hydrologyGovernmentFreshnessSchema = z.object({
+  source: hydrologySourceSchema,
+  lastSuccessfulObservedAt: z.string().datetime().nullable(),
+  freshness: hydrologyFreshnessSchema,
+  label: z.string().min(1).max(120),
+})
+
+export const hydrologyGovernmentMunicipalitySchema = z.object({
+  id: z.string().min(1).max(80),
+  localityId: z.string().min(1).max(120),
+  name: z.string().min(1).max(160),
+  provinceCode: z.string().min(1).max(16),
+  alertHeightM: z.number().optional(),
+  evacuationHeightM: z.number().optional(),
+  gaugeMappings: z.object({
+    primaryPnaPortId: z.string().min(1).max(80).nullable(),
+    secondaryPnaPortIds: z.array(z.string().min(1).max(80)).default([]),
+    inaStationIds: z.array(z.string().min(1).max(80)).default([]),
+    smnRegionIds: z.array(z.string().min(1).max(80)).default([]),
+    inmetStationIds: z.array(z.string().min(1).max(80)).default([]),
+  }),
+  latestTelemetry: z.array(hydrologyTelemetrySchema).default([]),
+})
+
+export const hydrologyGovernmentProvinceAlertSchema = z.object({
+  zone: z.string().min(1).max(160),
+  source: hydrologySourceSchema,
+  stationId: z.string().min(1).max(80),
+  observedAt: z.string().datetime(),
+  lastSuccessfulObservedAt: z.string().datetime(),
+  message: z.string().min(1).max(300),
+  sourceUrl: z.string().url().optional(),
+})
+
+export const hydrologyGovernmentMunicipalitiesResponseSchema = z.object({
+  contractVersion: z.literal('hydrology-government-municipalities-v1'),
+  province: z.object({ provinceCode: z.string().min(1).max(16), name: z.string().min(1).max(80) }),
+  sourceFreshness: z.array(hydrologyGovernmentFreshnessSchema).default([]),
+  provinceAlerts: z.array(hydrologyGovernmentProvinceAlertSchema).default([]),
+  municipalities: z.array(hydrologyGovernmentMunicipalitySchema).default([]),
+})
+
+export const hydrologyGovernmentDashboardResponseSchema = z.object({
+  contractVersion: z.literal('hydrology-government-dashboard-v1'),
+  municipality: hydrologyGovernmentMunicipalitySchema.omit({ gaugeMappings: true, latestTelemetry: true }),
+  gaugeMappings: hydrologyGovernmentMunicipalitySchema.shape.gaugeMappings,
+  telemetryCards: z.array(hydrologyTelemetrySchema).default([]),
+  inaPredictions30d: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'INA' && value.forecastHorizonDays !== undefined && value.forecastHorizonDays <= 30, 'Debe ser pronóstico INA hasta 30 días')).default([]),
+  alerts: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'SMN' || value.source === 'INMET', 'Las alertas municipales provienen de SMN/INMET en Fase 1')).default([]),
+  provenance: z.array(hydrologyGovernmentFreshnessSchema).default([]),
+})
+
+export const hydrologyGovernmentIngestRequestSchema = z.object({
+  contractVersion: contractVersionSchema,
+  source: hydrologySourceSchema.optional(),
+  reason: z.string().trim().max(240).optional(),
+})
+
+export const hydrologyGovernmentIngestResponseSchema = z.object({
+  contractVersion: z.literal('hydrology-government-ingest-v1'),
+  runId: z.string().min(1).max(120),
+  status: z.enum(['queued', 'started', 'completed']),
+  sources: z.array(hydrologySourceSchema).min(1),
+})
+
 export const monitoringStatusSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
@@ -384,6 +449,10 @@ export type HydrologyStationReference = z.infer<typeof hydrologyStationReference
 export type HydrologyTelemetry = z.infer<typeof hydrologyTelemetrySchema>
 export type HydrologyRiskSnapshot = z.infer<typeof hydrologyRiskSnapshotSchema>
 export type HydrologyDenseContextV1 = z.infer<typeof hydrologyDenseContextV1Schema>
+export type HydrologyGovernmentMunicipalitiesResponse = z.infer<typeof hydrologyGovernmentMunicipalitiesResponseSchema>
+export type HydrologyGovernmentDashboardResponse = z.infer<typeof hydrologyGovernmentDashboardResponseSchema>
+export type HydrologyGovernmentIngestRequest = z.infer<typeof hydrologyGovernmentIngestRequestSchema>
+export type HydrologyGovernmentIngestResponse = z.infer<typeof hydrologyGovernmentIngestResponseSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>

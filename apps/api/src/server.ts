@@ -8,6 +8,7 @@ import { createRateLimitMiddleware } from './presentation/middleware/rate-limit'
 import { corsMiddleware } from './presentation/middleware/cors'
 import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
+import { createHydrologyGovernmentRouter } from './presentation/routes/hydrology-government'
 import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
 
 dotenv.config()
@@ -33,6 +34,7 @@ export function createApp(): Application {
 
   // Routes
   app.use(healthRouter)
+  app.use('/api/hydrology', createHydrologyGovernmentRouter())
   app.use(runtimeConfig.routePrefix, healthRouter)
   app.use(runtimeConfig.routePrefix, createAgronautasRouter())
   app.use(`${runtimeConfig.routePrefix}/v1`, createAgronautasRouter({ isVersionedNamespace: true }))
