@@ -44,8 +44,9 @@ export class PostgresFieldRepository implements FieldRepository {
     await this.pool.query(
       `INSERT INTO fields (
         id, external_field_id, crop, hectares, locality_name, province_code,
-        centroid_lat, centroid_lng, boundary_source, boundary_version
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+        centroid_lat, centroid_lng, boundary_source, boundary_version,
+        "externalFieldId", "localityName", "provinceCode", "centroidLat", "centroidLng", "boundarySource", "boundaryVersion", "updatedAt"
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$2,$5,$6,$7,$8,$9::jsonb,$10,NOW())
       ON CONFLICT (id) DO UPDATE SET
         hectares = EXCLUDED.hectares,
         locality_name = EXCLUDED.locality_name,
@@ -54,6 +55,14 @@ export class PostgresFieldRepository implements FieldRepository {
         centroid_lng = EXCLUDED.centroid_lng,
         boundary_source = EXCLUDED.boundary_source,
         boundary_version = EXCLUDED.boundary_version,
+        "externalFieldId" = EXCLUDED."externalFieldId",
+        "localityName" = EXCLUDED."localityName",
+        "provinceCode" = EXCLUDED."provinceCode",
+        "centroidLat" = EXCLUDED."centroidLat",
+        "centroidLng" = EXCLUDED."centroidLng",
+        "boundarySource" = EXCLUDED."boundarySource",
+        "boundaryVersion" = EXCLUDED."boundaryVersion",
+        "updatedAt" = NOW(),
         updated_at = NOW()`,
       [
         field.props.id,
@@ -126,14 +135,21 @@ export class PostgresFieldContextRepository implements FieldContextRepository {
   async save(context: FieldContext): Promise<void> {
     await this.pool.query(
       `INSERT INTO field_contexts (
-        id, field_id, growth_stage, nearest_station_id, locality_canonical, locality_confidence, context_payload
-      ) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::jsonb)
+        id, field_id, growth_stage, nearest_station_id, locality_canonical, locality_confidence, context_payload,
+        "fieldId", "growthStage", "nearestStationId", "localityCanonical", "localityConfidence", "contextPayload", "updatedAt"
+      ) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::jsonb, $1, $2, $3, $4, $5, $6::jsonb, NOW())
       ON CONFLICT (field_id) DO UPDATE SET
         growth_stage = EXCLUDED.growth_stage,
         nearest_station_id = EXCLUDED.nearest_station_id,
         locality_canonical = EXCLUDED.locality_canonical,
         locality_confidence = EXCLUDED.locality_confidence,
         context_payload = EXCLUDED.context_payload,
+        "growthStage" = EXCLUDED."growthStage",
+        "nearestStationId" = EXCLUDED."nearestStationId",
+        "localityCanonical" = EXCLUDED."localityCanonical",
+        "localityConfidence" = EXCLUDED."localityConfidence",
+        "contextPayload" = EXCLUDED."contextPayload",
+        "updatedAt" = NOW(),
         updated_at = NOW()`,
       [
         context.props.fieldId,

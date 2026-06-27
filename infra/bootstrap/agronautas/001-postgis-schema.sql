@@ -84,23 +84,9 @@ CREATE TABLE IF NOT EXISTS hydrology_telemetry (
   UNIQUE (station_id, source, metric, observed_at, forecast_horizon_days)
 );
 
-CREATE TABLE IF NOT EXISTS hydrology_field_risk_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  field_id text NOT NULL,
-  zone text CHECK (zone IN ('Virasoro', 'Ituzaingó', 'Mercedes')),
-  risk_level text NOT NULL CHECK (risk_level IN ('low', 'moderate', 'high', 'unknown')),
-  freshness text NOT NULL CHECK (freshness IN ('fresh', 'stale', 'degraded')),
-  recommendation text NOT NULL,
-  last_successful_observed_at timestamptz,
-  computed_at timestamptz NOT NULL DEFAULT now(),
-  valid_until timestamptz,
-  evidence jsonb NOT NULL DEFAULT '[]'::jsonb
-);
-
 CREATE INDEX IF NOT EXISTS hydrology_stations_source_zone_idx ON hydrology_stations (source, zone);
 CREATE INDEX IF NOT EXISTS hydrology_stations_location_gix ON hydrology_stations USING GIST (location);
 CREATE INDEX IF NOT EXISTS hydrology_ingestion_runs_source_started_idx ON hydrology_ingestion_runs (source, started_at DESC);
 CREATE INDEX IF NOT EXISTS hydrology_ingestion_runs_station_idx ON hydrology_ingestion_runs (station_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS hydrology_telemetry_station_metric_observed_idx ON hydrology_telemetry (station_id, metric, observed_at DESC);
 CREATE INDEX IF NOT EXISTS hydrology_telemetry_source_observed_idx ON hydrology_telemetry (source, observed_at DESC);
-CREATE INDEX IF NOT EXISTS hydrology_field_risk_snapshots_field_computed_idx ON hydrology_field_risk_snapshots (field_id, computed_at DESC);

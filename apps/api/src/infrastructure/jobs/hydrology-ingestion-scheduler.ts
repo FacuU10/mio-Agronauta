@@ -44,6 +44,7 @@ interface HydrologyIngestionSchedulerOptions {
   setInterval?: (callback: TimerCallback, ms: number) => NodeJS.Timeout
   setTimeout?: (callback: TimerCallback, ms: number) => NodeJS.Timeout
   enqueueDelayedRetry?: (retry: Omit<HydrologyRetryDecision, 'status'>) => Promise<void> | void
+  onBackgroundError?: (error: unknown, metadata: { source: HydrologyIngestionSource; attempt: number }) => void
 }
 
 const minuteMs = 60 * 1000
@@ -75,27 +76,30 @@ export const shouldScheduleHydrologyRetry = (input: HydrologyRetryInput): Hydrol
 
 export class HydrologyIngestionScheduler {
   private readonly intervals: NodeJS.Timeout[] = []
-  private readonly timeouts: NodeJS.Timeout[] = []
+  private readonly timeouts = new Set<NodeJS.Timeout>()
+  private active = false
 
   constructor(private readonly runner: HydrologyIngestionRunner, private readonly options: HydrologyIngestionSchedulerOptions = {}) {}
 
   start(): void {
     this.stop()
+    this.active = true
     for (const source of Object.keys(hydrologyIngestionCadences) as HydrologyIngestionSource[]) {
       const cadence = hydrologyIngestionCadences[source]
       if (cadence.kind === 'interval') {
         this.intervals.push(this.setInterval(this.toCallback(source), cadence.everyMs))
       } else {
-        this.timeouts.push(this.setTimeout(this.toDailyCallback(source, cadence), this.msUntilNextUtcTime(cadence.hour, cadence.minute)))
+        this.scheduleDaily(source, cadence, this.msUntilNextUtcTime(cadence.hour, cadence.minute))
       }
     }
   }
 
   stop(): void {
+    this.active = false
     for (const interval of this.intervals) clearInterval(interval)
     for (const timeout of this.timeouts) clearTimeout(timeout)
     this.intervals.length = 0
-    this.timeouts.length = 0
+    this.timeouts.clear()
   }
 
   async runSource(source: HydrologyIngestionSource, metadata: { attempt?: number; scheduledFor?: Date } = {}): Promise<HydrologyIngestionRunResult & { retry: HydrologyRetryDecision | null }> {
@@ -114,16 +118,33 @@ export class HydrologyIngestionScheduler {
     return next.getTime() - now.getTime()
   }
 
-  private toDailyCallback(source: HydrologyIngestionSource, cadence: DailyUtcCadence): TimerCallback {
-    const callback = this.toCallback(source)
-    return Object.assign((() => {
-      callback()
-      this.timeouts.push(this.setTimeout(this.toDailyCallback(source, cadence), dayMs))
+  private scheduleDaily(source: HydrologyIngestionSource, cadence: DailyUtcCadence, delayMs: number): void {
+    if (!this.active) return
+    let timeout: NodeJS.Timeout
+    const callback = Object.assign((() => {
+      void (async () => {
+        try {
+          await this.runSource(source)
+        } catch (error) {
+          this.reportBackgroundError(error, source, 0)
+        } finally {
+          this.timeouts.delete(timeout)
+          if (this.active) this.scheduleDaily(source, cadence, dayMs)
+        }
+      })()
     }) as () => void, { source })
+    timeout = this.setTimeout(callback, delayMs)
+    this.timeouts.add(timeout)
   }
 
   private toCallback(source: HydrologyIngestionSource): TimerCallback {
-    return Object.assign((() => void this.runSource(source)) as () => void, { source })
+    return Object.assign((() => {
+      void this.runSource(source).catch((error) => this.reportBackgroundError(error, source, 0))
+    }) as () => void, { source })
+  }
+
+  private reportBackgroundError(error: unknown, source: HydrologyIngestionSource, attempt: number): void {
+    this.options.onBackgroundError?.(error, { source, attempt })
   }
 
   private setInterval(callback: TimerCallback, ms: number): NodeJS.Timeout {

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { createHydrologyGovernmentRouter } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -48,6 +48,149 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
   assert.equal(json.status, 'queued')
   assert.deepEqual(json.sources, ['PNA'])
+})
+
+test('default government ingestion runner saves all source fixtures when live clients fail or return empty', async () => {
+  const saved: Array<{ source: string; records: number }> = []
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    clients: {
+      PNA: { async fetchTelemetry() { return { ok: false as const, error: 'offline' } } },
+      INA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      INMET: { async fetchTelemetry() { return { ok: false as const, error: 'timeout' } } },
+      SMN: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+    },
+    allowFixtureFallback: true,
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        saved.push({ source: run.source, records: records.length })
+        assert.equal(run.status, 'success')
+        assert.equal(run.lastSuccessfulObservedAt?.toISOString(), '2026-06-26T12:00:00.000Z')
+        return { inserted: records.length, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({})
+
+  assert.equal(result.status, 'completed')
+  assert.deepEqual(result.sources, ['PNA', 'INA', 'INMET', 'SMN'])
+  assert.deepEqual(saved.map((item) => item.source), ['PNA', 'INA', 'INMET', 'SMN'])
+  assert.ok(saved.every((item) => item.records > 0))
+})
+
+test('default government ingestion runner fails fast outside tests without writing fixtures', async () => {
+  const previousNodeEnv = process.env['NODE_ENV']
+  process.env['NODE_ENV'] = 'production'
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  try {
+    const runner = createGovernmentIngestionRunner({
+      now: () => new Date('2026-06-26T12:00:00.000Z'),
+      clients: { PNA: { async fetchTelemetry() { return { ok: false as const, error: 'offline' } } } },
+      repository: {
+        async saveTelemetryDeduped(records, run) {
+          saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+          return { inserted: 0, unchanged: 0 }
+        },
+      },
+      seedDb: {
+        async query(sql: string) {
+          if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+          return { rows: [], rowCount: 1 }
+        },
+      },
+    })
+
+    await assert.rejects(() => runner({ source: 'PNA' }), /Hydrology ingestion failed for PNA: offline/)
+    assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
+    else process.env['NODE_ENV'] = previousNodeEnv
+  }
+})
+
+test('government municipality seeding inserts Corrientes PNA municipalities only when empty', async () => {
+  const queries: Array<{ sql: string; params?: unknown[] }> = []
+  const db = {
+    async query(sql: string, params?: unknown[]) {
+      queries.push({ sql, params })
+      if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 0 }], rowCount: 1 }
+      return { rows: [], rowCount: 1 }
+    },
+  }
+
+  const result = await seedGovernmentMunicipalitiesIfEmpty(db)
+
+  assert.equal(result.inserted, 17)
+  const insertMunicipalities = queries.find((query) => /INSERT INTO agronautas_municipalities/.test(query.sql))
+  const insertMappings = queries.find((query) => /INSERT INTO municipality_gauge_mappings/.test(query.sql))
+  assert.ok(insertMunicipalities)
+  assert.ok(insertMappings)
+  assert.match(insertMunicipalities.sql, /ST_Multi\(ST_GeomFromText\(\$5, 4326\)\)/)
+  assert.deepEqual(insertMunicipalities.params?.slice(0, 4), ['ituzaingo', 'ituzaingo-corrientes', 'Ituzaingó', 'AR-W'])
+  assert.equal(insertMunicipalities.params?.[5], 4.5)
+  assert.equal(insertMunicipalities.params?.[6], 5)
+})
+
+test('PNA flood-risk dictionary contains the 17 monitored Corrientes ports with official thresholds', () => {
+  assert.equal(PNA_FLOOD_RISK_PORTS.length, 17)
+  assert.deepEqual(
+    PNA_FLOOD_RISK_PORTS.map((port) => [port.name, port.river, port.alertHeightM, port.evacuationHeightM]),
+    [
+      ['Ituzaingó', 'Paraná', 4.5, 5],
+      ['Itá Ibaté', 'Paraná', 5.5, 6],
+      ['Yahapé', 'Paraná', 6, 6.5],
+      ['Itatí', 'Paraná', 7, 7.5],
+      ['Paso de la Patria', 'Paraná', 6.5, 7],
+      ['Corrientes Capital', 'Paraná', 6.5, 7],
+      ['Empedrado', 'Paraná', 6.2, 6.7],
+      ['Bella Vista', 'Paraná', 5.7, 6.1],
+      ['Goya', 'Paraná', 5.2, 5.7],
+      ['Esquina', 'Paraná', 5.1, 5.6],
+      ['Garruchos', 'Uruguay', 12, 13],
+      ['Santo Tomé', 'Uruguay', 10.5, 11.5],
+      ['Alvear', 'Uruguay', 9, 10],
+      ['La Cruz', 'Uruguay', 8, 9],
+      ['Yapeyú', 'Uruguay', 7.5, 8.5],
+      ['Paso de los Libres', 'Uruguay', 7.5, 8.5],
+      ['Monte Caseros', 'Uruguay', 7.5, 8.5],
+    ],
+  )
+})
+
+test('PNA flood-risk dictionary remains separate from Agronautas agriculture localities', () => {
+  assert.deepEqual(AGRICULTURAL_CENTERS.map((center) => center.name), ['Gobernador Virasoro', 'Goya'])
+  assert.ok(PNA_FLOOD_RISK_PORTS.some((port) => port.name === 'Goya'))
+  assert.equal(PNA_FLOOD_RISK_PORTS.some((port) => port.name === 'Gobernador Virasoro' || port.name === 'Virasoro'), false)
+})
+
+test('government municipality seeding inserts all PNA flood-risk municipalities without agricultural-only centers', async () => {
+  const municipalityParams: unknown[][] = []
+  const mappingParams: unknown[][] = []
+  const db = {
+    async query(sql: string, params?: unknown[]) {
+      if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 0 }], rowCount: 1 }
+      if (/INSERT INTO agronautas_municipalities/.test(sql) && params) municipalityParams.push(params)
+      if (/INSERT INTO municipality_gauge_mappings/.test(sql) && params) mappingParams.push(params)
+      return { rows: [], rowCount: 1 }
+    },
+  }
+
+  const result = await seedGovernmentMunicipalitiesIfEmpty(db)
+
+  assert.equal(result.inserted, 17)
+  assert.equal(municipalityParams.length, 17)
+  assert.equal(mappingParams.length, 17)
+  assert.deepEqual(municipalityParams.map((params) => params[2]), PNA_FLOOD_RISK_PORTS.map((port) => port.name))
+  assert.equal(municipalityParams.some((params) => params[2] === 'Gobernador Virasoro' || params[2] === 'Virasoro'), false)
+  const goya = municipalityParams.find((params) => params[2] === 'Goya')
+  assert.deepEqual(goya?.slice(0, 7), ['goya', 'goya-corrientes', 'Goya', 'AR-W', PNA_FLOOD_RISK_PORTS.find((port) => port.id === 'goya')?.boundaryWkt, 5.2, 5.7])
 })
 
 test('POST /api/hydrology/municipalities/:id/copilot/chat streamea rechazo español para temas excluidos', async () => {

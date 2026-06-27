@@ -148,8 +148,7 @@ export class HydrologyRepository {
   async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number }> {
     const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000)
     const telemetry = await this.db.query('DELETE FROM hydrology_telemetry WHERE observed_at < $1', [cutoff])
-    const snapshots = await this.db.query('DELETE FROM hydrology_field_risk_snapshots WHERE computed_at < $1', [cutoff])
-    return { telemetryDeleted: telemetry.rowCount ?? 0, snapshotsDeleted: snapshots.rowCount ?? 0 }
+    return { telemetryDeleted: telemetry.rowCount ?? 0, snapshotsDeleted: 0 }
   }
 }
 

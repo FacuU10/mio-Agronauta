@@ -359,7 +359,7 @@ export async function fetchClimateDataset(locality: CorrientesDemoLocality): Pro
   }
 }
 
-async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'query'>): Promise<void> {
+export async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'query'>): Promise<void> {
   await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto')
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fields (
@@ -376,6 +376,27 @@ async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'quer
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )`)
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS external_field_id text')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS crop text')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS hectares numeric(10,2)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS locality_name text')
+  await pool.query("ALTER TABLE fields ADD COLUMN IF NOT EXISTS province_code text DEFAULT 'AR-W'")
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS centroid_lat numeric(10,7)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS centroid_lng numeric(10,7)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_source jsonb')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_version text')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()')
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS fields_external_field_id_idx ON fields (external_field_id)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "externalFieldId" text')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "localityName" text')
+  await pool.query("ALTER TABLE fields ADD COLUMN IF NOT EXISTS \"provinceCode\" text DEFAULT 'AR-W'")
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "centroidLat" numeric(10,7)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "centroidLng" numeric(10,7)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "boundarySource" jsonb')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "boundaryVersion" text')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "createdAt" timestamp DEFAULT now()')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now()')
   await pool.query(`
     CREATE TABLE IF NOT EXISTS field_contexts (
       id text PRIMARY KEY,
@@ -388,6 +409,21 @@ async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'quer
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )`)
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS field_id text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS growth_stage text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS nearest_station_id text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS locality_canonical text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS locality_confidence numeric(4,3) DEFAULT 1')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS context_payload jsonb')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()')
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS field_contexts_field_id_idx ON field_contexts (field_id)')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "fieldId" text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "growthStage" text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "nearestStationId" text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "localityCanonical" text')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "localityConfidence" numeric(4,3) DEFAULT 1')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "contextPayload" jsonb')
+  await pool.query('ALTER TABLE field_contexts ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now()')
   await pool.query(`
     CREATE TABLE IF NOT EXISTS signal_ingestion_runs (
       id text PRIMARY KEY,
@@ -404,6 +440,26 @@ async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'quer
       degradation_reason text NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     )`)
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS field_id text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS provider text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS signal_type text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS run_id text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS status text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS stale_cause text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS started_at timestamptz')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS finished_at timestamptz')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS observed_at timestamptz')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS evidence_payload jsonb')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS degradation_reason text')
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS signal_ingestion_runs_run_id_idx ON signal_ingestion_runs (run_id)')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS "signalType" text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS "runId" text')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS "startedAt" timestamp')
+  await pool.query('ALTER TABLE signal_ingestion_runs ADD COLUMN IF NOT EXISTS "evidencePayload" jsonb')
+  await pool.query('ALTER TABLE signal_ingestion_runs ALTER COLUMN "signalType" DROP NOT NULL')
+  await pool.query('ALTER TABLE signal_ingestion_runs ALTER COLUMN "runId" DROP NOT NULL')
+  await pool.query('ALTER TABLE signal_ingestion_runs ALTER COLUMN "startedAt" DROP NOT NULL')
+  await pool.query('ALTER TABLE signal_ingestion_runs ALTER COLUMN "evidencePayload" DROP NOT NULL')
   await pool.query(`
     CREATE TABLE IF NOT EXISTS risk_snapshots (
       id text PRIMARY KEY,
@@ -423,6 +479,38 @@ async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'quer
       summary_payload jsonb NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     )`)
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS field_id text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS run_id text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS score numeric(5,2)')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS confidence numeric(4,3)')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS level text')
+  await pool.query("ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS freshness text DEFAULT 'fresh'")
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS computed_at timestamptz')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS valid_until timestamptz')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS rule_version text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS stale_cause text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS degradation_reasons jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS drivers jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS evidence_refs jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS summary_payload jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "fieldId" text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "runId" text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "computedAt" timestamp')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "validUntil" timestamp')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "ruleVersion" text')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "degradationReasons" jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "drivers" jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "evidenceRefs" jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS "summaryPayload" jsonb')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "fieldId" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "runId" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "computedAt" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "validUntil" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "ruleVersion" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "degradationReasons" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "drivers" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "evidenceRefs" DROP NOT NULL')
+  await pool.query('ALTER TABLE risk_snapshots ALTER COLUMN "summaryPayload" DROP NOT NULL')
   await pool.query(`
     CREATE TABLE IF NOT EXISTS alert_snapshots (
       id text PRIMARY KEY,
@@ -439,6 +527,26 @@ async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>, 'quer
       created_at timestamptz NOT NULL DEFAULT now(),
       UNIQUE(field_id, risk_snapshot_id, alert_type)
     )`)
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS field_id text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS risk_snapshot_id text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS run_id text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS alert_type text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS priority int')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS confidence numeric(4,3)')
+  await pool.query("ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS freshness text DEFAULT 'fresh'")
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS stale_cause text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS degradation_reasons jsonb')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS payload jsonb')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()')
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS alert_snapshots_field_snapshot_type_idx ON alert_snapshots (field_id, risk_snapshot_id, alert_type)')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS "fieldId" text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS "riskSnapshotId" text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS "alertType" text')
+  await pool.query('ALTER TABLE alert_snapshots ADD COLUMN IF NOT EXISTS "degradationReasons" jsonb')
+  await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "fieldId" DROP NOT NULL')
+  await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "riskSnapshotId" DROP NOT NULL')
+  await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "alertType" DROP NOT NULL')
+  await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "degradationReasons" DROP NOT NULL')
 }
 
 async function cleanupSeed(pool: Pick<ReturnType<typeof getPostgresPool>, 'query'>): Promise<void> {

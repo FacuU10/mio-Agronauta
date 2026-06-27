@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { corrientesDemoLocalities } from './corrientes-demo-localities'
-import { buildAlerts, buildOfflineFixture, buildRiskSnapshot, buildSignalRun, parseSeedOptions } from './seed-corrientes-rice-demo'
+import { buildAlerts, buildOfflineFixture, buildRiskSnapshot, buildSignalRun, ensureSchema, parseSeedOptions } from './seed-corrientes-rice-demo'
 
 test('parseSeedOptions supports cleanup and offline modes', () => {
   assert.deepEqual(parseSeedOptions(['--cleanup', '--offline-fixtures']), {
@@ -41,4 +41,22 @@ test('risk snapshot and alerts are deterministic for a locality', () => {
   assert.ok(snapshot.props.evidenceRefs.includes(`field_contexts:${locality.fieldId}`))
   assert.ok(alerts.length >= 1)
   assert.ok(alerts.every((alert) => alert.fieldId === locality.fieldId))
+})
+
+test('ensureSchema upgrades pre-existing fields tables before seeding', async () => {
+  const statements: string[] = []
+  const pool = {
+    async query(sql: string) {
+      statements.push(sql)
+      return { rows: [], rowCount: 0 }
+    },
+  }
+
+  await ensureSchema(pool as unknown as Parameters<typeof ensureSchema>[0])
+
+  const joined = statements.join('\n')
+  assert.match(joined, /ALTER TABLE fields\s+ADD COLUMN IF NOT EXISTS external_field_id text/i)
+  assert.match(joined, /ALTER TABLE fields\s+ADD COLUMN IF NOT EXISTS boundary_source jsonb/i)
+  assert.match(joined, /CREATE UNIQUE INDEX IF NOT EXISTS fields_external_field_id_idx/i)
+  assert.match(joined, /ALTER TABLE signal_ingestion_runs ALTER COLUMN "signalType" DROP NOT NULL/i)
 })

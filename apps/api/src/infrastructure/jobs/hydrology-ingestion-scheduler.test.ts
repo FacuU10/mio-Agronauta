@@ -35,6 +35,47 @@ test('HydrologyIngestionScheduler schedules interval sources and INA at 18:30 UT
   assert.deepEqual(timeouts, [{ source: 'INA', ms: 30 * 60 * 1000 }])
 })
 
+test('HydrologyIngestionScheduler prunes completed daily timeout handles', async () => {
+  const callbacks: Array<() => void> = []
+  let timeoutId = 0
+  const scheduler = new HydrologyIngestionScheduler({ run: async () => ({ inserted: 1, unchanged: 0 }) }, {
+    now: () => new Date('2026-06-23T18:00:00.000Z'),
+    setInterval: (callback) => callback as never,
+    setTimeout: (callback) => { callbacks.push(callback); timeoutId += 1; return timeoutId as never },
+  })
+
+  scheduler.start()
+  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.size, 1)
+
+  callbacks[0]?.()
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.has(1 as never), false)
+  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.has(2 as never), true)
+})
+
+test('HydrologyIngestionScheduler does not resurrect daily tasks after stop and catches background failures', async () => {
+  const callbacks: Array<() => void> = []
+  const errors: Array<{ message: string; source: HydrologyIngestionSource }> = []
+  let timeoutId = 0
+  const scheduler = new HydrologyIngestionScheduler({ run: async () => { throw new Error('upstream down') } }, {
+    now: () => new Date('2026-06-23T18:00:00.000Z'),
+    setInterval: (callback) => callback as never,
+    setTimeout: (callback) => { callbacks.push(callback); timeoutId += 1; return timeoutId as never },
+    onBackgroundError: (error, metadata) => errors.push({ message: error instanceof Error ? error.message : String(error), source: metadata.source }),
+  })
+
+  scheduler.start()
+  scheduler.stop()
+  callbacks[0]?.()
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(errors, [{ message: 'upstream down', source: 'INA' }])
+  assert.equal(callbacks.length, 1)
+  assert.equal((scheduler as unknown as { active: boolean }).active, false)
+  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.size, 0)
+})
+
 test('shouldScheduleHydrologyRetry returns one delayed PNA retry only for unchanged first attempts', () => {
   const now = new Date('2026-06-23T12:00:00.000Z')
   assert.deepEqual(shouldScheduleHydrologyRetry({ source: 'PNA', inserted: 0, unchanged: 4, attempt: 0, now }), {

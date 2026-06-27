@@ -41,7 +41,7 @@ test('HydrologyRepository maps zones using ST_Intersects and prunes 30-day opera
   assert.deepEqual(mapping.referencePorts, ['paso_de_la_patria', 'corrientes'])
   assert.match(calls[0]?.sql ?? '', /ST_Intersects/)
   assert.equal((calls[1]?.params[0] as Date).toISOString(), '2026-05-24T00:00:00.000Z')
-  assert.deepEqual(pruned, { telemetryDeleted: 2, snapshotsDeleted: 2 })
+  assert.deepEqual(pruned, { telemetryDeleted: 2, snapshotsDeleted: 0 })
 })
 
 test('government municipality migration is additive and defines mapping indexes', async () => {
@@ -162,7 +162,8 @@ test('government HTTP clients set user agent and parse successful official paylo
         : String(input).includes('inmet')
           ? JSON.stringify({ measurements: [{ stationId: 'br-pr-1', uf: 'PR', observedAt: '2026-06-23T09:00:00.000Z', rainMm: 55 }] })
           : JSON.stringify({ predictions: [{ stationId: 'corrientes', observedAt: '2026-06-23T10:30:00.000Z', heightM: 4.1 }] })
-    return new Response(body, { status: 200 })
+    const contentType = String(input).includes('pna') ? 'text/html; charset=utf-8' : 'application/json; charset=utf-8'
+    return new Response(body, { status: 200, headers: { 'content-type': contentType } })
   }
 
   const results = await Promise.all([
@@ -174,16 +175,35 @@ test('government HTTP clients set user agent and parse successful official paylo
 
   assert.deepEqual(results.map((result) => result.ok), [true, true, true, true])
   assert.deepEqual(results.map((result) => result.ok ? result.records.length : 0), [1, 1, 1, 1])
-  assert.ok(requests.every((request) => JSON.stringify(request.headers).includes('Ibera-Alerta')))
+  assert.ok(requests.every((request) => JSON.stringify(request.headers).includes('Chrome')))
+  assert.ok(requests.every((request) => JSON.stringify(request.headers).includes('application/json')))
 })
 
 test('government HTTP clients return parsed failures for network, status, and malformed payload errors', async () => {
   const networkFailure = await new PnaHttpClient({ url: 'https://official.test/pna', fetch: async () => { throw new Error('socket hang up') } }).fetchTelemetry()
   const statusFailure = await new SmnHttpClient({ url: 'https://official.test/smn', fetch: async () => new Response('{}', { status: 503, statusText: 'Service Unavailable' }) }).fetchTelemetry()
   const parseFailure = await new InaHttpClient({ url: 'https://official.test/ina', fetch: async () => new Response('{bad json', { status: 200 }) }).fetchTelemetry()
+  const htmlFailure = await new InmetHttpClient({ url: 'https://official.test/inmet', fetch: async () => new Response('<html>maintenance</html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }) }).fetchTelemetry()
 
-  assert.deepEqual([networkFailure.ok, statusFailure.ok, parseFailure.ok], [false, false, false])
+  assert.deepEqual([networkFailure.ok, statusFailure.ok, parseFailure.ok, htmlFailure.ok], [false, false, false, false])
   assert.match(networkFailure.ok ? '' : networkFailure.error, /PNA.*socket hang up/)
   assert.match(statusFailure.ok ? '' : statusFailure.error, /SMN.*503/)
   assert.match(parseFailure.ok ? '' : parseFailure.error, /INA.*payload/i)
+  assert.match(htmlFailure.ok ? '' : htmlFailure.error, /INMET.*content-type.*JSON/i)
+})
+
+test('government HTTP clients abort official requests after configured timeout', async () => {
+  let abortSignal: AbortSignal | undefined
+  const timeoutFailure = await new SmnHttpClient({
+    url: 'https://official.test/smn',
+    timeoutMs: 1,
+    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      abortSignal = init?.signal ?? undefined
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+    }),
+  }).fetchTelemetry()
+
+  assert.equal(timeoutFailure.ok, false)
+  assert.equal(abortSignal?.aborted, true)
+  assert.match(timeoutFailure.ok ? '' : timeoutFailure.error, /SMN.*timeout after 1ms/)
 })
