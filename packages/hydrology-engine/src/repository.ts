@@ -98,7 +98,7 @@ export class HydrologyRepository {
         ORDER BY locality_name
         LIMIT 1`,
       [fieldBoundaryWkt],
-    ) as QueryResult<{ locality_name: keyof typeof referencePortsByZone }>
+    ) as QueryResult<FieldHydrologyZoneRow>
     const zone = result.rows[0]?.locality_name ?? null
     return { fieldId, zone, referencePorts: zone ? referencePortsByZone[zone] : [] }
   }
@@ -110,14 +110,14 @@ export class HydrologyRepository {
     const stationResult = await this.db.query(
       `SELECT id, source, station_name, river_name, zone, source_url FROM hydrology_stations WHERE id = ANY($1) AND is_active = true`,
       [mapping.referencePorts],
-    ) as QueryResult<{ id: string; source: HydrologyStationReference['source']; station_name: string; river_name: string | null; zone: HydrologyStationReference['zone']; source_url: string | null }>
+    ) as QueryResult<HydrologyStationRow>
     const telemetryResult = await this.db.query(
       `SELECT source, station_id, observed_at, ingested_at, last_successful_observed_at, value, unit, metric, quality, freshness, tendency, forecast_horizon_days, confidence, source_url
          FROM hydrology_telemetry
         WHERE station_id = ANY($1) AND (forecast_horizon_days IS NULL OR forecast_horizon_days <= 30)
         ORDER BY observed_at DESC`,
       [mapping.referencePorts],
-    ) as QueryResult<Record<string, unknown>>
+    ) as QueryResult<HydrologyTelemetryRow>
 
     const telemetry = telemetryResult.rows.map(toTelemetry)
     const last = telemetry.map((item) => item.lastSuccessfulObservedAt).sort().at(-1) ?? null
@@ -165,6 +165,36 @@ interface MunicipalityTelemetryRow extends Record<string, unknown> {
   smn_region_ids: string[] | null
   inmet_station_ids: string[] | null
   station_id: string | null
+}
+
+interface FieldHydrologyZoneRow extends Record<string, unknown> {
+  locality_name: keyof typeof referencePortsByZone
+}
+
+interface HydrologyStationRow extends Record<string, unknown> {
+  id: string
+  source: HydrologyStationReference['source']
+  station_name: string
+  river_name: string | null
+  zone: HydrologyStationReference['zone']
+  source_url: string | null
+}
+
+interface HydrologyTelemetryRow extends Record<string, unknown> {
+  source: HydrologyTelemetry['source']
+  station_id: string
+  observed_at: Date | string
+  ingested_at: Date | string
+  last_successful_observed_at: Date | string
+  value: string | number | null
+  unit: string
+  metric: HydrologyTelemetry['metric']
+  quality: HydrologyTelemetry['quality']
+  freshness: HydrologyTelemetry['freshness']
+  tendency: string | null
+  forecast_horizon_days: string | number | null
+  confidence: HydrologyTelemetry['confidence']
+  source_url: string | null
 }
 
 const municipalityTelemetrySql = (where: string) => `SELECT

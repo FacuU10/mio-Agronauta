@@ -25,3 +25,21 @@ test("Node type definitions are installed for production dependency builds", asy
     "@types/node should not be dev-only for packages built as production dependencies",
   );
 });
+
+test("Postgres type definitions are installed for production dependency builds", async () => {
+  const packageJsonPath = join(process.cwd(), "package.json");
+  const packageJson = JSON.parse(
+    await readFile(packageJsonPath, "utf8"),
+  ) as PackageJson;
+
+  assert.equal(
+    packageJson.dependencies?.["@types/pg"],
+    "^8.11.2",
+    "hydrology-engine imports pg types during Render's dependency build, so @types/pg must be installed outside devDependencies",
+  );
+  assert.equal(
+    packageJson.devDependencies?.["@types/pg"],
+    undefined,
+    "@types/pg should not be dev-only for packages built as production dependencies",
+  );
+});
