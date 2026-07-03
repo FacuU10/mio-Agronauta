@@ -30,7 +30,8 @@ test('GET /api/hydrology/municipalities/:id/dashboard devuelve metadata, cards, 
   const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
   assert.equal(json.contractVersion, 'hydrology-government-dashboard-v1')
   assert.equal(json.municipality.id, 'mercedes')
-  assert.equal(json.telemetryCards.length, 2)
+  assert.equal(json.telemetryCards.length, 3)
+  assert.equal(json.inaPredictions30d.length, 1)
   assert.equal(json.inaPredictions30d[0]?.forecastHorizonDays, 20)
   assert.equal(json.inaPredictions30d[0]?.confidence, 'speculative')
   assert.equal(json.alerts[0]?.source, 'SMN')
@@ -256,6 +257,7 @@ function municipalityView() {
     latestTelemetry: [
       { source: 'PNA' as const, stationId: 'pna-mercedes', observedAt: '2026-06-23T10:30:00.000Z', ingestedAt: '2026-06-23T10:35:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.2, unit: 'm', metric: 'river_height_m' as const, quality: 'ok' as const, freshness: 'fresh' as const, tendency: 'creciente', sourceUrl: 'https://example.com/pna' },
       { source: 'INA' as const, stationId: 'ina-mercedes', observedAt: '2026-07-13T10:30:00.000Z', ingestedAt: '2026-06-23T10:35:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.8, unit: 'm', metric: 'river_height_m' as const, quality: 'estimated' as const, freshness: 'fresh' as const, forecastHorizonDays: 20, confidence: 'speculative' as const, sourceUrl: 'https://example.com/ina' },
+      { source: 'INA' as const, stationId: 'ina-mercedes-null-horizon', observedAt: '2026-06-23T10:30:00.000Z', ingestedAt: '2026-06-23T10:35:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.5, unit: 'm', metric: 'river_height_m' as const, quality: 'estimated' as const, freshness: 'fresh' as const, forecastHorizonDays: null, confidence: 'speculative' as const, sourceUrl: 'https://example.com/ina-null' },
       { source: 'SMN' as const, stationId: 'smn-corrientes', observedAt: '2026-06-23T09:00:00.000Z', ingestedAt: '2026-06-23T09:05:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z', value: null, unit: 'alerta', metric: 'storm_alert' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: 'https://example.com/smn' },
     ],
   }

@@ -108,7 +108,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       municipality: municipality.municipality,
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
-      inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays !== undefined && item.forecastHorizonDays <= 30),
+      inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
       alerts: municipality.latestTelemetry.filter((item) => item.metric === 'storm_alert'),
       provenance: sourceFreshnessFor(municipality.latestTelemetry),
     })
