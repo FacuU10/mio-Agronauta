@@ -1,44 +1,38 @@
 errores totales:
+render:
+> turborepo-production-boilerplate@1.0.0 build /opt/render/project/src
+> turbo run build --filter\=api
+Attention:
+Turborepo now collects completely anonymous telemetry regarding usage.
+This information is used to shape the Turborepo roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://turborepo.dev/docs/telemetry
+• turbo 2.10.3
+ WARNING  No locally installed `turbo` found in your repository. Using globally installed version (2.10.3), which can cause unexpected behavior.
+Installing the version in your repository (^2.5.4) before calling `turbo` will result in more predictable behavior across environments.
+   • Packages in scope: api
+   • Running build in 1 packages
+   • Remote caching disabled
+@repo/hydrology-engine:build: cache miss, executing 5b57ea72a8c6b7ce
+@repo/hydrology-engine:build: 
+@repo/hydrology-engine:build: > @repo/hydrology-engine@1.0.0 build /opt/render/project/src/packages/hydrology-engine
+@repo/hydrology-engine:build: > tsc
+@repo/hydrology-engine:build: 
+@repo/hydrology-engine:build: error TS2688: Cannot find type definition file for 'node'.
+@repo/hydrology-engine:build:   The file is in the program because:
+@repo/hydrology-engine:build:     Entry point of type library 'node' specified in compilerOptions
+@repo/hydrology-engine:build: tsconfig.json(2,14): error TS6053: File '@repo/typescript-config/base.json' not found.
+@repo/hydrology-engine:build:  ELIFECYCLE  Command failed with exit code 2.
+@repo/hydrology-engine#build:  ERROR  command (/opt/render/project/src/packages/hydrology-engine) /opt/render/project/nodes/node-26.4.0/bin/pnpm run build exited (2)
+ Tasks:    0 successful, 1 total
+Cached:    0 cached, 1 total
+  Time:    2.192s 
+Failed:    @repo/hydrology-engine#build
+ ERROR  run failed: command  exited (2)
+ ELIFECYCLE  Command failed with exit code 2.
+==> Build failed 😞
 
-github security scan fails: 
-Run trufflesecurity/trufflehog@main
-Run ##########################################
-Error: BASE and HEAD commits are the same. TruffleHog won't scan anything. Please see documentation (https://github.com/trufflesecurity/trufflehog#octocat-trufflehog-github-action).
-Error: Process completed with exit code 1.
-
-3s
-Run pnpm audit --audit-level=moderate
-┌─────────────────────┬────────────────────────────────────────────────────────┐
-│ moderate            │ PostCSS has XSS via Unescaped </style> in its CSS      │
-│                     │ Stringify Output                                       │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Package             │ postcss                                                │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Vulnerable versions │ <8.5.10                                                │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Patched versions    │ >=8.5.10                                               │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Paths               │ apps/web > next@15.5.19 > postcss@8.4.31               │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ More info           │ https://github.com/advisories/GHSA-qx2v-qp2m-jg93      │
-└─────────────────────┴────────────────────────────────────────────────────────┘
-┌─────────────────────┬────────────────────────────────────────────────────────┐
-│ moderate            │ Trubo: Login callback CSRF/session fixation            │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Package             │ turbo                                                  │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Vulnerable versions │ <=2.9.13                                               │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Patched versions    │ >=2.9.14                                               │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ Paths               │ . > turbo@1.13.4                                       │
-├─────────────────────┼────────────────────────────────────────────────────────┤
-│ More info           │ https://github.com/advisories/GHSA-hcf7-66rw-9f5r      │
-└─────────────────────┴────────────────────────────────────────────────────────┘
-4 vulnerabilities found
-Severity: 2 low | 2 moderate
-Error: Process completed with exit code 1.
-
+github: 8s
 Run pnpm run lint:security
 
 > turborepo-production-boilerplate@1.0.0 lint:security /home/runner/work/Agronauta/Agronauta
@@ -49,91 +43,49 @@ Attention:
 Turborepo now collects completely anonymous telemetry regarding usage.
 This information is used to shape the Turborepo roadmap and prioritize features.
 You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
-https://turbo.build/repo/docs/telemetry
-
-• Packages in scope: @golden/asset-pipelines, @golden/config, @golden/contracts, @golden/observability, @golden/workflows, @repo/eslint-config, @repo/hydrology-engine, @repo/typescript-config, @repo/zod-schemas, api, web
-• Running lint:security in 11 packages
-• Remote caching disabled
-@repo/hydrology-engine:build
-web:lint:security
-cache miss, executing 38a8343b356650ca
-
-> web@1.0.0 lint:security /home/runner/work/Agronauta/Agronauta/apps/web
-> eslint . --ext .ts,.tsx --max-warnings 0
-
-
-/home/runner/work/Agronauta/Agronauta/apps/web/next-env.d.ts
-Error:   3:1  error  Do not use a triple slash reference for ./.next/types/routes.d.ts, use `import` style instead  @typescript-eslint/triple-slash-reference
-
-✖ 1 problem (1 error, 0 warnings)
-
- ELIFECYCLE  Command failed with exit code 1.
-Error:  command finished with error: command (/home/runner/work/Agronauta/Agronauta/apps/web) /home/runner/setup-pnpm/node_modules/.bin/pnpm run lint:security exited (1)
-api:lint:security
-Error: web#lint:security: command (/home/runner/work/Agronauta/Agronauta/apps/web) /home/runner/setup-pnpm/node_modules/.bin/pnpm run lint:security exited (1)
-
- Tasks:    1 successful, 3 total
-Cached:    0 cached, 3 total
-  Time:    6.78s 
-Failed:    web#lint:security
-
- ERROR  run failed: command  exited (1)
- ELIFECYCLE  Command failed with exit code 1.
-Error: Process completed with exit code 1.
-
-errores en render:
-==> Installing Node.js version 26.4.0...
-==> Running build command 'npm install -g pnpm@9 turbo && pnpm install --frozen-lockfile && pnpm --filter api prisma:generate && pnpm run build --filter=api'...
-added 3 packages in 2s
-1 package is looking for funding
-  run `npm fund` for details
-> api@1.0.0 prisma:generate /opt/render/project/src/apps/api
-> prisma generate
-Prisma schema loaded from prisma/schema.prisma
-✔ Generated Prisma Client (v5.22.0) to ./../../node_modules/.pnpm/@prisma+client@5.22.0_prisma@5.22.0/node_modules/@prisma/client in 155ms
-Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
-Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
-> turborepo-production-boilerplate@1.0.0 build /opt/render/project/src
-> turbo run build --filter\=api
-Attention:
-Turborepo now collects completely anonymous telemetry regarding usage.
-This information is used to shape the Turborepo roadmap and prioritize features.
-You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
 https://turborepo.dev/docs/telemetry
-• turbo 2.10.0
- WARNING  No locally installed `turbo` found in your repository. Using globally installed version (2.10.0), which can cause unexpected behavior.
-Installing the version in your repository (^1.12.5) before calling `turbo` will result in more predictable behavior across environments.
-  x Found `pipeline` field instead of `tasks`.
-    ,-[turbo.json:4:15]
-  3 |       "globalDependencies": ["**/.env"],
-  4 | ,->   "pipeline": {
-  5 | |       "build": {
-  6 | |         "dependsOn": ["^build"],
-  7 | |         "outputs": [".next/**", "!.next/cache/**", "dist/**"]
-  8 | |       },
-  9 | |       "dev": {
- 10 | |         "cache": false,
- 11 | |         "persistent": true
- 12 | |       },
- 13 | |       "lint": {
- 14 | |         "dependsOn": ["^build"],
- 15 | |         "outputs": []
- 16 | |       },
- 17 | |       "lint:security": {
- 18 | |         "dependsOn": ["^build"],
- 19 | |         "outputs": []
- 20 | |       },
- 21 | |       "test": {
- 22 | |         "dependsOn": ["^build"],
- 23 | |         "outputs": ["coverage/**"]
- 24 | |       },
- 25 | |       "clean": {
- 26 | |         "cache": false
- 27 | |       }
- 28 | |->   }
-    : `---- Rename `pipeline` field to `tasks`
- 29 |     }
-    `----
-  help: Changed in 2.0: `pipeline` has been renamed to `tasks`.
- ELIFECYCLE  Command failed with exit code 1.
-==> Build failed 😞
+
+
+   • Packages in scope: @golden/asset-pipelines, @golden/config, @golden/contracts, @golden/observability, @golden/workflows, @repo/eslint-config, @repo/hydrology-engine, @repo/typescript-config, @repo/zod-schemas, api, web
+   • Running lint:security in 11 packages
+   • Remote caching disabled
+
+web:lint:security
+@repo/hydrology-engine:build
+api:lint:security
+cache miss, executing 9b9d2b785a7a34fd
+
+> api@1.0.0 lint:security /home/runner/work/Agronauta/Agronauta/apps/api
+Error: api#lint:security: command (/home/runner/work/Agronauta/Agronauta/apps/api) /home/runner/setup-pnpm/node_modules/.bin/pnpm run lint:security exited (2)
+ ERROR  api#lint:security: command (/home/runner/work/Agronauta/Agronauta/apps/api) /home/runner/setup-pnpm/node_modules/.bin/pnpm run lint:security exited (2)
+ ERROR  run failed: command  exited (2)
+> eslint . --ext .ts --config .eslintrc.security.json
+
+
+Oops! Something went wrong! :(
+
+ESLint: 8.57.1
+
+Error: ESLint configuration in --config » @repo/eslint-config/index.js » plugin:security/recommended is invalid:
+	- Unexpected top-level property "name".
+
+Referenced from: /home/runner/work/Agronauta/Agronauta/packages/eslint-config/index.js
+    at ConfigValidator.validateConfigSchema (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:2177:19)
+    at ConfigArrayFactory._normalizeConfigData (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3019:19)
+    at ConfigArrayFactory._loadExtendedPluginConfig (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3239:25)
+    at ConfigArrayFactory._loadExtends (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3154:29)
+    at ConfigArrayFactory._normalizeObjectConfigDataBody (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3095:25)
+    at _normalizeObjectConfigDataBody.next (<anonymous>)
+    at ConfigArrayFactory._normalizeObjectConfigData (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3040:20)
+    at _normalizeObjectConfigData.next (<anonymous>)
+    at ConfigArrayFactory._normalizeObjectConfigDataBody (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3095:25)
+    at _normalizeObjectConfigDataBody.next (<anonymous>)
+ ELIFECYCLE  Command failed with exit code 2.
+
+ Tasks:    2 successful, 3 total
+Cached:    0 cached, 3 total
+  Time:    7.595s 
+Failed:    api#lint:security
+
+ ELIFECYCLE  Command failed with exit code 2.
+Error: Process completed with exit code 2.
