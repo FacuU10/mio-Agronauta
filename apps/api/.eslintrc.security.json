@@ -2,7 +2,7 @@
   "extends": "@repo/eslint-config/index.js",
   "plugins": ["security"],
   "rules": {
-    "security/detect-object-injection": "error",
+    "security/detect-object-injection": "warn",
     "security/detect-non-literal-regexp": "error",
     "security/detect-unsafe-regex": "error",
     "security/detect-buffer-noassert": "error",

@@ -120,6 +120,7 @@ export class HydrologyIngestionScheduler {
 
   private scheduleDaily(source: HydrologyIngestionSource, cadence: DailyUtcCadence, delayMs: number): void {
     if (!this.active) return
+    // eslint-disable-next-line prefer-const -- assigned after callback creation so the callback can delete its own timeout handle.
     let timeout: NodeJS.Timeout
     const callback = Object.assign((() => {
       void (async () => {

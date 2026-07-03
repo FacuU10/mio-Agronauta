@@ -1,7 +1,6 @@
 import { AGRONAUTAS_CONTRACT_VERSION, groundedChatResponseSchema, type GroundedChatAction, type GroundedChatRequest, type GroundedChatResponse } from '@repo/zod-schemas'
 import type { AlertSnapshotRecord, AlertSnapshotRepository, FieldRepository, RiskSnapshotRepository } from '../../domain/repositories/agronautas'
 import { type GroqChatProvider } from '../../infrastructure/integrations/groq/client'
-import { toStoredAlertContracts } from './generate-alerts-usecase'
 
 interface GroundedChatUseCaseDeps {
   fieldRepository: FieldRepository

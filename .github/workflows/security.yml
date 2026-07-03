@@ -21,12 +21,18 @@ jobs:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
       - name: Trufflehog Secret Scan (push)
-        if: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
+        if: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before != github.sha }}
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
           base: ${{ github.event.before }}
           head: ${{ github.sha }}
+      - name: Trufflehog Secret Scan (push fallback)
+        if: ${{ github.event_name == 'push' && (github.event.before == '0000000000000000000000000000000000000000' || github.event.before == github.sha) }}
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified
 
   sast:
     name: Static Analysis
