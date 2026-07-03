@@ -17,8 +17,13 @@
   "devDependencies": {
     "@types/node": "^20.11.24",
     "prettier": "^3.2.5",
-    "turbo": "^1.12.5",
+    "turbo": "^2.5.4",
     "typescript": "^5.3.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss": "^8.4.47"
+    }
   },
   "engines": {
     "node": ">=20.0.0",

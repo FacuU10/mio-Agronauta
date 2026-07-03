@@ -249,12 +249,12 @@ export const hydrologyTelemetrySchema = z.object({
   metric: hydrologyMetricSchema,
   quality: hydrologyQualitySchema,
   freshness: hydrologyFreshnessSchema,
-  tendency: z.string().min(1).max(80).optional(),
-  forecastHorizonDays: z.number().int().min(0).max(30).optional(),
-  confidence: hydrologyForecastConfidenceSchema.optional(),
-  sourceUrl: z.string().url().optional(),
+  tendency: z.string().min(1).max(80).nullable().optional(),
+  forecastHorizonDays: z.number().int().min(0).max(30).nullable().optional(),
+  confidence: hydrologyForecastConfidenceSchema.nullable().optional(),
+  sourceUrl: z.string().url().nullable().optional(),
 }).superRefine((value, ctx) => {
-  if (value.forecastHorizonDays === undefined) return
+  if (value.forecastHorizonDays === undefined || value.forecastHorizonDays === null) return
 
   const expectedConfidence = value.forecastHorizonDays > 14 ? 'speculative' : 'normal'
   if (value.confidence !== expectedConfidence) {
@@ -341,7 +341,7 @@ export const hydrologyGovernmentDashboardResponseSchema = z.object({
   municipality: hydrologyGovernmentMunicipalitySchema.omit({ gaugeMappings: true, latestTelemetry: true }),
   gaugeMappings: hydrologyGovernmentMunicipalitySchema.shape.gaugeMappings,
   telemetryCards: z.array(hydrologyTelemetrySchema).default([]),
-  inaPredictions30d: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'INA' && value.forecastHorizonDays !== undefined && value.forecastHorizonDays <= 30, 'Debe ser pronóstico INA hasta 30 días')).default([]),
+  inaPredictions30d: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'INA' && value.forecastHorizonDays !== undefined && value.forecastHorizonDays !== null && value.forecastHorizonDays <= 30, 'Debe ser pronóstico INA hasta 30 días')).default([]),
   alerts: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'SMN' || value.source === 'INMET', 'Las alertas municipales provienen de SMN/INMET en Fase 1')).default([]),
   provenance: z.array(hydrologyGovernmentFreshnessSchema).default([]),
 })

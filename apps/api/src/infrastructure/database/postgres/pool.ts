@@ -22,7 +22,7 @@ function createPool(): Pool {
     connectionString: process.env['DATABASE_URL'],
     max: computePostgresPoolMax(resolveApiWorkerCount()),
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 15000,
   }
 
   return new Pool(config)
