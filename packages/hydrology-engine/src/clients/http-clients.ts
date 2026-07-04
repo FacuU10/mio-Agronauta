@@ -1,8 +1,8 @@
-import { InaAdapter } from '../adapters/ina-adapter'
-import { InmetAdapter } from '../adapters/inmet-adapter'
-import { PnaAdapter } from '../adapters/pna-adapter'
-import { SmnAdapter } from '../adapters/smn-adapter'
-import type { NormalizedHydrologyTelemetry } from '../types'
+import { InaAdapter } from '../adapters/ina-adapter.js'
+import { InmetAdapter } from '../adapters/inmet-adapter.js'
+import { PnaAdapter } from '../adapters/pna-adapter.js'
+import { SmnAdapter } from '../adapters/smn-adapter.js'
+import type { NormalizedHydrologyTelemetry } from '../types.js'
 
 export type ScraperResult = { ok: true; records: NormalizedHydrologyTelemetry[] } | { ok: false; error: string }
 

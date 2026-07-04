@@ -1,4 +1,4 @@
-import { forecastConfidenceForHorizon, isForecastWithinPhase1Horizon, type NormalizedHydrologyTelemetry } from '../types'
+import { forecastConfidenceForHorizon, isForecastWithinPhase1Horizon, type NormalizedHydrologyTelemetry } from '../types.js'
 
 const INA_URL = 'https://www.ina.gob.ar/alerta/index.php'
 

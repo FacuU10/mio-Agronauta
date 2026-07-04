@@ -1,4 +1,4 @@
-import { forecastConfidenceForHorizon, isForecastWithinPhase1Horizon, type NormalizedHydrologyTelemetry } from '../types'
+import { forecastConfidenceForHorizon, isForecastWithinPhase1Horizon, type NormalizedHydrologyTelemetry } from '../types.js'
 
 const PNA_URL = 'https://www.prefecturanaval.gob.ar/alturas'
 

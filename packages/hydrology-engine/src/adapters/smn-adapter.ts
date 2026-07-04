@@ -1,4 +1,4 @@
-import type { NormalizedHydrologyTelemetry } from '../types'
+import type { NormalizedHydrologyTelemetry } from '../types.js'
 
 const SMN_URL = 'https://www.smn.gob.ar/alertas'
 const relevantProvinces = new Set(['Misiones', 'Corrientes'])

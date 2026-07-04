@@ -1,4 +1,4 @@
-import type { NormalizedHydrologyTelemetry } from '../types'
+import type { NormalizedHydrologyTelemetry } from '../types.js'
 
 const INMET_URL = 'https://portal.inmet.gov.br/dadoshistoricos'
 const relevantStates = new Set(['PR', 'SC', 'RS'])

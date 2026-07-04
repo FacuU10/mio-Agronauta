@@ -1,6 +1,6 @@
 import type { QueryResult } from 'pg'
 import type { HydrologyDenseContextV1, HydrologyStationReference, HydrologyTelemetry } from '@repo/zod-schemas'
-import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types'
+import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
 
 interface Db { query(sql: string, params?: unknown[]): Promise<QueryResult> }
 
