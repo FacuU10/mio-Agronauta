@@ -9,6 +9,11 @@ async function readPackageJson() {
   return JSON.parse(await readFile(packageJsonPath, 'utf8'))
 }
 
+async function readRootTurboJson() {
+  const turboJsonPath = join(process.cwd(), '..', '..', 'turbo.json')
+  return JSON.parse(await readFile(turboJsonPath, 'utf8'))
+}
+
 test('Node type definitions are installed for production dependency builds', async () => {
   const packageJson = await readPackageJson()
 
@@ -77,6 +82,16 @@ test('build script removes stale incremental and dist outputs before compiling',
     packageJson.scripts?.build,
     'node scripts/clean-build-output.mjs && tsc',
     'zod-schemas build must clean stale dist and tsbuildinfo before tsc so Turbo/Vercel cannot replay or preserve partial ESM outputs',
+  )
+})
+
+test('Turbo never replays cached zod-schemas build artifacts', async () => {
+  const turboJson = await readRootTurboJson()
+
+  assert.equal(
+    turboJson.tasks?.['@repo/zod-schemas#build']?.cache,
+    false,
+    'Vercel/Turbo must execute @repo/zod-schemas build instead of replaying stale remote cache entries that may omit dist/example.js',
   )
 })
 
