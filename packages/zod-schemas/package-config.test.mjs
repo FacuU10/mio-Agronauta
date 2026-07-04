@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 
 async function readPackageJson() {
   const packageJsonPath = join(process.cwd(), 'package.json')
@@ -57,4 +58,36 @@ test('built ESM entrypoint uses Node-resolvable relative export specifiers', asy
     /from ['"]\.\/(?:example|agronautas)['"]/,
     'Node ESM cannot resolve extensionless relative specifiers emitted in dist/index.js',
   )
+})
+
+test('package declares ESM semantics for bundlers and Node runtime', async () => {
+  const packageJson = await readPackageJson()
+
+  assert.equal(
+    packageJson.type,
+    'module',
+    'dist/index.js contains ESM export syntax and must be declared as ESM for Next/Vercel bundlers and Node runtime',
+  )
+})
+
+test('built ESM re-export targets exist and dist entrypoint imports in Node', async () => {
+  const distIndexPath = join(process.cwd(), 'dist', 'index.js')
+  const distIndex = await readFile(distIndexPath, 'utf8')
+  const reExportSpecifiers = [...distIndex.matchAll(/export \* from ['"](\.\/[^'"]+\.js)['"]/g)].map(
+    (match) => match[1],
+  )
+
+  assert.deepEqual(
+    reExportSpecifiers,
+    ['./example.js', './agronautas.js'],
+    'dist/index.js should re-export exactly the built schema modules with explicit .js specifiers',
+  )
+
+  for (const specifier of reExportSpecifiers) {
+    await access(join(process.cwd(), 'dist', specifier.slice('./'.length)))
+  }
+
+  const schemaModule = await import(pathToFileURL(distIndexPath).href)
+  assert.equal(typeof schemaModule.exampleSchema?.parse, 'function')
+  assert.equal(typeof schemaModule.fieldIntakeSchema?.parse, 'function')
 })
