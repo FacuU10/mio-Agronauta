@@ -70,6 +70,16 @@ test('package declares ESM semantics for bundlers and Node runtime', async () =>
   )
 })
 
+test('build script removes stale incremental and dist outputs before compiling', async () => {
+  const packageJson = await readPackageJson()
+
+  assert.equal(
+    packageJson.scripts?.build,
+    'node scripts/clean-build-output.mjs && tsc',
+    'zod-schemas build must clean stale dist and tsbuildinfo before tsc so Turbo/Vercel cannot replay or preserve partial ESM outputs',
+  )
+})
+
 test('built ESM re-export targets exist and dist entrypoint imports in Node', async () => {
   const distIndexPath = join(process.cwd(), 'dist', 'index.js')
   const distIndex = await readFile(distIndexPath, 'utf8')
