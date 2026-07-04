@@ -37,3 +37,24 @@ test('shared TypeScript config is installed for production dependency builds', a
     '@repo/typescript-config should not be dev-only for packages built as production dependencies',
   )
 })
+
+test('built ESM entrypoint uses Node-resolvable relative export specifiers', async () => {
+  const distIndexPath = join(process.cwd(), 'dist', 'index.js')
+  const distIndex = await readFile(distIndexPath, 'utf8')
+
+  assert.match(
+    distIndex,
+    /export \* from ['"]\.\/example\.js['"]/,
+    'dist/index.js must include the .js extension when re-exporting ./example for Node ESM',
+  )
+  assert.match(
+    distIndex,
+    /export \* from ['"]\.\/agronautas\.js['"]/,
+    'dist/index.js must include the .js extension when re-exporting ./agronautas for Node ESM',
+  )
+  assert.doesNotMatch(
+    distIndex,
+    /from ['"]\.\/(?:example|agronautas)['"]/,
+    'Node ESM cannot resolve extensionless relative specifiers emitted in dist/index.js',
+  )
+})

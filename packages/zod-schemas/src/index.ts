@@ -1,2 +1,2 @@
-export * from './example'
-export * from './agronautas'
+export * from './example.js'
+export * from './agronautas.js'
