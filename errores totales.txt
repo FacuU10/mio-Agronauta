@@ -1,91 +1,36 @@
-errores totales:
-render:
-> turborepo-production-boilerplate@1.0.0 build /opt/render/project/src
-> turbo run build --filter\=api
-Attention:
-Turborepo now collects completely anonymous telemetry regarding usage.
-This information is used to shape the Turborepo roadmap and prioritize features.
-You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
-https://turborepo.dev/docs/telemetry
-• turbo 2.10.3
- WARNING  No locally installed `turbo` found in your repository. Using globally installed version (2.10.3), which can cause unexpected behavior.
-Installing the version in your repository (^2.5.4) before calling `turbo` will result in more predictable behavior across environments.
-   • Packages in scope: api
+Detected Next.js version: 15.5.19
+Running "turbo run build"
+   • Packages in scope: web
    • Running build in 1 packages
-   • Remote caching disabled
-@repo/hydrology-engine:build: cache miss, executing 5b57ea72a8c6b7ce
-@repo/hydrology-engine:build: 
-@repo/hydrology-engine:build: > @repo/hydrology-engine@1.0.0 build /opt/render/project/src/packages/hydrology-engine
-@repo/hydrology-engine:build: > tsc
-@repo/hydrology-engine:build: 
-@repo/hydrology-engine:build: error TS2688: Cannot find type definition file for 'node'.
-@repo/hydrology-engine:build:   The file is in the program because:
-@repo/hydrology-engine:build:     Entry point of type library 'node' specified in compilerOptions
-@repo/hydrology-engine:build: tsconfig.json(2,14): error TS6053: File '@repo/typescript-config/base.json' not found.
-@repo/hydrology-engine:build:  ELIFECYCLE  Command failed with exit code 2.
-@repo/hydrology-engine#build:  ERROR  command (/opt/render/project/src/packages/hydrology-engine) /opt/render/project/nodes/node-26.4.0/bin/pnpm run build exited (2)
- Tasks:    0 successful, 1 total
-Cached:    0 cached, 1 total
-  Time:    2.192s 
-Failed:    @repo/hydrology-engine#build
- ERROR  run failed: command  exited (2)
- ELIFECYCLE  Command failed with exit code 2.
-==> Build failed 😞
-
-github: 8s
-Run pnpm run lint:security
-
-> turborepo-production-boilerplate@1.0.0 lint:security /home/runner/work/Agronauta/Agronauta
-> turbo run lint:security
-
-
-Attention:
-Turborepo now collects completely anonymous telemetry regarding usage.
-This information is used to shape the Turborepo roadmap and prioritize features.
-You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
-https://turborepo.dev/docs/telemetry
-
-
-   • Packages in scope: @golden/asset-pipelines, @golden/config, @golden/contracts, @golden/observability, @golden/workflows, @repo/eslint-config, @repo/hydrology-engine, @repo/typescript-config, @repo/zod-schemas, api, web
-   • Running lint:security in 11 packages
-   • Remote caching disabled
-
-web:lint:security
-@repo/hydrology-engine:build
-api:lint:security
-cache miss, executing 9b9d2b785a7a34fd
-
-> api@1.0.0 lint:security /home/runner/work/Agronauta/Agronauta/apps/api
-Error: api#lint:security: command (/home/runner/work/Agronauta/Agronauta/apps/api) /home/runner/setup-pnpm/node_modules/.bin/pnpm run lint:security exited (2)
- ERROR  api#lint:security: command (/home/runner/work/Agronauta/Agronauta/apps/api) /home/runner/setup-pnpm/node_modules/.bin/pnpm run lint:security exited (2)
- ERROR  run failed: command  exited (2)
-> eslint . --ext .ts --config .eslintrc.security.json
-
-
-Oops! Something went wrong! :(
-
-ESLint: 8.57.1
-
-Error: ESLint configuration in --config » @repo/eslint-config/index.js » plugin:security/recommended is invalid:
-	- Unexpected top-level property "name".
-
-Referenced from: /home/runner/work/Agronauta/Agronauta/packages/eslint-config/index.js
-    at ConfigValidator.validateConfigSchema (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:2177:19)
-    at ConfigArrayFactory._normalizeConfigData (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3019:19)
-    at ConfigArrayFactory._loadExtendedPluginConfig (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3239:25)
-    at ConfigArrayFactory._loadExtends (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3154:29)
-    at ConfigArrayFactory._normalizeObjectConfigDataBody (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3095:25)
-    at _normalizeObjectConfigDataBody.next (<anonymous>)
-    at ConfigArrayFactory._normalizeObjectConfigData (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3040:20)
-    at _normalizeObjectConfigData.next (<anonymous>)
-    at ConfigArrayFactory._normalizeObjectConfigDataBody (/home/runner/work/Agronauta/Agronauta/node_modules/.pnpm/@eslint+eslintrc@2.1.4/node_modules/@eslint/eslintrc/dist/eslintrc.cjs:3095:25)
-    at _normalizeObjectConfigDataBody.next (<anonymous>)
- ELIFECYCLE  Command failed with exit code 2.
-
- Tasks:    2 successful, 3 total
-Cached:    0 cached, 3 total
-  Time:    7.595s 
-Failed:    api#lint:security
-
- ELIFECYCLE  Command failed with exit code 2.
-Error: Process completed with exit code 2.
+   • Remote caching enabled
+@repo/zod-schemas:build: cache hit, replaying logs 9ec069453316eedd
+@repo/zod-schemas:build: > @repo/zod-schemas@1.0.0 build /vercel/path0/packages/zod-schemas
+@repo/zod-schemas:build: > tsc
+@repo/zod-schemas:build: 
+web:build: cache miss, executing 573e406b82de21c0
+web:build: 
+web:build: > web@1.0.0 build /vercel/path0/apps/web
+web:build: > next build
+web:build: 
+web:build:    ▲ Next.js 15.5.19
+web:build:    Creating an optimized production build ...
+web:build: Failed to compile.
+web:build: 
+web:build: ../../packages/zod-schemas/dist/index.js
+web:build: Module not found: Can't resolve './example.js'
+web:build: 
+web:build: https://nextjs.org/docs/messages/module-not-found
+web:build: 
+web:build: Import trace for requested module:
+web:build: ./src/lib/agronautas/service.ts
+web:build: ./src/components/agronautas/page-client.tsx
+web:build: > Build failed because of webpack errors
+web:build:  ELIFECYCLE  Command failed with exit code 1.
+web#build:  ERROR  command (/vercel/path0/apps/web) /pnpm10/node_modules/.bin/pnpm run build exited (1)
+  Tasks:    1 successful, 2 total
+ Cached:    1 cached, 2 total
+   Time:    8.531s 
+Summary:    /vercel/path0/.turbo/runs/3G1vCq9zRgUWFio0bG2YrNPSsz2.json
+ Failed:    web#build
+ ERROR  run failed: command  exited (1)
+Error: Command "turbo run build" exited with 1
