@@ -95,6 +95,17 @@ test('Turbo never replays cached zod-schemas build artifacts', async () => {
   )
 })
 
+test('web build forces a clean zod-schemas build before Next compiles', async () => {
+  const webPackageJsonPath = join(process.cwd(), '..', '..', 'apps', 'web', 'package.json')
+  const webPackageJson = JSON.parse(await readFile(webPackageJsonPath, 'utf8'))
+
+  assert.equal(
+    webPackageJson.scripts?.build,
+    'pnpm --dir ../../packages/zod-schemas build && next build',
+    'Vercel web builds must rebuild @repo/zod-schemas in-process before next build so stale remote Turbo artifacts cannot leave dist/example.js missing',
+  )
+})
+
 test('built ESM re-export targets exist and dist entrypoint imports in Node', async () => {
   const distIndexPath = join(process.cwd(), 'dist', 'index.js')
   const distIndex = await readFile(distIndexPath, 'utf8')
