@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 interface PackageJson {
+  type?: string;
   main?: string;
   types?: string;
   exports?: Record<string, string>;
@@ -85,6 +86,16 @@ test("package entrypoints resolve to built JavaScript and declarations", async (
     packageJson.exports?.["."],
     "./dist/index.js",
     "workspace consumers such as api must resolve @repo/hydrology-engine to dist, not src/index.ts",
+  );
+});
+
+test("package declares ESM semantics for emitted JavaScript", async () => {
+  const packageJson = await readPackageJson();
+
+  assert.equal(
+    packageJson.type,
+    "module",
+    "hydrology-engine dist files use ESM import/export syntax, so package.json must declare type=module to avoid Node reparsing warnings on Render",
   );
 });
 

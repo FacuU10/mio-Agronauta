@@ -16,7 +16,7 @@ export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env)
   return {
     mode: parseRuntimeMode(env['AGRONAUTAS_RUNTIME_MODE']),
     routePrefix: normalizeRoutePrefix(env['AGRONAUTAS_ROUTE_PREFIX']),
-    trustProxy: parseTrustProxy(env['TRUST_PROXY']),
+    trustProxy: parseTrustProxy(env['TRUST_PROXY'], env['RENDER']),
     optionalReadinessServices: parseCsv(env['READINESS_OPTIONAL_SERVICES'], DEFAULT_OPTIONAL_READINESS_SERVICES),
     runtimeRequired: parseBoolean(env['AGRONAUTAS_RUNTIME_REQUIRED'], false),
     workerHeartbeatMaxAgeSeconds: parsePositiveInteger(env['AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS'], 180),
@@ -38,8 +38,8 @@ function normalizeRoutePrefix(value: string | undefined): string {
   return normalized.length ? normalized : DEFAULT_ROUTE_PREFIX
 }
 
-function parseTrustProxy(value: string | undefined): boolean | number | string {
-  if (!value) return false
+function parseTrustProxy(value: string | undefined, renderEnvironment: string | undefined): boolean | number | string {
+  if (!value) return renderEnvironment ? 1 : false
   const trimmed = value.trim()
   if (trimmed === 'true') return true
   if (trimmed === 'false') return false
