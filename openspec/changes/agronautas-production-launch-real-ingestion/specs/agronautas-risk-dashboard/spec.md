@@ -37,9 +37,10 @@ Copilot or explanatory text MUST cite persisted evidence and MUST NOT invent uns
 - AND labels uncertainty rather than asserting unsupported certainty
 
 ### Requirement: Observability and TDD Gates
-Dashboard, PDF, API, E2E, and observability tests MUST verify happy paths, empty states, provider degradation, no-auth boundary, and screenshot/PDF assertions before launch.
+Dashboard, PDF, API, E2E, Playwright, observability tests, and a fresh-context pessimistic/adversarial code-diff verification MUST verify happy paths, empty states, provider degradation, no-auth boundary, scheduler cadence behavior, and screenshot/PDF assertions before launch; tests/build alone MUST NOT be treated as sufficient.
 
 #### Scenario: Launch acceptance suite
-- GIVEN CI runs `pnpm test`, package tests, Playwright, and worker pytest
+- GIVEN CI runs `pnpm test`, package tests, Playwright, worker pytest, and a fresh-context adversarial diff review
 - WHEN the MVP launch gate is evaluated
 - THEN all real-ingestion dashboard/PDF/failure-mode tests pass before release
+- AND the adversarial review finds no unresolved launch blockers

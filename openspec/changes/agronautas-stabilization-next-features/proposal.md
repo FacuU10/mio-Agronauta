@@ -13,6 +13,7 @@ Decision: **salvage via stabilization slices, not blind reset**. Treat the curre
 - Deterministic `web` build/Turbo/schema package behavior without stale cache confidence.
 - Truth-in-provider claims: real vs fixture vs placeholder must be explicit and tested.
 - Scheduler persisted cadence and last-success/next-run behavior.
+- Ingestion retry safety: extended backoff MUST be attempt 1 -> 45s, attempt 2 -> 5 minutes, attempt 3 -> 10 minutes, attempt 4 -> 15 minutes; after another failure, desist until the next scheduled hourly run to prevent API blocks or involuntary DDOS against national providers.
 - Dashboard/PDF contract parity from the same persisted payload.
 - Test command standardization, strict TDD, Playwright, and pessimistic fresh-context review.
 - Next features only after stabilization: dashboard-first improvements, per-source cadence visibility, ingestion admin/status, PDF parity polish, and alerts/notifications if safe.
@@ -23,6 +24,7 @@ Decision: **salvage via stabilization slices, not blind reset**. Treat the curre
 - Implementation in this phase.
 - Auth/accounts/RBAC/billing.
 - Marketing any provider as live/real without evidence gates.
+- Changing Iberá-Alerta; it remains an untouched separate module.
 
 ## Capabilities
 
@@ -57,6 +59,7 @@ Use grouped subagents by slice: hygiene/build, domain/provider/scheduler, dashbo
 | Large mixed diff hides regressions | High | slice triage plus fresh-context review |
 | Turbo/Next false green | Med | force clean/non-cached gates |
 | Provider overclaiming | High | mode labels and live evidence requirements |
+| National provider API blocking or involuntary DDOS | High | extended backoff then desist until next hourly run |
 | Feature creep before stability | High | stabilization-first dependency gate |
 
 ## Rollback Plan

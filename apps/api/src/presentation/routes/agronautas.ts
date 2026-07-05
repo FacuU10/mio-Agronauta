@@ -4,6 +4,7 @@ import {
   agronautasContractErrorSchema,
   alertSnapshotSchema,
   copilotContextSchema,
+  dashboardSnapshotSchema,
   demoContactSubmissionResponseSchema,
   demoContactSubmissionSchema,
   fieldIntakeSchema,
@@ -284,6 +285,24 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }))
   })
 
+  router.get('/fields/:fieldId/dashboard', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    const dashboard = await buildDashboardPayload(fieldId)
+    if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
+    return res.json(dashboard)
+  })
+
+  router.get('/fields/:fieldId/dashboard.pdf', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    const dashboard = await buildDashboardPayload(fieldId)
+    if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="agronautas-${fieldId}.pdf"`)
+    return res.send(Buffer.from(renderDashboardPdfText(dashboard), 'utf8'))
+  })
+
   router.get('/fields/:fieldId/weather/timeline', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
@@ -495,6 +514,39 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
 
   return router
 
+  async function buildDashboardPayload(fieldId: string) {
+    const [field, snapshot, alerts, climate] = await Promise.all([
+      resolved.fieldRepository.findById(fieldId),
+      resolved.riskSnapshotRepository.getLatest(fieldId),
+      resolved.alertSnapshotRepository.getLatestForField(fieldId),
+      resolved.signalSummaryRepository.listClimateTimeline?.(fieldId, 1) ?? Promise.resolve([]),
+    ])
+    if (!field || !snapshot) return null
+    const snapshotContract = riskSnapshotSchema.parse(snapshot.toContract())
+    const degraded = snapshotContract.degradationReasons.length > 0 || alerts.some((alert) => alert.freshness !== 'fresh') || climate.some((item) => Boolean(item.staleCause))
+    const climateLastFetchedAt = climate.map((item) => item.observedAt).sort((left, right) => right.getTime() - left.getTime())[0]
+    const staleFlags = [
+      ...snapshotContract.degradationReasons,
+      ...alerts.flatMap((alert) => alert.degradationReasons),
+      ...climate.filter((item) => Boolean(item.staleCause)).map(() => 'weather_data_stale' as const),
+    ]
+    return dashboardSnapshotSchema.parse({
+      contractVersion: '1.0.0',
+      snapshotId: snapshotContract.snapshotId,
+      field: { fieldId: field.props.id, cropCategory: field.props.cropCategory ?? 'other', crop: field.props.crop, locality: field.props.localityName, provinceCode: field.props.provinceCode },
+      status: degraded ? 'degraded' : snapshot.freshness,
+      freshness: degraded ? 'degraded' : snapshot.freshness,
+      signals: climate.map((item) => ({ signalType: 'weather', status: item.staleCause ? 'degraded' : 'fresh', evidenceRefs: item.provenance, confidence: item.confidence, degradationReasons: item.staleCause ? ['weather_data_stale'] : [] })),
+      risk: { score: snapshotContract.score, level: snapshotContract.level, confidence: snapshotContract.confidence, drivers: snapshotContract.drivers },
+      alerts: toStoredAlertContracts(alerts),
+      provenance: climate.map((item) => ({ evidenceId: `${item.provider}:weather:${item.observedAt.toISOString()}`, provider: item.provider, signalType: 'weather', observedAt: item.observedAt.toISOString(), ingestedAt: snapshotContract.computedAt, sourceUrl: item.provenance[0]?.startsWith('http') ? item.provenance[0] : 'https://api.open-meteo.com/', rawHash: createHash('sha256').update(JSON.stringify(item)).digest('hex'), confidence: item.confidence, freshness: item.staleCause ? 'degraded' : 'fresh', degradationReasons: item.staleCause ? ['weather_data_stale'] : [] })),
+      scheduler: { lastRunAt: snapshotContract.computedAt, nextRunAt: snapshotContract.validUntil, lockStatus: 'unknown', failures: degraded ? [{ provider: 'agronautas', signalType: 'weather', reason: snapshotContract.degradationReasons.join(',') || 'degraded_evidence' }] : [], nextDueBySource: [] },
+      generatedAt: new Date().toISOString(),
+      lastDataFetchedAt: (climateLastFetchedAt ?? snapshot.props.computedAt).toISOString(),
+      presentation: { disclaimer: 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.', confidenceLabel: toConfidenceLabel(snapshotContract.confidence), sourcesUnavailable: degraded, staleFlags },
+    })
+  }
+
   async function safeRequestRecompute(fieldId: string, triggeredBy: 'api' | 'alert-refresh', req: Request, res: Response) {
     try {
       return await requestRecompute.execute(fieldId, triggeredBy, { requestId: readRequestId(req) })
@@ -515,6 +567,24 @@ function receivedResponse(submissionId: string) {
     submissionId,
     status: 'received',
   })
+}
+
+function toConfidenceLabel(confidence: number): 'alta' | 'media' | 'baja' {
+  if (confidence >= 0.75) return 'alta'
+  if (confidence >= 0.5) return 'media'
+  return 'baja'
+}
+
+function renderDashboardPdfText(dashboard: { snapshotId: string; field: { fieldId: string }; risk: { score: number; level: string; confidence: number }; freshness: string; provenance: Array<{ evidenceId: string }>; generatedAt: string; lastDataFetchedAt: string; presentation: { disclaimer: string; confidenceLabel: string; sourcesUnavailable: boolean } }) {
+  const text = `Agronautas dashboard report\nfield=${dashboard.field.fieldId}\nsnapshot=${dashboard.snapshotId}\nscore=${dashboard.risk.score}\nlevel=${dashboard.risk.level}\nriskConfidence=${dashboard.risk.confidence}\nFrescura=${dashboard.freshness}\nÚltimo dato obtenido=${dashboard.lastDataFetchedAt}\nConfianza=${dashboard.presentation.confidenceLabel}\nFuentes degradadas o no disponibles=${dashboard.presentation.sourcesUnavailable}\nDisclaimers: ${dashboard.presentation.disclaimer}\ngeneratedAt=${dashboard.generatedAt}\nevidence=${dashboard.provenance.map((item) => item.evidenceId).join(',')}`
+  const stream = `BT /F1 12 Tf 72 720 Td (${text.replace(/[()]/g, '')}) Tj ET`
+  const objects = ['1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj', '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj', '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj', '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj', `5 0 obj << /Length ${stream.length} >> stream\n${stream}\nendstream endobj`]
+  let pdf = '%PDF-1.4\n'
+  const offsets = [0]
+  for (const object of objects) { offsets.push(pdf.length); pdf += `${object}\n` }
+  const xref = pdf.length
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n `).join('\n')}\ntrailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`
+  return pdf
 }
 
 function respondContractError(

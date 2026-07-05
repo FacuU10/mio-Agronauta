@@ -3,6 +3,7 @@ import { ApiError, apiClient } from '@/lib/api-client'
 import {
   demoContactSubmissionResponseSchema,
   demoContactSubmissionSchema,
+  dashboardSnapshotSchema,
   monitoringStatusSchema,
   recomputeRequestResultSchema,
   riskTimelineResponseSchema,
@@ -17,7 +18,7 @@ import {
   riskCurrentSchema,
   runtimeInfoSchema,
 } from './schemas'
-import type { AlertsCurrent, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { AlertsCurrent, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
 
 export async function submitDemoContact(input: DemoContactSubmission): Promise<DemoContactSubmissionResponse> {
   demoContactSubmissionSchema.parse(input)
@@ -37,6 +38,7 @@ export interface AgronautasService {
   getRiskTimeline(fieldId: string): Promise<RiskTimelineResponse>
   getWeatherTimeline(fieldId: string): Promise<WeatherTimelineResponse>
   getMonitoringStatus(fieldId: string): Promise<MonitoringStatus>
+  getDashboard(fieldId: string): Promise<DashboardSnapshot>
   getHydrologyDashboard(fieldId: string): Promise<HydrologyDashboard>
   requestRecompute(fieldId: string): Promise<RecomputeRequestResult>
   askFieldChat(fieldId: string, input: GroundedChatRequest): Promise<GroundedChatResponse>
@@ -53,6 +55,7 @@ export function createAgronautasApiService(): AgronautasService {
     getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/risk/timeline`)),
     getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/weather/timeline`)),
     getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(`/fields/${fieldId}/status`)),
+    getDashboard: async (fieldId) => dashboardSnapshotSchema.parse(await apiClient(`/fields/${fieldId}/dashboard`)),
     getHydrologyDashboard: async (fieldId) => hydrologyDashboardSchema.parse(await apiClient(`/fields/${fieldId}/hydrology/dashboard`)),
     requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(`/fields/${fieldId}/recompute`, { method: 'POST' })),
     askFieldChat: async (fieldId, input) => groundedChatResponseSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
@@ -179,6 +182,39 @@ export function createAgronautasMockService(): AgronautasService {
         degradationReasons: risk.snapshot.degradationReasons,
       })
     },
+    async getDashboard(fieldId) {
+      const [field, risk, alerts, weather] = await Promise.all([this.getField(fieldId), this.getCurrentRisk(fieldId), this.getCurrentAlerts(fieldId), this.getWeatherTimeline(fieldId)])
+      const firstWeather = weather.items[0]
+      const staleFlags = [...risk.snapshot.degradationReasons, ...alerts.alerts.flatMap((alert) => alert.degradationReasons)]
+      const degraded = risk.status !== 'fresh' || alerts.status !== 'fresh' || staleFlags.length > 0 || Boolean(firstWeather?.staleCause)
+      return dashboardSnapshotSchema.parse({
+        contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+        snapshotId: risk.snapshot.snapshotId,
+        field: { fieldId, cropCategory: 'cereal', crop: field.crop, provinceCode: 'AR-W', locality: field.locality },
+        status: degraded ? 'degraded' : risk.status,
+        freshness: degraded ? 'degraded' : risk.status,
+        signals: firstWeather ? [
+          { signalType: 'weather', status: firstWeather.staleCause ? 'degraded' : 'fresh', evidenceRefs: risk.snapshot.evidenceRefs, confidence: firstWeather.confidence, degradationReasons: firstWeather.staleCause ? ['weather_data_stale'] : [] },
+          { signalType: 'hydric_soil', status: 'stale', evidenceRefs: ['soil:inta:2026-06-01T12:00:00Z'], confidence: 0.58, degradationReasons: ['weather_data_stale'] },
+          { signalType: 'satellite_vegetation', status: 'missing', evidenceRefs: ['satellite:sentinel:2026-05-20T12:00:00Z'], confidence: 0.22, degradationReasons: ['satellite_data_unavailable'] },
+        ] : [],
+        risk: { score: risk.snapshot.score, level: risk.snapshot.level, confidence: risk.snapshot.confidence, drivers: risk.snapshot.drivers },
+        alerts: alerts.alerts,
+        provenance: firstWeather ? [
+          { evidenceId: `${firstWeather.provider}:weather:${firstWeather.observedAt}`, provider: firstWeather.provider, signalType: 'weather', observedAt: firstWeather.observedAt, ingestedAt: risk.snapshot.computedAt, sourceUrl: 'https://api.open-meteo.com/', rawHash: 'mock-hash', confidence: firstWeather.confidence, freshness: firstWeather.staleCause ? 'degraded' : 'fresh', providerMode: 'mock', lastSuccessfulObservedAt: firstWeather.observedAt, nextDueAt: risk.snapshot.validUntil, failureReason: firstWeather.staleCause, degradationReasons: firstWeather.staleCause ? ['weather_data_stale'] : [] },
+          { evidenceId: 'inta-soil:hydric_soil:2026-06-01T12:00:00.000Z', provider: 'inta-soil', signalType: 'hydric_soil', observedAt: '2026-06-01T12:00:00.000Z', ingestedAt: risk.snapshot.computedAt, sourceUrl: 'https://www.inta.gob.ar/', rawHash: 'mock-soil-hash', confidence: 0.58, freshness: 'stale', providerMode: 'seam', lastSuccessfulObservedAt: '2026-06-01T12:00:00.000Z', nextDueAt: '2026-06-02T12:00:00.000Z', failureReason: 'adapter seam pendiente', degradationReasons: ['weather_data_stale'] },
+          { evidenceId: 'sentinel-hub:satellite_vegetation:2026-05-20T12:00:00.000Z', provider: 'sentinel-hub', signalType: 'satellite_vegetation', observedAt: '2026-05-20T12:00:00.000Z', ingestedAt: risk.snapshot.computedAt, sourceUrl: 'https://sentinel.esa.int/', rawHash: 'mock-satellite-hash', confidence: 0.22, freshness: 'missing', providerMode: 'unavailable', lastSuccessfulObservedAt: null, nextDueAt: '2026-06-08T12:00:00.000Z', failureReason: 'satellite_data_unavailable', degradationReasons: ['satellite_data_unavailable'] },
+        ] : [],
+        scheduler: { lastRunAt: risk.snapshot.computedAt, nextRunAt: risk.snapshot.validUntil, lockStatus: 'available', failures: degraded ? [{ provider: 'sentinel-hub', signalType: 'satellite_vegetation', reason: 'satellite_data_unavailable' }] : [], nextDueBySource: [
+          { provider: firstWeather?.provider ?? 'open-meteo', signalType: 'weather', dueAt: risk.snapshot.validUntil, lastSuccessfulObservedAt: firstWeather?.observedAt ?? risk.snapshot.computedAt, overdue: false, cadence: { provider: firstWeather?.provider ?? 'open-meteo', signalType: 'weather', updateCadence: '1h', rateLimit: 'safe hourly', freshnessSla: '2h', researchedAt: '2026-06-01T00:00:00.000Z', sourceRef: 'https://open-meteo.com/' } },
+          { provider: 'inta-soil', signalType: 'hydric_soil', dueAt: '2026-06-02T12:00:00.000Z', lastSuccessfulObservedAt: '2026-06-01T12:00:00.000Z', overdue: true, cadence: { provider: 'inta-soil', signalType: 'hydric_soil', updateCadence: '24h', rateLimit: 'daily', freshnessSla: '24h', researchedAt: '2026-06-01T00:00:00.000Z', sourceRef: 'https://www.inta.gob.ar/' } },
+          { provider: 'sentinel-hub', signalType: 'satellite_vegetation', dueAt: '2026-06-08T12:00:00.000Z', lastSuccessfulObservedAt: null, overdue: false, cadence: { provider: 'sentinel-hub', signalType: 'satellite_vegetation', updateCadence: '5d', rateLimit: 'scene availability', freshnessSla: 'no verificado', researchedAt: '2026-06-01T00:00:00.000Z', sourceRef: 'https://sentinel.esa.int/' } },
+        ] },
+        generatedAt: '2026-06-03T00:05:00.000Z',
+        lastDataFetchedAt: firstWeather?.observedAt ?? risk.snapshot.computedAt,
+        presentation: { disclaimer: 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.', confidenceLabel: confidenceLabel(risk.snapshot.confidence), sourcesUnavailable: degraded, staleFlags: [...staleFlags, ...(firstWeather?.staleCause ? ['weather_data_stale' as const] : [])] },
+      })
+    },
     async getHydrologyDashboard(fieldId) {
       return hydrologyDashboardSchema.parse(createMockHydrologyDashboard(fieldId))
     },
@@ -295,6 +331,12 @@ function createMockHydrologyDashboard(fieldId: string): HydrologyDashboard {
     rain: [{ ...base, source: 'SMN', stationId: 'smn-corrientes', value: 46, unit: 'mm/24h', metric: 'rain_mm', sourceUrl: 'https://www.smn.gob.ar/' }],
     alerts: [{ ...base, source: 'SMN', stationId: 'paso-de-la-patria', value: 1, unit: 'alerta', metric: 'storm_alert', sourceUrl: 'https://www.smn.gob.ar/alertas' }],
   }
+}
+
+function confidenceLabel(confidence: number): 'alta' | 'media' | 'baja' {
+  if (confidence >= 0.75) return 'alta'
+  if (confidence >= 0.5) return 'media'
+  return 'baja'
 }
 
 export function resolveAgronautasService(): AgronautasService {

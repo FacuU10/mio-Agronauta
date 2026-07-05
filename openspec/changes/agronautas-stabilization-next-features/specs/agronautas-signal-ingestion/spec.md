@@ -29,3 +29,16 @@ The scheduler MUST use persisted per-source cadence and expose next-due state fo
 - GIVEN cadence records exist and the service restarts
 - WHEN the first scheduler tick runs
 - THEN due selection matches persisted cadence without manual in-memory setup
+
+### Requirement: Extended Provider Backoff
+The scheduler MUST protect national providers by using waits of 45 seconds, 5 minutes, 10 minutes, and 15 minutes for attempts 1 through 4, then desisting until the next scheduled hourly run if failure persists.
+
+#### Scenario: Provider retries follow approved window
+- GIVEN an ingestion source fails repeatedly
+- WHEN attempts 1 through 4 are planned
+- THEN waits are 45s, 5m, 10m, and 15m in order
+
+#### Scenario: Exhausted retries wait for hourly schedule
+- GIVEN the fourth attempt still fails
+- WHEN the retry controller evaluates another run
+- THEN it MUST NOT retry until the next scheduled hourly run

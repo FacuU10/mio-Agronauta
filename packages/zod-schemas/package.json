@@ -8,13 +8,15 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "node scripts/clean-build-output.mjs && tsc",
+    "build:ensure": "node scripts/ensure-build-output.mjs",
     "lint": "eslint . --ext .ts",
-    "test": "node --test package-config.test.mjs"
+    "test": "pnpm run build:ensure && node --test package-config.test.mjs"
   },
   "dependencies": {
     "@repo/typescript-config": "workspace:*",

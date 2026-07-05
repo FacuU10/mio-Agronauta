@@ -90,3 +90,55 @@ CREATE INDEX IF NOT EXISTS hydrology_ingestion_runs_source_started_idx ON hydrol
 CREATE INDEX IF NOT EXISTS hydrology_ingestion_runs_station_idx ON hydrology_ingestion_runs (station_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS hydrology_telemetry_station_metric_observed_idx ON hydrology_telemetry (station_id, metric, observed_at DESC);
 CREATE INDEX IF NOT EXISTS hydrology_telemetry_source_observed_idx ON hydrology_telemetry (source, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS signal_ingestion_runs (
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  field_id text NOT NULL,
+  provider text NOT NULL,
+  signal_type text NOT NULL,
+  run_id text NOT NULL UNIQUE,
+  status text NOT NULL CHECK (status IN ('succeeded', 'degraded', 'failed')),
+  stale_cause text,
+  started_at timestamptz NOT NULL,
+  finished_at timestamptz,
+  observed_at timestamptz,
+  evidence_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  degradation_reason text
+);
+
+CREATE INDEX IF NOT EXISTS signal_ingestion_runs_field_signal_observed_idx
+  ON signal_ingestion_runs (field_id, signal_type, observed_at DESC NULLS LAST);
+
+CREATE TABLE IF NOT EXISTS source_cadences (
+  provider text NOT NULL,
+  signal_type text NOT NULL,
+  update_cadence_minutes integer NOT NULL CHECK (update_cadence_minutes > 0),
+  freshness_sla_minutes integer NOT NULL CHECK (freshness_sla_minutes > 0),
+  rate_limit text,
+  source_ref text NOT NULL,
+  researched_at timestamptz NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  PRIMARY KEY (provider, signal_type)
+);
+
+CREATE INDEX IF NOT EXISTS source_cadences_enabled_idx ON source_cadences (enabled, provider, signal_type);
+
+CREATE TABLE IF NOT EXISTS risk_snapshots (
+  id text PRIMARY KEY,
+  field_id text NOT NULL,
+  run_id text NOT NULL,
+  score numeric NOT NULL,
+  confidence numeric NOT NULL,
+  level text NOT NULL,
+  freshness text NOT NULL,
+  computed_at timestamptz NOT NULL,
+  valid_until timestamptz NOT NULL,
+  rule_version text NOT NULL,
+  stale_cause text,
+  degradation_reasons jsonb NOT NULL DEFAULT '[]'::jsonb,
+  drivers jsonb NOT NULL DEFAULT '[]'::jsonb,
+  evidence_refs jsonb NOT NULL DEFAULT '[]'::jsonb,
+  summary_payload jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS risk_snapshots_field_computed_idx ON risk_snapshots (field_id, computed_at DESC);

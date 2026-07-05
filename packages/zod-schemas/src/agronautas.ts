@@ -3,6 +3,13 @@ import { z } from 'zod'
 export const AGRONAUTAS_CONTRACT_VERSION = '1.0.0' as const
 
 export const agronautasGrowthStages = ['emergence', 'tillering', 'panicle_initiation', 'flowering', 'maturity'] as const
+export const agronautasCropCategories = ['cereal', 'oilseed', 'horticulture', 'forage', 'fruit', 'other'] as const
+export const agronautasSupportedCrops = ['rice', 'maize', 'soybean', 'wheat', 'sunflower', 'pasture', 'citrus', 'other'] as const
+export const agronautasSupportedProvinceCodes = ['AR-W'] as const
+export const agronautasCountryCodes = ['AR'] as const
+export const agronautasSignalTypes = ['weather', 'alert', 'satellite_vegetation', 'fire', 'hydric_soil', 'hydrology'] as const
+export const agronautasSignalStatuses = ['fresh', 'stale', 'degraded', 'missing'] as const
+export const agronautasProviderModes = ['live', 'seam', 'mock', 'unavailable'] as const
 export const degradationReasons = [
   'weather_data_unavailable',
   'weather_data_stale',
@@ -55,6 +62,13 @@ export const corrientesRiceZoneBoundarySource = {
 const contractVersionSchema = z.literal(AGRONAUTAS_CONTRACT_VERSION)
 const degradationReasonSchema = z.enum(degradationReasons)
 const growthStageSchema = z.enum(agronautasGrowthStages)
+const cropCategorySchema = z.enum(agronautasCropCategories)
+const supportedCropSchema = z.enum(agronautasSupportedCrops)
+const supportedProvinceCodeSchema = z.enum(agronautasSupportedProvinceCodes)
+const countryCodeSchema = z.enum(agronautasCountryCodes)
+const signalTypeSchema = z.enum(agronautasSignalTypes)
+const signalStatusSchema = z.enum(agronautasSignalStatuses)
+const providerModeSchema = z.enum(agronautasProviderModes)
 const hydrologySourceSchema = z.enum(hydrologySources)
 const hydrologyFreshnessSchema = z.enum(hydrologyFreshnessStates)
 const hydrologyQualitySchema = z.enum(hydrologyQualityStates)
@@ -108,15 +122,61 @@ export const demoContactSubmissionResponseSchema = z.object({
 export const fieldIntakeSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
-  crop: z.literal('rice'),
+  cropCategory: z.string().min(1).max(80).default('other'),
+  crop: z.string().min(1).max(80),
   hectares: z.number().positive(),
   locality: z.string().min(1).max(120),
+  provinceCode: z.string().min(1).max(16).default('AR-W'),
+  countryCode: z.string().min(1).max(2).default('AR'),
   growthStage: growthStageSchema.optional(),
   location: z.object({
     lat: z.number().min(-90).max(90),
     lng: z.number().min(-180).max(180),
     polygonWkt: z.string().min(1).optional(),
   }),
+}).superRefine((value, ctx) => {
+  if (!countryCodeSchema.safeParse(value.countryCode).success || !supportedProvinceCodeSchema.safeParse(value.provinceCode).success) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'OUT_OF_SUPPORTED_AREA', path: ['provinceCode'] })
+  }
+
+  if (!cropCategorySchema.safeParse(value.cropCategory).success || !supportedCropSchema.safeParse(value.crop).success) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'UNSUPPORTED_CROP', path: ['crop'] })
+  }
+})
+
+export const signalEvidenceSchema = z.object({
+  evidenceId: z.string().min(1).max(120),
+  provider: z.string().min(1).max(80),
+  signalType: signalTypeSchema,
+  observedAt: z.string().datetime(),
+  ingestedAt: z.string().datetime(),
+  sourceUrl: z.string().url(),
+  rawHash: z.string().min(1).max(160),
+  confidence: z.number().min(0).max(1),
+  freshness: signalStatusSchema,
+  providerMode: providerModeSchema.default('unavailable'),
+  lastSuccessfulObservedAt: z.string().datetime().nullable().optional(),
+  nextDueAt: z.string().datetime().nullable().optional(),
+  failureReason: z.string().min(1).max(240).optional(),
+  degradationReasons: z.array(degradationReasonSchema).default([]),
+})
+
+export const sourceCadenceSchema = z.object({
+  provider: z.string().min(1).max(80),
+  signalType: signalTypeSchema,
+  updateCadence: z.string().min(1).max(80),
+  rateLimit: z.string().min(1).max(160),
+  freshnessSla: z.string().min(1).max(80),
+  researchedAt: z.string().datetime(),
+  sourceRef: z.string().url(),
+})
+
+export const schedulerStatusSchema = z.object({
+  lastRunAt: z.string().datetime().nullable(),
+  nextRunAt: z.string().datetime().nullable(),
+  lockStatus: z.enum(['available', 'locked', 'unknown']),
+  failures: z.array(z.object({ provider: z.string().min(1).max(80), signalType: signalTypeSchema, reason: z.string().min(1).max(240) })).default([]),
+  nextDueBySource: z.array(z.object({ provider: z.string().min(1).max(80), signalType: signalTypeSchema, dueAt: z.string().datetime(), cadence: sourceCadenceSchema, lastSuccessfulObservedAt: z.string().datetime().nullable().optional(), overdue: z.boolean().default(false) })).default([]),
 })
 
 export const riskDriverSchema = z.object({
@@ -139,6 +199,51 @@ export const riskSnapshotSchema = z.object({
   degradationReasons: z.array(degradationReasonSchema).default([]),
   evidenceRefs: z.array(z.string().min(1)).min(1),
   drivers: z.array(riskDriverSchema).min(1),
+})
+
+export const dashboardSignalSchema = z.object({
+  signalType: signalTypeSchema,
+  status: signalStatusSchema,
+  evidenceRefs: z.array(z.string().min(1)).default([]),
+  confidence: z.number().min(0).max(1),
+  degradationReasons: z.array(degradationReasonSchema).default([]),
+})
+
+export const dashboardSnapshotSchema = z.object({
+  contractVersion: contractVersionSchema,
+  snapshotId: z.string().min(1).max(80),
+  field: z.object({
+    fieldId: z.string().min(1).max(80),
+    cropCategory: cropCategorySchema,
+    crop: supportedCropSchema,
+    provinceCode: supportedProvinceCodeSchema,
+    locality: z.string().min(1).max(120),
+  }),
+  status: signalStatusSchema,
+  freshness: signalStatusSchema,
+  signals: z.array(dashboardSignalSchema).default([]),
+  risk: z.object({
+    score: z.number().min(0).max(100),
+    level: z.enum(agronautasRiskLevels),
+    confidence: z.number().min(0).max(1),
+    drivers: z.array(riskDriverSchema).default([]),
+  }),
+  alerts: z.array(z.unknown()).default([]),
+  provenance: z.array(signalEvidenceSchema).default([]),
+  scheduler: schedulerStatusSchema,
+  generatedAt: z.string().datetime(),
+  lastDataFetchedAt: z.string().datetime(),
+  presentation: z.object({
+    disclaimer: z.string().min(1).max(500),
+    confidenceLabel: z.enum(['alta', 'media', 'baja']),
+    sourcesUnavailable: z.boolean(),
+    staleFlags: z.array(degradationReasonSchema).default([]),
+  }),
+})
+
+export const pdfReportRequestSchema = z.object({
+  fieldId: z.string().min(1).max(80),
+  snapshotId: z.string().min(1).max(80),
 })
 
 export const alertSnapshotSchema = z.object({
@@ -179,7 +284,8 @@ export const copilotAlertReferenceSchema = z.object({
 export const copilotContextSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
-  crop: z.literal('rice'),
+  crop: supportedCropSchema,
+  cropCategory: cropCategorySchema.optional(),
   growthStage: growthStageSchema.optional(),
   requestedWindow: z
     .object({
@@ -433,6 +539,12 @@ export const groundedChatResponseSchema = z.object({
 })
 
 export type FieldIntake = z.infer<typeof fieldIntakeSchema>
+export type SignalEvidence = z.infer<typeof signalEvidenceSchema>
+export type AgronautasProviderMode = z.infer<typeof providerModeSchema>
+export type SourceCadence = z.infer<typeof sourceCadenceSchema>
+export type SchedulerStatus = z.infer<typeof schedulerStatusSchema>
+export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
+export type PdfReportRequest = z.infer<typeof pdfReportRequestSchema>
 export type RiskSnapshot = z.infer<typeof riskSnapshotSchema>
 export type AlertSnapshot = z.infer<typeof alertSnapshotSchema>
 export type CopilotContext = z.infer<typeof copilotContextSchema>

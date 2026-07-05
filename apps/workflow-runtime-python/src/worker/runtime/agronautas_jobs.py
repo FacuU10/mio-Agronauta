@@ -10,6 +10,7 @@ from urllib.request import urlopen
 
 import psycopg
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 from redis.asyncio import Redis
 
 from worker.core.config import get_settings
@@ -24,12 +25,35 @@ OPEN_METEO_TIMEOUT_SECONDS = 10
 
 async def handle_agronautas_job(job: dict[str, Any], redis: Redis, logger: Any) -> dict[str, Any]:
     payload = job["payload"]
-    AGRONAUTAS_RECOMPUTE_VALIDATOR.validate(payload)
-
     job_id = job["jobId"]
     run_id = job["runId"]
+    try:
+        AGRONAUTAS_RECOMPUTE_VALIDATOR.validate(payload)
+    except ValidationError as error:
+        result = {
+            "accepted": False,
+            "status": "stale_schema",
+            "runId": run_id,
+            "jobId": job_id,
+            "error": error.message,
+        }
+        await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
+        return result
+
     field_id = payload["fieldId"]
     mode = payload["runtime"]["mode"]
+
+    if not await claim_run_once(redis, run_id, job_id):
+        result = {
+            "accepted": False,
+            "status": "skipped_duplicate",
+            "fieldId": field_id,
+            "mode": mode,
+            "runId": run_id,
+            "jobId": job_id,
+        }
+        await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
+        return result
 
     await redis.hset("agronautas:job-runs:status", job_id, json.dumps({"status": "running", "runId": run_id}))
     await redis.hset("agronautas:job-runs:heartbeat", job_id, payload["requestedAt"])
@@ -60,6 +84,7 @@ async def handle_agronautas_job(job: dict[str, Any], redis: Redis, logger: Any) 
 
         result = {
             "accepted": True,
+            "status": "succeeded",
             "fieldId": field_id,
             "mode": mode,
             "runId": run_id,
@@ -74,14 +99,22 @@ async def handle_agronautas_job(job: dict[str, Any], redis: Redis, logger: Any) 
             requested_at=payload["requestedAt"],
             error_message=str(error),
         )
+        attempt = int(job.get("attempt") or payload.get("attempt") or 1)
+        max_attempts = int(job.get("maxAttempts") or payload.get("maxAttempts") or 1)
+        exhausted = attempt >= max_attempts
         result = {
             "accepted": False,
+            "status": "dlq" if exhausted else "retryable_failure",
             "fieldId": field_id,
             "mode": mode,
             "runId": run_id,
             "jobId": job_id,
             "error": str(error),
         }
+        if exhausted:
+            await redis.hset("agronautas:job-runs:dlq", job_id, json.dumps(result))
+        else:
+            result["nextAttempt"] = attempt + 1
 
     await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
     logger.info(
@@ -95,6 +128,11 @@ async def handle_agronautas_job(job: dict[str, Any], redis: Redis, logger: Any) 
         },
     )
     return result
+
+
+async def claim_run_once(redis: Redis, run_id: str, job_id: str) -> bool:
+    hset_result = await redis.hset("agronautas:job-runs:claims", run_id, job_id)
+    return hset_result in (1, True, None)
 
 
 async def fetch_field_coordinates(postgres_dsn: str, field_id: str) -> dict[str, float | str] | None:
@@ -226,7 +264,7 @@ async def persist_successful_snapshot(
                     "open-meteo",
                     "climate",
                     run_id,
-                    "success",
+                    "succeeded",
                     None,
                     _parse_timestamp(requested_at),
                     datetime.now(UTC),

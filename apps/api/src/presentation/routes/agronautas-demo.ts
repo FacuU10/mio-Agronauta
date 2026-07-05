@@ -9,10 +9,10 @@ export function createDemoField(input: FieldIntake) {
   return {
     fieldId: `demo-${input.fieldId}`,
     externalFieldId: input.fieldId,
-    crop: 'rice' as const,
+    crop: input.crop,
     hectares: input.hectares,
     locality: input.locality,
-    provinceCode: 'AR-W',
+    provinceCode: input.provinceCode,
     centroid: { lat: boundedLat, lng: boundedLng },
   }
 }
@@ -21,7 +21,10 @@ export function createDemoFieldOverview(fieldId: string) {
   return createDemoField({
     contractVersion: AGRONAUTAS_CONTRACT_VERSION,
     fieldId: fieldId.replace(/^demo-/, ''),
+    cropCategory: 'cereal',
     crop: 'rice',
+    provinceCode: 'AR-W',
+    countryCode: 'AR',
     hectares: 42.5,
     locality: 'Mercedes',
     location: { lat: -29.1846, lng: -58.0759 },
@@ -33,7 +36,7 @@ export function createDemoFieldCreated(input: FieldIntake) {
     fieldId: `demo-${input.fieldId}`,
     coverage: {
       locality: input.locality,
-      provinceCode: 'AR-W',
+      provinceCode: input.provinceCode,
       boundaryVersion: 'demo-v1',
     },
   }
@@ -125,7 +128,7 @@ export function isSupportedDemoFieldIntake(input: unknown) {
   if (!insideCorrientesBounds) {
     return {
       success: false as const,
-      reason: 'outside_corrientes_rice_zone',
+    reason: 'outside_supported_corrientes_area',
     }
   }
 

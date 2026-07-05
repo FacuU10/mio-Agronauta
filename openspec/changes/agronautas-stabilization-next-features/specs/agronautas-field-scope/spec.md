@@ -15,3 +15,8 @@ The system MUST preserve Argentina agriculture-wide scope with Corrientes-first 
 - GIVEN ingestion status, freshness dashboard, PDF parity, or alerts are added
 - WHEN those features render field context
 - THEN they use agriculture-wide/Corrientes-first language and metadata
+
+#### Scenario: Iberá-Alerta remains separate
+- GIVEN Agronautas ingestion backoff policy is updated
+- WHEN scope boundaries are checked
+- THEN Iberá-Alerta is not modified or merged into Agronautas

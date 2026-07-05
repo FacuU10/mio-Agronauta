@@ -1,7 +1,6 @@
 'use client'
 
-import React from 'react'
-import { useMemo, useState } from 'react'
+import { createElement, useState } from 'react'
 import { useMutation, useQueries } from '@tanstack/react-query'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { ApiError } from '@/lib/api-client'
@@ -10,12 +9,14 @@ import { AGRONAUTAS_CONTRACT_VERSION, contractErrorSchema, recomputeRequestResul
 import { useAgronautasStore } from '@/store/agronautas-store'
 import { AgronautasWorkspace } from './workspace'
 
+const React = { createElement }
+
 interface AgronautasPageClientProps {
   service?: AgronautasService
 }
 
 export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
-  const resolvedService = useMemo(() => service ?? resolveAgronautasService(), [service])
+  const resolvedService = service ?? resolveAgronautasService()
   const selectedFieldId = useAgronautasStore((state) => state.selectedFieldId)
   const lastCreatedFieldId = useAgronautasStore((state) => state.lastCreatedFieldId)
   const intakeError = useAgronautasStore((state) => state.intakeError)
@@ -84,7 +85,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
     },
   })
 
-  const [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, hydrologyQuery] = useQueries({
+  const [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, dashboardQuery, hydrologyQuery] = useQueries({
     queries: [
       {
         queryKey: ['agronautas', 'field', selectedFieldId],
@@ -117,6 +118,11 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
         enabled: Boolean(selectedFieldId),
       },
       {
+        queryKey: ['agronautas', 'dashboard-payload', selectedFieldId],
+        queryFn: () => resolvedService.getDashboard(selectedFieldId as string),
+        enabled: Boolean(selectedFieldId),
+      },
+      {
         queryKey: ['agronautas', 'hydrology-dashboard', selectedFieldId],
         queryFn: () => resolvedService.getHydrologyDashboard(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
@@ -140,6 +146,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       status={statusQuery.data}
       riskTimeline={riskTimelineQuery.data}
       weatherTimeline={weatherTimelineQuery.data}
+      dashboardPayload={dashboardQuery.data}
       hydrologyDashboard={hydrologyQuery.data}
       chatResponse={chatResponse}
       hydrologyAnswer={hydrologyAnswer}

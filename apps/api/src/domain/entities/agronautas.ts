@@ -27,7 +27,8 @@ export interface FieldBoundaryMetadata {
 export interface FieldProps {
   id: string
   externalFieldId: string
-  crop: 'rice'
+  cropCategory?: string
+  crop: string
   hectares: number
   localityName: string
   provinceCode: string
@@ -90,8 +91,12 @@ export interface RiskSnapshotFoundationProps {
 
 export class Field {
   constructor(public readonly props: FieldProps) {
-    if (props.crop !== 'rice') {
-      throw new Error('Agronautas MVP only supports rice fields')
+    if (props.provinceCode !== 'AR-W') {
+      throw new Error('OUT_OF_SUPPORTED_AREA')
+    }
+
+    if (!isSupportedCrop(props.crop, props.cropCategory)) {
+      throw new Error('UNSUPPORTED_CROP')
     }
 
     if (props.hectares <= 0) {
@@ -136,11 +141,7 @@ export class RiskSnapshotFoundation {
   }
 
   get freshness(): SnapshotFreshness {
-    if (this.isExpired()) {
-      return 'stale'
-    }
-
-    return this.props.degradationReasons.length > 0 ? 'degraded' : 'fresh'
+    return deriveSnapshotFreshness(this.props)
   }
 
   isExpired(reference = new Date()): boolean {
@@ -194,8 +195,28 @@ export function estimateFreshnessHours(observedAt: Date, reference = new Date())
   return Math.max(0, Number(((reference.getTime() - observedAt.getTime()) / 3_600_000).toFixed(2)))
 }
 
+export function deriveSnapshotFreshness(
+  input: Pick<RiskSnapshotFoundationProps, 'validUntil' | 'degradationReasons'>,
+  reference = new Date(),
+): SnapshotFreshness {
+  if (input.validUntil.getTime() <= reference.getTime()) return 'stale'
+  return input.degradationReasons.length > 0 ? 'degraded' : 'fresh'
+}
+
+export function clampConfidence(value: number, floor = 0, precision = 3): number {
+  const bounded = Math.max(floor, Math.min(1, value))
+  return Number(bounded.toFixed(precision))
+}
+
 export function assertCoordinateRange(point: GeoPoint): void {
   if (point.lat < -90 || point.lat > 90 || point.lng < -180 || point.lng > 180) {
     throw new Error('coordinates out of range')
   }
+}
+
+const supportedCrops = new Set(['rice', 'maize', 'soybean', 'wheat', 'sunflower', 'pasture', 'citrus', 'other'])
+const supportedCropCategories = new Set(['cereal', 'oilseed', 'horticulture', 'forage', 'fruit', 'other'])
+
+function isSupportedCrop(crop: string, cropCategory = 'other'): boolean {
+  return supportedCrops.has(crop) && supportedCropCategories.has(cropCategory)
 }

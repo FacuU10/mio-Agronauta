@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { RiskSnapshotFoundation, type ClimateSummary, type DegradationReason, type FieldContext, type RiskDriver, type SatelliteSummary } from '../../domain/entities/agronautas'
+import { RiskSnapshotFoundation, clampConfidence, type ClimateSummary, type DegradationReason, type FieldContext, type RiskDriver, type SatelliteSummary } from '../../domain/entities/agronautas'
 import type { FieldContextRepository, RecomputeLockRepository, RiskSnapshotRepository, SignalSummaryRepository } from '../../domain/repositories/agronautas'
 
 const RISK_RULE_VERSION = 'risk-v0'
@@ -193,7 +193,7 @@ function calculateConfidence(input: {
   const sourceConfidence = [input.climate?.confidence ?? 0.45, input.satellite?.confidence ?? 0.4, input.context ? 0.9 : 0.55]
   const average = sourceConfidence.reduce((sum, value) => sum + value, 0) / sourceConfidence.length
   const penalty = input.degradationReasons.length * 0.08
-  return Number(Math.max(0.2, Math.min(1, average - penalty)).toFixed(3))
+  return clampConfidence(average - penalty, 0.2)
 }
 
 function collectEvidenceRefs(

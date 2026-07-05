@@ -8,9 +8,12 @@
       "payload": {
         "contractVersion": "1.0.0",
         "fieldId": "corrientes-lote-001",
+        "cropCategory": "cereal",
         "crop": "rice",
         "hectares": 42.5,
         "locality": "Mercedes",
+        "provinceCode": "AR-W",
+        "countryCode": "AR",
         "growthStage": "tillering",
         "location": { "lat": -29.1846, "lng": -58.0759 }
       }
@@ -25,6 +28,22 @@
         "crop": "soy",
         "hectares": 10,
         "location": { "lat": -29.18, "lng": -58.07 }
+      }
+    },
+    {
+      "name": "field-intake-non-rice-corrientes-valid",
+      "contract": "FieldIntake",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "fieldId": "corrientes-lote-maiz-001",
+        "cropCategory": "cereal",
+        "crop": "maize",
+        "hectares": 30,
+        "locality": "Mercedes",
+        "provinceCode": "AR-W",
+        "countryCode": "AR",
+        "location": { "lat": -29.1846, "lng": -58.0759 }
       }
     },
     {
@@ -60,6 +79,85 @@
         "confidence": 0.71,
         "freshness": "degraded",
         "degradationReasons": ["satellite_data_stale"]
+      }
+    },
+    {
+      "name": "signal-evidence-valid",
+      "contract": "SignalEvidence",
+      "valid": true,
+      "payload": {
+        "evidenceId": "ev-weather-smn-1",
+        "provider": "SMN",
+        "signalType": "weather",
+        "observedAt": "2026-07-04T10:00:00Z",
+        "ingestedAt": "2026-07-04T10:05:00Z",
+        "sourceUrl": "https://www.smn.gob.ar/",
+        "rawHash": "sha256:abc123",
+        "confidence": 0.88,
+        "freshness": "fresh",
+        "degradationReasons": []
+      }
+    },
+    {
+      "name": "source-cadence-valid",
+      "contract": "SourceCadence",
+      "valid": true,
+      "payload": {
+        "provider": "SMN",
+        "signalType": "weather",
+        "updateCadence": "PT1H",
+        "rateLimit": "60 requests/hour",
+        "freshnessSla": "PT3H",
+        "researchedAt": "2026-07-04T09:00:00Z",
+        "sourceRef": "https://www.smn.gob.ar/"
+      }
+    },
+    {
+      "name": "scheduler-status-valid",
+      "contract": "SchedulerStatus",
+      "valid": true,
+      "payload": {
+        "lastRunAt": "2026-07-04T10:00:00Z",
+        "nextRunAt": "2026-07-04T11:00:00Z",
+        "lockStatus": "available",
+        "failures": [],
+        "nextDueBySource": [{
+          "provider": "SMN",
+          "signalType": "weather",
+          "dueAt": "2026-07-04T11:00:00Z",
+          "cadence": { "provider": "SMN", "signalType": "weather", "updateCadence": "PT1H", "rateLimit": "60 requests/hour", "freshnessSla": "PT3H", "researchedAt": "2026-07-04T09:00:00Z", "sourceRef": "https://www.smn.gob.ar/" }
+        }]
+      }
+    },
+    {
+      "name": "pdf-report-request-valid",
+      "contract": "PdfReportRequest",
+      "valid": true,
+      "payload": { "fieldId": "corrientes-lote-001", "snapshotId": "dash-001" }
+    },
+    {
+      "name": "dashboard-snapshot-valid",
+      "contract": "DashboardSnapshot",
+      "valid": true,
+      "payload": {
+        "contractVersion": "1.0.0",
+        "snapshotId": "dash-001",
+        "field": { "fieldId": "corrientes-lote-001", "cropCategory": "cereal", "crop": "maize", "provinceCode": "AR-W", "locality": "Mercedes" },
+        "status": "degraded",
+        "freshness": "degraded",
+        "signals": [{ "signalType": "weather", "status": "fresh", "evidenceRefs": ["ev-weather-smn-1"], "confidence": 0.88, "degradationReasons": [] }],
+        "risk": { "score": 35, "level": "low", "confidence": 0.88, "drivers": [{ "key": "rain", "label": "Rainfall", "weight": 0.4, "value": 12 }] },
+        "alerts": [],
+        "provenance": [{ "evidenceId": "ev-weather-smn-1", "provider": "SMN", "signalType": "weather", "observedAt": "2026-07-04T10:00:00Z", "ingestedAt": "2026-07-04T10:05:00Z", "sourceUrl": "https://www.smn.gob.ar/", "rawHash": "sha256:abc123", "confidence": 0.88, "freshness": "fresh", "degradationReasons": [] }],
+        "scheduler": { "lastRunAt": "2026-07-04T10:00:00Z", "nextRunAt": "2026-07-04T11:00:00Z", "lockStatus": "available", "failures": [], "nextDueBySource": [] },
+        "generatedAt": "2026-07-04T10:06:00Z",
+        "lastDataFetchedAt": "2026-07-04T10:00:00Z",
+        "presentation": {
+          "disclaimer": "Información agroclimática de Corrientes.",
+          "confidenceLabel": "alta",
+          "sourcesUnavailable": false,
+          "staleFlags": []
+        }
       }
     },
     {

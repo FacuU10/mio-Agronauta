@@ -10,7 +10,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "build:ensure": "node scripts/ensure-build-output.mjs",
+    "test": "pnpm run build:ensure && node --import tsx --test src/**/*.test.ts",
     "lint": "eslint . --ext .ts"
   },
   "dependencies": {

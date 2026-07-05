@@ -8,7 +8,7 @@ Launch Agronautas MVP as a real-data agricultural risk dashboard for Argentina, 
 
 ### In Scope
 - Expand Agronautas contracts/copy/boundaries from Corrientes rice to Corrientes-first Argentina agriculture.
-- Implement real scheduled multi-signal ingestion: weather, alerts, satellite/vegetation, fire, hydric/soil stress, and reusable hydrology signals.
+- Implement real scheduled multi-signal ingestion: weather, alerts, satellite/vegetation, fire, hydric/soil stress, and reusable hydrology signals, with a base scheduler tick every 1 hour and per-source cadence before final provider scheduling.
 - Persist raw evidence, normalized summaries, run status, freshness, confidence, degradation reasons, and deterministic risk snapshots.
 - Dashboard-first presentation with signal cards, provenance, scheduler/recompute status, alerts, timelines, and PDF export from persisted dashboard state.
 - Strict TDD gates before implementation: contracts, adapters, repositories, scheduler, API, E2E, PDF, and worker tests.
@@ -29,7 +29,7 @@ Launch Agronautas MVP as a real-data agricultural risk dashboard for Argentina, 
 
 ## Approach
 
-Use Approach 2 from exploration: production MVP real-ingestion slice. Keep domain/risk logic outside UI; define typed TS/Python contracts first, then implement provider adapters and a single cron/scheduler entrypoint that enqueues idempotent jobs every X hours with locks, retries/DLQ, backfill, and latest-good fallback. PDF is generated from persisted dashboard state, not separate logic.
+Use Approach 2 from exploration: production MVP real-ingestion slice. Keep domain/risk logic outside UI; define typed TS/Python contracts first, then implement provider adapters and a single cron/scheduler entrypoint with a 1-hour base tick. Before final provider scheduling, research and record each provider/source update cadence, rate limit, and freshness SLA; schedule each source according to its real cadence instead of blindly running all sources hourly. PDF is generated from persisted dashboard state, not separate logic.
 
 ## Affected Areas
 
@@ -47,7 +47,7 @@ Use Approach 2 from exploration: production MVP real-ingestion slice. Keep domai
 
 | Risk | Likelihood | Mitigation |
 |------|------------|------------|
-| Provider failure/quota | High | Fixtures, retries, latest-good degraded mode, freshness/confidence display. |
+| Provider failure/quota | High | Fixtures, retries, latest-good degraded mode, freshness/confidence display, and per-source cadence/rate-limit documentation before final scheduling. |
 | Scope ballooning | Med | MVP limited to real ingestion + dashboard + PDF; auth deferred. |
 | Duplicate scheduled jobs | Med | Idempotency keys, Postgres/Redis locks, run status tests. |
 | Misleading PDF/satellite confidence | Med | Timestamp, evidence refs, cloud/staleness/degradation disclaimers. |
@@ -59,12 +59,13 @@ Keep feature/config flags for new scheduler/providers/PDF route. Disable cron en
 ## Dependencies
 
 - Selected real providers and credentials/rate limits.
-- Cron host: Render Cron, GitHub Actions schedule, or Vercel Cron trigger.
+- Cron host capable of a 1-hour base tick: Render Cron, GitHub Actions schedule, or Vercel Cron trigger.
+- Provider cadence research for each selected real source before final scheduler configuration.
 - PostGIS/Postgres and Redis availability.
 
 ## Success Criteria
 
 - [ ] `pnpm test`, package tests, Playwright E2E, and worker `pytest` pass with new failing-first coverage.
 - [ ] Real-mode dashboard uses persisted provider data and never silently swaps demo fixtures.
-- [ ] Scheduler runs every X hours idempotently with visible freshness, failures, and next-run status.
+- [ ] Scheduler ticks hourly, then enqueues each source only when due by recorded provider cadence, with visible freshness, failures, and next-run status.
 - [ ] PDF includes timestamp, risk, drivers, evidence, confidence, and degradation disclaimers.

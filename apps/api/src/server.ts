@@ -10,6 +10,10 @@ import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
 import { createHydrologyGovernmentRouter } from './presentation/routes/hydrology-government'
 import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
+import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type SourceWindow } from './infrastructure/jobs/agronautas-scheduler'
+import { PostgresSignalIngestionRepository } from './infrastructure/database/postgres/agronautas-signal-ingestion-repository'
+import { PostgresSourceCadenceRepository } from './infrastructure/database/postgres/agronautas-source-cadence-repository'
+import type { SignalIngestionRepository, SourceCadenceRepository } from './domain/repositories/agronautas'
 
 dotenv.config()
 
@@ -50,5 +54,35 @@ export function startServer(): void {
 
   app.listen(PORT, () => {
     logger.info({ port: PORT }, 'API server listening')
+  })
+
+  startAgronautasSchedulerFromEnv()
+}
+
+interface AgronautasSchedulerStartupDependencies {
+  signalIngestionRepository?: Pick<SignalIngestionRepository, 'getLastSuccessfulObservedAtBySource'>
+  sourceCadenceRepository?: Pick<SourceCadenceRepository, 'listEnabled'>
+  scheduler?: Pick<AgronautasSignalScheduler, 'tick'>
+  now?: () => Date
+  setInterval?: typeof setInterval
+  clearInterval?: typeof clearInterval
+}
+
+export function startAgronautasSchedulerFromEnv(env: NodeJS.ProcessEnv = process.env, dependencies: AgronautasSchedulerStartupDependencies = {}) {
+  const enabled = env['AGRONAUTAS_SCHEDULER_ENABLED'] === 'true'
+  const signalIngestionRepository = dependencies.signalIngestionRepository ?? new PostgresSignalIngestionRepository()
+  const sourceCadenceRepository = dependencies.sourceCadenceRepository ?? new PostgresSourceCadenceRepository()
+  return createAgronautasSchedulerRuntime({
+    enabled,
+    scheduler: dependencies.scheduler ?? new AgronautasSignalScheduler(
+      { async acquireWindow() { return enabled } },
+      { async enqueue(window: SourceWindow) { logger.info({ runId: window.runId, provider: window.provider, signalType: window.signalType }, 'Agronautas scheduler due window planned') }, async deadLetter(window: SourceWindow, error: Error) { logger.error({ runId: window.runId, error: error.message }, 'Agronautas scheduler enqueue failed') } },
+    ),
+    cadences: undefined,
+    getLastSuccess: async () => signalIngestionRepository.getLastSuccessfulObservedAtBySource?.() ?? new Map(),
+    getCadences: async () => sourceCadenceRepository.listEnabled(),
+    now: dependencies.now,
+    setInterval: dependencies.setInterval,
+    clearInterval: dependencies.clearInterval,
   })
 }

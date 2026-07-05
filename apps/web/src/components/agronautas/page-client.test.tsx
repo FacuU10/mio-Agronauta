@@ -6,6 +6,7 @@ import { render, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { QueryProvider } from '@/lib/query-client'
 import { AgronautasPageClient } from './page-client'
 import { createAgronautasMockService, type AgronautasService } from '@/lib/agronautas/service'
+import { fieldOverviewSchema } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
 
 test('apiClient usa BFF versionado por defecto', async () => {
@@ -64,6 +65,112 @@ test('alta válida muestra dashboard con alertas y evidencia', async () => {
     assert.ok(view.getByText(/weather:open-meteo/i))
     assert.ok(view.getByText('Timeline climático'))
   })
+})
+
+test('dashboard Agronautas renderiza fuentes, frescura, evidencia y acción PDF desde payload persistido', async () => {
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={createAgronautasMockService()} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('heading', { level: 1, name: /Agronautas/i }))
+    const dashboardText = view.getByTestId('agronautas-persisted-payload-card').textContent ?? ''
+    assert.match(document.body.textContent ?? '', /campo argentino/i)
+    assert.match(dashboardText, /Frescura degradada/i)
+    assert.match(dashboardText, /open-meteo/i)
+    assert.match(dashboardText, /satellite_data_stale/i)
+    assert.match(dashboardText, /Último dato obtenido/i)
+    assert.match(dashboardText, /Fuentes degradadas o no disponibles/i)
+    assert.match(dashboardText, /Los indicadores son soporte operativo y no reemplazan criterio agronómico local/i)
+    assert.match(dashboardText, /Confianza media/i)
+    assert.ok(view.getByRole('link', { name: /Exportar PDF/i }))
+  })
+  assert.equal(view.queryByText(/Iberá-Alerta/i), null)
+})
+
+test('panel admin de ingestión y frescura muestra modos, próxima corrida y alertas no-producción', async () => {
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={createAgronautasMockService()} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    const adminText = view.getByTestId('agronautas-ingestion-admin-panel').textContent ?? ''
+    assert.match(adminText, /Panel de ingestión/i)
+    assert.match(adminText, /open-meteo/i)
+    assert.match(adminText, /Mock/i)
+    assert.match(adminText, /Próxima corrida 03\/06\/2026, 01:00/i)
+    assert.match(adminText, /Trigger seguro deshabilitado/i)
+
+    const freshnessText = view.getByTestId('agronautas-source-freshness-panel').textContent ?? ''
+    assert.match(freshnessText, /Clima/i)
+    assert.match(freshnessText, /Suelo/i)
+    assert.match(freshnessText, /Satélite/i)
+    assert.match(freshnessText, /stale/i)
+    assert.match(freshnessText, /unavailable/i)
+
+    const alertText = view.getByTestId('agronautas-operational-alerts-panel').textContent ?? ''
+    assert.match(alertText, /Anegamiento/i)
+    assert.match(alertText, /Estrés/i)
+    assert.match(alertText, /Heladas/i)
+    assert.match(alertText, /no producción/i)
+  })
+})
+
+test('alta guiada envía FieldIntake v2 con categoría, provincia y país', async () => {
+  const submitted: unknown[] = []
+  const base = createAgronautasMockService()
+  const service: AgronautasService = {
+    ...base,
+    async createFieldIntake(input) {
+      submitted.push(input)
+      return base.createFieldIntake(input)
+    },
+  }
+
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={service} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    assert.deepEqual(submitted[0], {
+      contractVersion: '1.0.0',
+      fieldId: 'corrientes-lote-001',
+      cropCategory: 'cereal',
+      crop: 'rice',
+      provinceCode: 'AR-W',
+      countryCode: 'AR',
+      hectares: 42.5,
+      locality: 'Mercedes',
+      growthStage: 'tillering',
+      location: { lat: -29.1846, lng: -58.0759 },
+    })
+  })
+})
+
+test('field overview acepta cultivos no-arroz dentro del alcance Corrientes', () => {
+  const overview = fieldOverviewSchema.parse({
+    fieldId: 'corrientes-maiz-001',
+    externalFieldId: 'ext-maiz-001',
+    crop: 'maize',
+    hectares: 25,
+    locality: 'Mercedes',
+    provinceCode: 'AR-W',
+    centroid: { lat: -29.18, lng: -58.08 },
+  })
+
+  assert.equal(overview.crop, 'maize')
 })
 
 test('rechazo fuera de alcance expone error explícito', async () => {

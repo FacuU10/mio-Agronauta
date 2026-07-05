@@ -4,13 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "pnpm --dir ../../packages/zod-schemas build && next build",
+    "build": "pnpm --dir ../../packages/zod-schemas build:ensure && next build",
     "start": "next start .",
     "lint": "next lint",
     "lint:security": "eslint . --ext .ts,.tsx --max-warnings 0",
     "test": "node --import tsx --test src/**/*.test.ts src/**/*.test.tsx",
     "test:e2e": "playwright test",
-    "clean": "rm -rf .next"
+    "clean": "node scripts/clean.mjs"
   },
   "dependencies": {
     "@repo/zod-schemas": "workspace:*",

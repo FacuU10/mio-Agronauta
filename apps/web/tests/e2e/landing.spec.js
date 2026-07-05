@@ -13,10 +13,15 @@ test('landing matches source anchors and routes demo CTAs to /probar-demo while 
   await expect(page.getByAltText('Agronautas').first()).toBeVisible()
   expect(await brandedImages.count()).toBeGreaterThanOrEqual(4)
 
-  const imageReadiness = await brandedImages.evaluateAll((images) =>
-    images.slice(0, 3).every((image) => image.complete && image.naturalWidth > 0)
-  )
-  expect(imageReadiness).toBe(true)
+  await expect
+    .poll(
+      async () =>
+        brandedImages.evaluateAll((images) =>
+          images.slice(0, 3).every((image) => image.complete && image.naturalWidth > 0)
+        ),
+      { message: 'first branded landing images should finish loading before readiness assertion' },
+    )
+    .toBe(true)
 
   await expect(page.getByText(/organización o rol/i)).toHaveCount(0)
   await expect(page.getByText(/solicitar contacto/i)).toHaveCount(0)
@@ -43,7 +48,12 @@ test('landing matches source anchors and routes demo CTAs to /probar-demo while 
   await expect(indicators.nth(0)).toHaveClass(/bg-emerald-500/)
 
   await page.setViewportSize({ width: 1700, height: 1200 })
-  await page.getByRole('link', { name: /probar demo/i }).first().click()
+  const primaryDemoLink = page.getByRole('link', { name: /probar demo/i }).first()
+  await expect(primaryDemoLink).toHaveAttribute('href', '/probar-demo')
+  await Promise.all([
+    page.waitForURL('**/probar-demo'),
+    primaryDemoLink.click(),
+  ])
   await expect(page).toHaveURL(/\/probar-demo$/)
 
   await page.goto('/demo')

@@ -395,6 +395,89 @@ test('GET /fields/:id/status resume frescura y última actualización sin encola
   assert.equal(json.lastUpdatedAt, '2026-06-03T00:00:00.000Z')
 })
 
+test('GET /fields/:id/dashboard compone payload persistido con riesgo, fuentes, frescura y evidencia degradada', async () => {
+  const field = testField('field-dashboard-1')
+  const fieldStore = new Map([[field.props.id, field]])
+  const snapshot = new RiskSnapshotFoundation({
+    snapshotId: 'snap-dashboard-1',
+    fieldId: field.props.id,
+    runId: 'run-dashboard-1',
+    score: 78,
+    confidence: 0.67,
+    computedAt: new Date('2026-06-03T00:00:00.000Z'),
+    validUntil: new Date('2026-06-03T06:00:00.000Z'),
+    ruleVersion: 'risk-v0',
+    drivers: [{ key: 'satellite_stress', label: 'Estrés satelital', weight: 0.3, value: 0.81 }],
+    evidenceRefs: ['signal_ingestion_runs:sentinel:satellite:run-dashboard-1'],
+    degradationReasons: ['satellite_data_stale'],
+  })
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    riskSnapshotRepository: { async save() {}, async getLatest() { return snapshot }, async listTimeline() { return [snapshot] } },
+    signalSummaryRepository: { async getLatestClimateSummary() { return null }, async getLatestSatelliteSummary() { return null }, async listClimateTimeline() { return [{ provider: 'open-meteo', observedAt: new Date('2026-06-03T00:00:00.000Z'), freshnessHours: 8, confidence: 0.69, staleCause: 'latest_good_fallback', provenance: ['signal_ingestion_runs:open-meteo:climate'], temperatureC: 28, rainfallMm7d: 35, humidityPct: 80 }] } },
+    alertSnapshotRepository: { async saveMany() {}, async getLatestForField() { return [{ alertId: 'alert-dashboard-1', fieldId: field.props.id, basedOnSnapshotId: snapshot.props.snapshotId, runId: snapshot.props.runId, type: 'water_stress', priority: 2, confidence: 0.61, freshness: 'degraded', degradationReasons: ['satellite_data_stale'] }] }, async listTimeline() { return [] } },
+  }), `/agronautas/fields/${field.props.id}/dashboard`)
+
+  assert.equal(response.status, 200)
+  const json = await response.json() as { snapshotId: string; status: string; signals: Array<{ status: string }>; provenance: Array<{ provider: string }>; scheduler: { failures: unknown[]; nextDueBySource: unknown[] }; generatedAt: string; risk: { score: number } }
+  assert.equal(json.snapshotId, 'snap-dashboard-1')
+  assert.equal(json.status, 'degraded')
+  assert.equal(json.signals[0]?.status, 'degraded')
+  assert.equal(json.provenance[0]?.provider, 'open-meteo')
+  assert.equal(json.scheduler.failures.length, 1)
+  assert.deepEqual(json.scheduler.nextDueBySource, [])
+  assert.match(json.generatedAt, /T/)
+})
+
+test('GET /fields/:id/dashboard.pdf reutiliza el mismo payload persistido del dashboard', async () => {
+  const field = testField('field-pdf-1')
+  const fieldStore = new Map([[field.props.id, field]])
+  const snapshot = new RiskSnapshotFoundation({ snapshotId: 'snap-pdf-1', fieldId: field.props.id, runId: 'run-pdf-1', score: 64, confidence: 0.72, computedAt: new Date('2026-06-03T00:00:00.000Z'), validUntil: new Date('2026-06-03T06:00:00.000Z'), ruleVersion: 'risk-v0', drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.4, value: 0.64 }], evidenceRefs: ['signal_ingestion_runs:open-meteo:climate:run-pdf-1'], degradationReasons: [] })
+
+  const app = createTestApp({ fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }), riskSnapshotRepository: { async save() {}, async getLatest() { return snapshot }, async listTimeline() { return [snapshot] } } })
+  const dashboard = await request(app, `/agronautas/fields/${field.props.id}/dashboard`).then((res) => res.json()) as { snapshotId: string; risk: { score: number; confidence: number }; freshness: string; lastDataFetchedAt: string; presentation: { disclaimer: string; confidenceLabel: string; sourcesUnavailable: boolean }; provenance: Array<{ evidenceId: string }> }
+  const pdf = await request(app, `/agronautas/fields/${field.props.id}/dashboard.pdf`)
+
+  assert.equal(pdf.status, 200)
+  assert.match(pdf.headers.get('content-type') ?? '', /application\/pdf/)
+  const text = await pdf.text()
+  assert.match(text, /%PDF-1\.4/)
+  assert.match(text, /xref/)
+  assert.match(text, /trailer/)
+  assert.match(text, new RegExp(dashboard.snapshotId))
+  assert.match(text, new RegExp(String(dashboard.risk.score)))
+  assert.match(text, new RegExp(String(dashboard.risk.confidence)))
+  assert.match(text, new RegExp(dashboard.lastDataFetchedAt))
+  assert.match(text, /Disclaimers: Los indicadores son soporte operativo y no reemplazan criterio agronómico local/)
+  assert.match(text, new RegExp(`Frescura=${dashboard.freshness}`))
+  assert.match(text, new RegExp(`Confianza=${dashboard.presentation.confidenceLabel}`))
+  assert.match(text, new RegExp(`Fuentes degradadas o no disponibles=${String(dashboard.presentation.sourcesUnavailable)}`))
+  assert.match(text, new RegExp(dashboard.provenance[0]?.evidenceId ?? 'evidence='))
+})
+
+test('GET /fields/:id/dashboard expone contrato visual con última obtención, degradación, disclaimer y confianza', async () => {
+  const field = testField('field-dashboard-contract-1')
+  const fieldStore = new Map([[field.props.id, field]])
+  const snapshot = new RiskSnapshotFoundation({ snapshotId: 'snap-dashboard-contract-1', fieldId: field.props.id, runId: 'run-dashboard-contract-1', score: 69, confidence: 0.58, computedAt: new Date('2026-06-03T00:00:00.000Z'), validUntil: new Date('2026-06-03T06:00:00.000Z'), ruleVersion: 'risk-v0', drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.4, value: 0.64 }], evidenceRefs: ['signal_ingestion_runs:open-meteo:climate:run-dashboard-contract-1'], degradationReasons: ['weather_data_stale'] })
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    riskSnapshotRepository: { async save() {}, async getLatest() { return snapshot }, async listTimeline() { return [snapshot] } },
+    signalSummaryRepository: { async getLatestClimateSummary() { return null }, async getLatestSatelliteSummary() { return null }, async listClimateTimeline() { return [{ provider: 'open-meteo', observedAt: new Date('2026-06-02T22:00:00.000Z'), freshnessHours: 10, confidence: 0.58, staleCause: 'source_timeout', provenance: ['https://api.open-meteo.com/'], temperatureC: 24, rainfallMm7d: 28, humidityPct: 72 }] } },
+  }), `/agronautas/fields/${field.props.id}/dashboard`)
+
+  assert.equal(response.status, 200)
+  const json = await response.json() as { lastDataFetchedAt: string; freshness: string; risk: { confidence: number }; presentation: { disclaimer: string; confidenceLabel: string; sourcesUnavailable: boolean; staleFlags: string[] } }
+  assert.equal(json.lastDataFetchedAt, '2026-06-02T22:00:00.000Z')
+  assert.equal(json.freshness, 'degraded')
+  assert.equal(json.risk.confidence, 0.58)
+  assert.equal(json.presentation.confidenceLabel, 'media')
+  assert.equal(json.presentation.sourcesUnavailable, true)
+  assert.deepEqual(json.presentation.staleFlags, ['weather_data_stale', 'weather_data_stale'])
+  assert.match(json.presentation.disclaimer, /no reemplazan criterio agronómico local/i)
+})
+
 test('GET /agronautas/runtime expone modo y prefijo activos', async () => {
   process.env['AGRONAUTAS_RUNTIME_MODE'] = 'demo'
   process.env['AGRONAUTAS_ROUTE_PREFIX'] = '/agronautas'
@@ -462,7 +545,7 @@ test('modo demo responde contratos backend-driven sin depender de repositorios',
   const createResponse = await request(app, '/agronautas/fields', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'demo-field', crop: 'rice', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
+    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'demo-field', cropCategory: 'cereal', crop: 'rice', provinceCode: 'AR-W', countryCode: 'AR', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
   })
   assert.equal(createResponse.status, 201)
 
@@ -474,6 +557,25 @@ test('modo demo responde contratos backend-driven sin depender de repositorios',
   assert.deepEqual(riskJson.snapshot.degradationReasons, ['satellite_data_stale'])
 
   delete process.env['AGRONAUTAS_RUNTIME_MODE']
+})
+
+test('modo demo preserva campos FieldIntake v2 en el overview creado', async () => {
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'demo'
+  try {
+
+  const app = createTestApp()
+  const createResponse = await request(app, '/agronautas/fields', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'demo-maize-field', cropCategory: 'cereal', crop: 'maize', provinceCode: 'AR-W', countryCode: 'AR', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
+  })
+  assert.equal(createResponse.status, 201)
+  const created = await createResponse.json() as { coverage: { provinceCode: string } }
+  assert.equal(created.coverage.provinceCode, 'AR-W')
+
+  } finally {
+  delete process.env['AGRONAUTAS_RUNTIME_MODE']
+  }
 })
 
 test('POST /fields/:id/chat responde con resumen grounded y action trace', async () => {

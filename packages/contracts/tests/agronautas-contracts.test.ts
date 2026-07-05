@@ -11,9 +11,15 @@ import {
   alertSnapshotSchema,
   copilotContextSchema,
   corrientesRiceZoneBoundarySource,
+  dashboardSnapshotSchema,
   degradationReasons,
   fieldIntakeSchema,
+  groundedChatRequestSchema,
+  pdfReportRequestSchema,
   riskSnapshotSchema,
+  schedulerStatusSchema,
+  signalEvidenceSchema,
+  sourceCadenceSchema,
 } from '../../zod-schemas/src/agronautas.js'
 
 const contractsRoot = join(import.meta.dirname, '..')
@@ -25,6 +31,12 @@ const validators = {
   RiskSnapshot: riskSnapshotSchema,
   AlertSnapshot: alertSnapshotSchema,
   CopilotContext: copilotContextSchema,
+  SignalEvidence: signalEvidenceSchema,
+  SourceCadence: sourceCadenceSchema,
+  SchedulerStatus: schedulerStatusSchema,
+  DashboardSnapshot: dashboardSnapshotSchema,
+  PdfReportRequest: pdfReportRequestSchema,
+  GroundedChatRequest: groundedChatRequestSchema,
 } as const
 
 test('mantiene enums y metadata compartida alineados con el catálogo JSON Schema', () => {
@@ -34,6 +46,9 @@ test('mantiene enums y metadata compartida alineados con el catálogo JSON Schem
   assert.deepEqual(schema.$defs.AlertSnapshot.properties.type.enum, [...agronautasAlertTypes])
   assert.deepEqual(schema.$defs.AgronautasContractError.properties.code.enum, [...agronautasContractErrorCodes])
   assert.equal(schema.$defs.CorrientesRiceZoneBoundaryMetadata.properties.sourceName.type, 'string')
+  assert.deepEqual(schema.$defs.FieldIntake.properties.crop.enum, ['rice', 'maize', 'soybean', 'wheat', 'sunflower', 'pasture', 'citrus', 'other'])
+  assert.equal(schema.$defs.SignalEvidence.properties.rawHash.type, 'string')
+  assert.equal(schema.$defs.SchedulerStatus.properties.nextDueBySource.items.properties.cadence.$ref, '#/$defs/SourceCadence')
   assert.equal(corrientesRiceZoneBoundarySource.normalizationStatus, 'placeholder-pending-ingest')
 })
 

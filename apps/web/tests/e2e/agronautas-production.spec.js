@@ -9,8 +9,8 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields', async (route) => {
-    if (route.request().method() !== 'POST') return route.fallback()
+  await page.route('**/fields', async (route) => {
+    if (route.request().method() !== 'POST' || !route.request().url().endsWith('/fields')) return route.fallback()
     await route.fulfill({
       status: 201,
       contentType: 'application/json',
@@ -18,7 +18,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields/field-prod-1', async (route) => {
+  await page.route('**/fields/field-prod-1', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -26,7 +26,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields/field-prod-1/risk/current', async (route) => {
+  await page.route('**/fields/field-prod-1/risk/current', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -43,7 +43,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields/field-prod-1/alerts/current', async (route) => {
+  await page.route('**/fields/field-prod-1/alerts/current', async (route) => {
     await route.fulfill({
       status: 202,
       contentType: 'application/json',
@@ -61,7 +61,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields/field-prod-1/status', async (route) => {
+  await page.route('**/fields/field-prod-1/status', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -79,7 +79,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields/field-prod-1/risk/timeline', async (route) => {
+  await page.route('**/fields/field-prod-1/risk/timeline', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -97,7 +97,7 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
-  await page.route('**/api/agronautas/**/fields/field-prod-1/weather/timeline', async (route) => {
+  await page.route('**/fields/field-prod-1/weather/timeline', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

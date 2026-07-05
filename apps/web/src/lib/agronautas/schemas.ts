@@ -1,12 +1,14 @@
 import { z } from 'zod'
 import {
   AGRONAUTAS_CONTRACT_VERSION,
+  agronautasSupportedCrops,
   alertSnapshotSchema,
   demoContactSubmissionResponseSchema,
   demoContactSubmissionSchema,
   fieldIntakeSchema,
   groundedChatRequestSchema,
   groundedChatResponseSchema,
+  dashboardSnapshotSchema,
   monitoringStatusSchema,
   recomputeRequestResultSchema,
   riskSnapshotSchema,
@@ -27,6 +29,7 @@ export {
   riskSnapshotSchema,
   riskTimelineResponseSchema,
   weatherTimelineResponseSchema,
+  dashboardSnapshotSchema,
 }
 
 export const fieldCreatedSchema = z.object({
@@ -41,7 +44,7 @@ export const fieldCreatedSchema = z.object({
 export const fieldOverviewSchema = z.object({
   fieldId: z.string().min(1),
   externalFieldId: z.string().min(1),
-  crop: z.literal('rice'),
+  crop: z.enum(agronautasSupportedCrops),
   hectares: z.number().positive(),
   locality: z.string().min(1),
   provinceCode: z.string().min(1),
@@ -136,5 +139,6 @@ export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema>
 export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>
 export type WeatherTimelineResponse = z.infer<typeof weatherTimelineResponseSchema>
+export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>

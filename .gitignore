@@ -5,5 +5,13 @@ dist/
 .env
 .env.local
 coverage/
+*.tsbuildinfo
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+apps/web/test-results/
+apps/web/playwright-report/
+playwright-report/
 *.log
 .DS_Store

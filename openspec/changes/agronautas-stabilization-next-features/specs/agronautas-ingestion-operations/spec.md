@@ -31,6 +31,24 @@ The system MUST persist cadence per source and expose next-due visibility for ea
 - WHEN the scheduler starts
 - THEN due calculation uses stored cadence instead of empty defaults
 
+### Requirement: Extended Backoff And Hourly Desist
+The system MUST use the approved ingestion backoff window: attempt 1 waits 45 seconds, attempt 2 waits 5 minutes, attempt 3 waits 10 minutes, and attempt 4 waits 15 minutes. If ingestion still fails after that window, the system MUST desist until the next scheduled hourly run to prevent API blocks or involuntary DDOS against national providers.
+
+#### Scenario: Backoff attempts are visible
+- GIVEN a national provider ingestion keeps failing
+- WHEN attempts 1 through 4 are scheduled
+- THEN status shows waits of 45s, 5m, 10m, and 15m respectively
+
+#### Scenario: Desist after exhausted retries
+- GIVEN attempt 4 has failed after its 15m wait
+- WHEN retry state is evaluated
+- THEN no additional retry runs before the next scheduled hourly run
+
+#### Scenario: Iberá-Alerta remains separate
+- GIVEN ingestion backoff is changed for Agronautas
+- WHEN module boundaries are reviewed
+- THEN Iberá-Alerta remains untouched and outside this requirement
+
 ### Requirement: Stabilization-Gated Next Features
 The system MUST gate ingestion admin/status, source freshness dashboard, PDF parity polish, and alerts/notifications behind green stabilization gates.
 

@@ -12,7 +12,7 @@
     "worker:install": "python -m pip install -e ./apps/workflow-runtime-python[dev]",
     "worker:run": "python -m worker.main",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "clean": "turbo run clean && rm -rf node_modules"
+    "clean": "turbo run clean && node scripts/clean-root.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",

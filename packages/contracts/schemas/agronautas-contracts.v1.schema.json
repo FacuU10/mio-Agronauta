@@ -48,9 +48,12 @@
       "properties": {
         "contractVersion": { "const": "1.0.0" },
         "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "crop": { "const": "rice" },
+        "cropCategory": { "enum": ["cereal", "oilseed", "horticulture", "forage", "fruit", "other"], "default": "other" },
+        "crop": { "enum": ["rice", "maize", "soybean", "wheat", "sunflower", "pasture", "citrus", "other"] },
         "hectares": { "type": "number", "exclusiveMinimum": 0 },
         "locality": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "provinceCode": { "const": "AR-W", "default": "AR-W" },
+        "countryCode": { "const": "AR", "default": "AR" },
         "growthStage": { "enum": ["emergence", "tillering", "panicle_initiation", "flowering", "maturity"] },
         "location": {
           "type": "object",
@@ -62,6 +65,51 @@
           },
           "additionalProperties": false
         }
+      },
+      "additionalProperties": false
+    },
+    "SignalType": { "enum": ["weather", "alert", "satellite_vegetation", "fire", "hydric_soil", "hydrology"] },
+    "SignalStatus": { "enum": ["fresh", "stale", "degraded", "missing"] },
+    "SignalEvidence": {
+      "type": "object",
+      "required": ["evidenceId", "provider", "signalType", "observedAt", "ingestedAt", "sourceUrl", "rawHash", "confidence", "freshness", "degradationReasons"],
+      "properties": {
+        "evidenceId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "provider": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "signalType": { "$ref": "#/$defs/SignalType" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "ingestedAt": { "type": "string", "format": "date-time" },
+        "sourceUrl": { "type": "string", "format": "uri" },
+        "rawHash": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "freshness": { "$ref": "#/$defs/SignalStatus" },
+        "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } }
+      },
+      "additionalProperties": false
+    },
+    "SourceCadence": {
+      "type": "object",
+      "required": ["provider", "signalType", "updateCadence", "rateLimit", "freshnessSla", "researchedAt", "sourceRef"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "signalType": { "$ref": "#/$defs/SignalType" },
+        "updateCadence": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "rateLimit": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "freshnessSla": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "researchedAt": { "type": "string", "format": "date-time" },
+        "sourceRef": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "SchedulerStatus": {
+      "type": "object",
+      "required": ["lastRunAt", "nextRunAt", "lockStatus", "failures", "nextDueBySource"],
+      "properties": {
+        "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
+        "nextRunAt": { "type": ["string", "null"], "format": "date-time" },
+        "lockStatus": { "enum": ["available", "locked", "unknown"] },
+        "failures": { "type": "array", "items": { "type": "object", "required": ["provider", "signalType", "reason"], "properties": { "provider": { "type": "string", "minLength": 1, "maxLength": 80 }, "signalType": { "$ref": "#/$defs/SignalType" }, "reason": { "type": "string", "minLength": 1, "maxLength": 240 } }, "additionalProperties": false } },
+        "nextDueBySource": { "type": "array", "items": { "type": "object", "required": ["provider", "signalType", "dueAt", "cadence"], "properties": { "provider": { "type": "string", "minLength": 1, "maxLength": 80 }, "signalType": { "$ref": "#/$defs/SignalType" }, "dueAt": { "type": "string", "format": "date-time" }, "cadence": { "$ref": "#/$defs/SourceCadence" } }, "additionalProperties": false } }
       },
       "additionalProperties": false
     },
@@ -148,7 +196,8 @@
       "properties": {
         "contractVersion": { "const": "1.0.0" },
         "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "crop": { "const": "rice" },
+        "crop": { "enum": ["rice", "maize", "soybean", "wheat", "sunflower", "pasture", "citrus", "other"] },
+        "cropCategory": { "enum": ["cereal", "oilseed", "horticulture", "forage", "fruit", "other"] },
         "growthStage": { "enum": ["emergence", "tillering", "panicle_initiation", "flowering", "maturity"] },
         "requestedWindow": {
           "type": "object",
@@ -164,6 +213,45 @@
         "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } },
         "snapshot": { "$ref": "#/$defs/CopilotSnapshotReference" },
         "alerts": { "type": "array", "items": { "$ref": "#/$defs/CopilotAlertReference" } }
+      },
+      "additionalProperties": false
+    },
+    "DashboardSnapshot": {
+      "type": "object",
+      "required": ["contractVersion", "snapshotId", "field", "status", "freshness", "signals", "risk", "alerts", "provenance", "scheduler", "generatedAt", "lastDataFetchedAt", "presentation"],
+      "properties": {
+        "contractVersion": { "const": "1.0.0" },
+        "snapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "field": { "type": "object", "required": ["fieldId", "cropCategory", "crop", "provinceCode", "locality"], "properties": { "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 }, "cropCategory": { "enum": ["cereal", "oilseed", "horticulture", "forage", "fruit", "other"] }, "crop": { "enum": ["rice", "maize", "soybean", "wheat", "sunflower", "pasture", "citrus", "other"] }, "provinceCode": { "const": "AR-W" }, "locality": { "type": "string", "minLength": 1, "maxLength": 120 } }, "additionalProperties": false },
+        "status": { "$ref": "#/$defs/SignalStatus" },
+        "freshness": { "$ref": "#/$defs/SignalStatus" },
+        "signals": { "type": "array", "items": { "type": "object", "required": ["signalType", "status", "evidenceRefs", "confidence", "degradationReasons"], "properties": { "signalType": { "$ref": "#/$defs/SignalType" }, "status": { "$ref": "#/$defs/SignalStatus" }, "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } } }, "additionalProperties": false } },
+        "risk": { "type": "object", "required": ["score", "level", "confidence", "drivers"], "properties": { "score": { "type": "number", "minimum": 0, "maximum": 100 }, "level": { "enum": ["low", "medium", "high"] }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "drivers": { "type": "array", "items": { "$ref": "#/$defs/RiskDriver" } } }, "additionalProperties": false },
+        "alerts": { "type": "array" },
+        "provenance": { "type": "array", "items": { "$ref": "#/$defs/SignalEvidence" } },
+        "scheduler": { "$ref": "#/$defs/SchedulerStatus" },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "lastDataFetchedAt": { "type": "string", "format": "date-time" },
+        "presentation": {
+          "type": "object",
+          "required": ["disclaimer", "confidenceLabel", "sourcesUnavailable", "staleFlags"],
+          "properties": {
+            "disclaimer": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "confidenceLabel": { "enum": ["alta", "media", "baja"] },
+            "sourcesUnavailable": { "type": "boolean" },
+            "staleFlags": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "PdfReportRequest": {
+      "type": "object",
+      "required": ["fieldId", "snapshotId"],
+      "properties": {
+        "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "snapshotId": { "type": "string", "minLength": 1, "maxLength": 80 }
       },
       "additionalProperties": false
     },

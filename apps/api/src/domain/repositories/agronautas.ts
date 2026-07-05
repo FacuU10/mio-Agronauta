@@ -49,7 +49,7 @@ export interface SignalIngestionRunRecord {
   fieldId: string
   runId: string
   provider: string
-  signalType: 'climate' | 'satellite'
+  signalType: AgronautasSignalType
   status: 'succeeded' | 'degraded' | 'failed'
   startedAt: Date
   finishedAt?: Date
@@ -61,6 +61,26 @@ export interface SignalIngestionRunRecord {
 
 export interface SignalIngestionRepository {
   saveRun(record: SignalIngestionRunRecord): Promise<void>
+  findLatestGood?(fieldId: string, signalType: AgronautasSignalType): Promise<SignalIngestionRunRecord | null>
+  getLastSuccessfulObservedAtBySource?(): Promise<Map<string, Date>>
+}
+
+export type AgronautasSignalType = 'climate' | 'satellite' | 'weather_alert' | 'fire' | 'soil'
+
+export interface SourceCadenceRecord {
+  provider: string
+  signalType: AgronautasSignalType
+  updateCadenceMinutes: number
+  freshnessSlaMinutes: number
+  rateLimit?: string
+  sourceRef: string
+  researchedAt: Date
+  enabled: boolean
+}
+
+export interface SourceCadenceRepository {
+  upsert(record: SourceCadenceRecord): Promise<void>
+  listEnabled(): Promise<SourceCadenceRecord[]>
 }
 
 export interface RiskSnapshotRepository {

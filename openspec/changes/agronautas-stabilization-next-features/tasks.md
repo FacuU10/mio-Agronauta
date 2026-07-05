@@ -27,33 +27,33 @@ Chain strategy: size-exception
 
 ## Phase 1: Hygiene / Salvage
 
-- [ ] 1.1 RED: add/confirm a provenance check that fails on `.next`, `dist`, `.turbo`, `coverage`, `*.tsbuildinfo`, `__pycache__`, `*.pyc`, `*.egg-info`, generated maps/declarations.
-- [ ] 1.2 GREEN: inspect `git status --short` and remove generated/test-output artifacts from the working tree; keep only source, tests, docs, config, SQL, OpenSpec.
-- [ ] 1.3 REFACTOR: map every kept file to a spec requirement in `docs/runbooks/agronautas-production-hardening.md`; rollback by reverting this slice only.
+- [x] 1.1 RED: add/confirm a provenance check that fails on `.next`, `dist`, `.turbo`, `coverage`, `*.tsbuildinfo`, `__pycache__`, `*.pyc`, `*.egg-info`, generated maps/declarations.
+- [x] 1.2 GREEN: inspect `git status --short` and remove generated/test-output artifacts from the working tree; keep only source, tests, docs, config, SQL, OpenSpec.
+- [x] 1.3 REFACTOR: map every kept file to a spec requirement in `docs/runbooks/agronautas-production-hardening.md`; rollback by reverting this slice only.
 
 ## Phase 2: Deterministic Build / Test Gates
 
-- [ ] 2.1 RED: tests for `packages/zod-schemas` build output and `turbo.json` no-cache `web#build` + `@repo/zod-schemas#build` policy.
-- [ ] 2.2 GREEN: fix `package.json`, `apps/web/package.json`, `packages/zod-schemas/package.json`, `turbo.json` so clean Next builds run after schema `build:ensure`.
-- [ ] 2.3 VERIFY commands: `pnpm --filter @repo/zod-schemas build`, `pnpm --filter web build`, `pnpm turbo test --force`, `pnpm test`; rollback scripts/config only.
+- [x] 2.1 RED: tests for `packages/zod-schemas` build output and `turbo.json` no-cache `web#build` + `@repo/zod-schemas#build` policy.
+- [x] 2.2 GREEN: fix `package.json`, `apps/web/package.json`, `packages/zod-schemas/package.json`, `turbo.json` so clean Next builds run after schema `build:ensure`.
+- [x] 2.3 VERIFY commands: `pnpm --filter @repo/zod-schemas build`, `pnpm --filter web build`, `pnpm turbo test --force`, `pnpm test`; rollback scripts/config only.
 
 ## Phase 3: Provider Truth + Scheduler
 
-- [ ] 3.1 RED: schema/API tests for modes `live|seam|mock|unavailable`, evidence, failure reason, last-success, next-due, overdue.
-- [ ] 3.2 GREEN: update `packages/zod-schemas/src/agronautas.ts`, provider adapters, repositories, scheduler, and routes to persist cadence and classify truthfully.
-- [ ] 3.3 VERIFY: `pnpm --filter @repo/zod-schemas test`, `pnpm --filter api test -- agronautas`, plus restart/due-window tests; rollback API/schema slice.
+- [x] 3.1 RED: schema/API tests for modes `live|seam|mock|unavailable`, evidence, failure reason, last-success, next-due, overdue, and extended ingestion backoff: attempt 1 waits 45s, attempt 2 waits 5m, attempt 3 waits 10m, attempt 4 waits 15m, then desist until the next scheduled hourly run.
+- [x] 3.2 GREEN: update `packages/zod-schemas/src/agronautas.ts`, provider adapters, repositories, scheduler, and routes to persist cadence, classify truthfully, and enforce extended backoff without touching Iberá-Alerta.
+- [x] 3.3 VERIFY: `pnpm --filter @repo/zod-schemas test`, `pnpm --filter api test -- agronautas`, plus restart/due-window/backoff-desist tests; rollback API/schema slice.
 
 ## Phase 4: Dashboard / PDF Parity
 
-- [ ] 4.1 RED: API/web/PDF tests prove one persisted dashboard payload feeds dashboard and PDF with provider modes, freshness, fallback disclaimers.
-- [ ] 4.2 GREEN: wire `apps/api/src/presentation/routes/agronautas.ts`, `apps/web/src/lib/agronautas/*`, `apps/web/src/components/agronautas/*`, PDF route/export to shared payload.
-- [ ] 4.3 VERIFY: `pnpm --filter web test -- agronautas`, `pnpm --filter web test:e2e -- agronautas`; rollback UI/PDF route slice.
+- [x] 4.1 RED: API/web/PDF tests prove one persisted dashboard payload feeds dashboard and PDF with provider modes, freshness, fallback disclaimers.
+- [x] 4.2 GREEN: wire `apps/api/src/presentation/routes/agronautas.ts`, `apps/web/src/lib/agronautas/*`, `apps/web/src/components/agronautas/*`, PDF route/export to shared payload.
+- [x] 4.3 VERIFY: `pnpm --filter web test -- agronautas`, `pnpm --filter web test:e2e -- agronautas`; rollback UI/PDF route slice.
 
 ## Phase 5: Gated Next Features
 
-- [ ] 5.1 RED: tests for ingestion status/admin panel, source freshness panel, agriculture-wide/Corrientes-first copy, and disabled/non-production alerts when unsafe.
-- [ ] 5.2 GREEN: add gated admin/status, freshness UI, and alerts only when stabilization state is green; avoid rice-only regressions.
-- [ ] 5.3 VERIFY: `pnpm --filter api test -- agronautas`, `pnpm --filter web test -- agronautas`, scoped Playwright; rollback feature flags/UI only.
+- [x] 5.1 RED: tests for ingestion status/admin panel, source freshness panel, agriculture-wide/Corrientes-first copy, and disabled/non-production alerts when unsafe.
+- [x] 5.2 GREEN: add gated admin/status, freshness UI, and alerts only when stabilization state is green; avoid rice-only regressions.
+- [x] 5.3 VERIFY: `pnpm --filter api test -- agronautas`, `pnpm --filter web test -- agronautas`, scoped Playwright; rollback feature flags/UI only.
 
 ## Phase 6: Verification / Review
 
@@ -63,4 +63,4 @@ Chain strategy: size-exception
 
 ## Subagent Grouping Guidance
 
-Group apply by work unit above: hygiene/build, provider+scheduler, dashboard/PDF, next-features, verify. Each group starts RED, ends with exact verify commands, and stops on generated-artifact or false-live-provider evidence.
+Group apply by work unit above: hygiene/build, provider+scheduler, dashboard/PDF, next-features, verify. Each group starts RED, ends with exact verify commands, and stops on generated-artifact, false-live-provider evidence, missing backoff-desist protection, or any Iberá-Alerta touch.

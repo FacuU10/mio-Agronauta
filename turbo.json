@@ -9,6 +9,15 @@
     "@repo/zod-schemas#build": {
       "cache": false
     },
+    "api#build": {
+      "dependsOn": ["@repo/zod-schemas#build", "@repo/hydrology-engine#build"],
+      "outputs": ["dist/**"]
+    },
+    "web#build": {
+      "cache": false,
+      "dependsOn": ["@repo/zod-schemas#build"],
+      "outputs": [".next/**", "!.next/cache/**"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

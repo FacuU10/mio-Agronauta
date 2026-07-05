@@ -13,6 +13,8 @@ Stabilize the existing Agronautas diff as a candidate patch set, not as trusted 
 | Build determinism | Use clean package builds and non-cached web/schema gates: `@repo/zod-schemas#build.cache=false`, `web#build.cache=false`, explicit schema `build:ensure` before Next. | Trust Turbo cache globally. | Current `turbo.json` already disables schema/web cache; formalize this as release policy. |
 | Provider truth model | Add explicit provider `mode`: `live`, `fixture`, `placeholder`, `disabled`; status: `fresh`, `stale`, `degraded`, `missing`; evidence must include source URL, observed time, confidence, and degradation reasons. | Infer truth from provider name or runtime mode. | `PlaceholderRealProviderAdapter` currently can mask placeholder behavior behind real provider labels. |
 | Scheduler persistence | Source cadence repository owns cadence and last-success; scheduler computes due windows from persisted successes and records next due/failures in status payload. | In-memory `Map` only. | `createAgronautasSchedulerRuntime` already accepts `getLastSuccess`; wire it to repository-backed truth. |
+| Ingestion backoff safety | Retry waits MUST be 45s, 5m, 10m, and 15m for attempts 1-4; if the source still fails, desist until the next scheduled hourly run. | Tight retry loops; exponential retry without cap. | Protects national providers from API blocks and involuntary DDOS while preserving hourly recovery. |
+| Module boundary | Iberá-Alerta remains untouched as a separate module. | Share retry logic or refactor Iberá-Alerta during this change. | User-approved scope keeps Agronautas stabilization isolated. |
 | Dashboard/PDF parity | Create one backend dashboard payload contract and let UI and PDF render from it; no client-side recomputation. | Separate PDF route assembly. | Existing UI copy promises PDF uses the same persisted payload; enforce via contract tests. |
 | Implementation boundaries | Four grouped subagent slices: hygiene/build, provider/scheduler, dashboard/PDF, verify/review. | One large apply agent. | Reduces review load and makes rollback slice-local. |
 
@@ -45,12 +47,14 @@ Stabilize the existing Agronautas diff as a candidate patch set, not as trusted 
 
 Provider evidence extends current evidence with `mode`, `status`, `lastSuccessfulObservedAt`, `nextDueAt`, and optional `failureReason`. Dashboard/PDF payload becomes the single `dashboardSnapshotSchema` source, parsed by API tests, web service tests, Playwright, and PDF tests.
 
+Ingestion retry status MUST expose the extended backoff window: attempt 1 waits 45 seconds, attempt 2 waits 5 minutes, attempt 3 waits 10 minutes, attempt 4 waits 15 minutes, and any further failure desists until the next scheduled hourly run.
+
 ## Testing Strategy
 
 | Layer | What to Test | Approach |
 |---|---|---|
 | Unit | `.gitignore` policy, schema exports, provider mode taxonomy, scheduler due windows from persisted last-success. | Node tests and API tests written first. |
-| Integration | API dashboard payload, PDF route parity, job-run failure/last-success status. | Express route tests with fake repositories. |
+| Integration | API dashboard payload, PDF route parity, job-run failure/last-success status, extended backoff/desist behavior. | Express route tests with fake repositories. |
 | E2E | Agronautas dashboard shows provider mode, scheduler freshness, PDF export link, no false live claims. | Playwright `apps/web/tests/e2e/agronautas-*.spec.js`. |
 | Verify | Fresh clean gates. | `pnpm test`, `pnpm build`, `pnpm --filter web test:e2e`, plus clean no-cache release command documented in runbook. |
 

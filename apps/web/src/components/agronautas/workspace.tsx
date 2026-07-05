@@ -1,15 +1,18 @@
 'use client'
 
-import React from 'react'
+import { createElement, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
-import type { AlertsCurrent, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
+import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
+
+const React = { createElement }
 
 interface WorkspaceProps {
   runtimeMode: 'real' | 'demo'
@@ -24,6 +27,7 @@ interface WorkspaceProps {
   status?: MonitoringStatus
   riskTimeline?: RiskTimelineResponse
   weatherTimeline?: WeatherTimelineResponse
+  dashboardPayload?: DashboardSnapshot
   hydrologyDashboard?: HydrologyDashboard
   chatResponse?: GroundedChatResponse
   hydrologyAnswer: string
@@ -46,8 +50,8 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
       <section className="grid gap-4 rounded-[32px] border border-[var(--border)] bg-[linear-gradient(135deg,#173622_0%,#2c6f45_55%,#dbb369_100%)] px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
         <div className="space-y-4">
           <Badge className="bg-white/15 text-white">Web MVP · Modo {props.runtimeMode === 'demo' ? 'demo' : 'real'}</Badge>
-          <h1 className="max-w-2xl text-3xl font-semibold leading-tight md:text-5xl">Iberá-Alerta: monitoreo centralizado de inundaciones para arroz en Corrientes.</h1>
-          <p className="max-w-2xl text-sm text-white/85 md:text-base">PNA, INA, INMET y SMN en tarjetas locales: altura actual, tendencia 24h, umbrales, alertas por zona y pronósticos HTML sin revisar PDFs estáticos.</p>
+          <h1 className="max-w-2xl text-3xl font-semibold leading-tight md:text-5xl">Agronautas: dashboard de riesgo para el campo argentino.</h1>
+          <p className="max-w-2xl text-sm text-white/85 md:text-base">Riesgo, frescura, fuentes y evidencia persistida para lotes agrícolas de Corrientes, sin reglas de negocio calculadas en el cliente.</p>
         </div>
         <Card className="border-white/10 bg-white/10 text-white backdrop-blur">
           <CardHeader>
@@ -76,7 +80,10 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
     await onSubmitIntake({
       contractVersion: AGRONAUTAS_CONTRACT_VERSION,
       fieldId: String(formData.get('fieldId') ?? ''),
+      cropCategory: 'cereal',
       crop: 'rice',
+      provinceCode: 'AR-W',
+      countryCode: 'AR',
       hectares: Number(formData.get('hectares') ?? 0),
       locality: String(formData.get('locality') ?? ''),
       growthStage: parseOptional(formData.get('growthStage')) as FieldIntake['growthStage'],
@@ -91,7 +98,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
     <Card>
       <CardHeader>
         <CardTitle>Alta guiada del lote</CardTitle>
-        <CardDescription>Validación contract-first para `FieldIntake`, con rechazo explícito fuera de Corrientes arrocera.</CardDescription>
+        <CardDescription>Validación contract-first para `FieldIntake`, con rechazo explícito fuera del alcance agrícola inicial de Corrientes.</CardDescription>
       </CardHeader>
       <CardContent>
         <form
@@ -133,7 +140,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, hydrologyDashboard, chatResponse, hydrologyAnswer, hydrologyError, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onAskHydrologyChat }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, chatResponse, hydrologyAnswer, hydrologyError, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onAskHydrologyChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -169,7 +176,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         <Card className="border-amber-200 bg-amber-50" data-testid="agronautas-stale-banner">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div>
-              <p className="text-sm font-semibold text-amber-900">Último dato obtenido: {formatDateTime(risk.snapshot.computedAt)}</p>
+              <p className="text-sm font-semibold text-amber-900">Snapshot stale detectado · Último dato obtenido: {formatDateTime(risk.snapshot.computedAt)}</p>
               <p className="text-sm text-amber-800">La UI no promete actualidad falsa y permite solicitar recompute {recomputeStatus?.status ?? alerts?.recompute?.status ?? risk.recompute?.status ?? 'pendiente'}.</p>
             </div>
             <div className="flex gap-2">
@@ -181,6 +188,29 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
       ) : null}
 
       <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyAnswer={hydrologyAnswer} hydrologyError={hydrologyError} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} />
+
+      <NextFeaturesPanel dashboardPayload={dashboardPayload} />
+
+      <Card data-testid="agronautas-persisted-payload-card">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle>Agronautas · payload persistido</CardTitle>
+              <CardDescription>La exportación PDF usa el mismo estado de dashboard servido por API.</CardDescription>
+            </div>
+            <a className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white px-4 text-sm font-semibold text-[var(--foreground)]" href={`/api/agronautas/v1/fields/${selectedFieldId}/dashboard.pdf`}>Exportar PDF</a>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm md:grid-cols-3">
+          <MetricCard label="Frescura" value={`Frescura ${dashboardPayload?.freshness === 'fresh' ? 'fresh' : 'degradada'}`} detail={(dashboardPayload?.presentation.staleFlags.length ? dashboardPayload.presentation.staleFlags.join(', ') : status?.degradationReasons.join(', ') || risk?.snapshot.degradationReasons.join(', ') || 'Sin degradación')} />
+          <MetricCard label="Fuentes" value={dashboardPayload?.provenance[0]?.provider ?? weatherTimeline?.items[0]?.provider ?? 'Sin fuente'} detail={dashboardPayload?.presentation.sourcesUnavailable ? 'Fuentes degradadas o no disponibles' : weatherTimeline?.items[0]?.staleCause ?? 'persistida'} />
+          <MetricCard label="Último dato obtenido" value={formatDateTime(dashboardPayload?.lastDataFetchedAt ?? weatherTimeline?.items[0]?.observedAt ?? null)} detail={`Confianza ${dashboardPayload?.presentation.confidenceLabel ?? (risk ? confidenceLabel(risk.snapshot.confidence) : 'sin dato')}`} />
+          <div className="rounded-2xl border border-[var(--border)] p-4 md:col-span-3">
+            <p className="text-sm font-medium">Disclaimers e indicadores</p>
+            <p className="text-sm text-[var(--muted-foreground)]">{dashboardPayload?.presentation.disclaimer ?? 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.'}</p>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card data-testid="agronautas-status-card">
@@ -315,6 +345,83 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
   )
 }
 
+function NextFeaturesPanel({ dashboardPayload }: { dashboardPayload?: DashboardSnapshot }) {
+  if (!dashboardPayload) return null
+
+  const adminRows = buildIngestionAdminRows(dashboardPayload)
+  const freshnessCards = buildSourceFreshnessCards(dashboardPayload)
+  const operationalAlerts = deriveSafeOperationalAlerts(dashboardPayload)
+
+  return (
+    <section className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
+      <Card data-testid="agronautas-ingestion-admin-panel">
+        <CardHeader>
+          <CardTitle>Panel de ingestión</CardTitle>
+          <CardDescription>Control operativo por proveedor: modo resuelto, próxima corrida estimada y estado seguro de trigger.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm">
+          {adminRows.map((row) => (
+            <div key={`${row.provider}-${row.signalType}`} className="rounded-2xl border border-[var(--border)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium">{row.provider}</p>
+                  <p className="text-[var(--muted-foreground)]">{row.signalType} · Próxima corrida {row.nextRunLabel}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant={row.modeLabel === 'Live' ? 'success' : row.modeLabel === 'Fallback' ? 'destructive' : 'warning'}>{row.modeLabel}</Badge>
+                  <Badge variant={row.currentState === 'Failed' || row.currentState === 'Stale' ? 'warning' : 'success'}>{row.currentState}</Badge>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[var(--muted-foreground)]">{row.reason}</p>
+                <Button type="button" variant="outline" disabled={!row.triggerEnabled}>{row.triggerLabel}</Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6">
+        <Card data-testid="agronautas-source-freshness-panel">
+          <CardHeader>
+            <CardTitle>Freshness monitor</CardTitle>
+            <CardDescription>Señales por SLA investigado: clima, suelo y satélite para campos agrícolas de Corrientes.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm">
+            {freshnessCards.map((card) => (
+              <div key={card.sourceLabel} className="rounded-2xl border border-[var(--border)] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium">{card.sourceLabel}</p>
+                  <Badge variant={card.freshnessLabel === 'fresh' ? 'success' : card.freshnessLabel === 'stale' ? 'warning' : 'destructive'}>{card.freshnessLabel}</Badge>
+                </div>
+                <p className="mt-2 text-[var(--muted-foreground)]">Último éxito {card.lastSuccessLabel} · Próximo {card.nextDueLabel} · {card.slaLabel}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card data-testid="agronautas-operational-alerts-panel">
+          <CardHeader>
+            <CardTitle>Alertas operativas explícitas</CardTitle>
+            <CardDescription>Anegamiento, estrés y heladas se muestran con marca de seguridad antes de notificaciones productivas.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm">
+            {operationalAlerts.map((alert) => (
+              <div key={alert.label} className="rounded-2xl border border-[var(--border)] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium">{alert.label}</p>
+                  <Badge variant={alert.safetyLabel.includes('no producción') ? 'warning' : 'success'}>{alert.safetyLabel}</Badge>
+                </div>
+                <p className="mt-2 text-[var(--muted-foreground)]">{alert.stateLabel}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  )
+}
+
 function HydrologyPanel({ dashboard, locality, hydrologyAnswer, hydrologyError, isHydrologyChatPending, onAskHydrologyChat }: { dashboard?: HydrologyDashboard; locality: string | null; hydrologyAnswer: string; hydrologyError: string | null; isHydrologyChatPending: boolean; onAskHydrologyChat: (message: string) => Promise<unknown> }) {
   const zone = dashboard?.zone ?? locality ?? 'Zona no mapeada'
   const height = dashboard?.heights[0]
@@ -322,13 +429,13 @@ function HydrologyPanel({ dashboard, locality, hydrologyAnswer, hydrologyError, 
   const lastSuccessful = dashboard?.status.lastSuccessfulObservedAt ?? height?.lastSuccessfulObservedAt ?? null
 
   return (
-    <section className="grid gap-6" data-testid="ibera-alerta-panel">
+    <section className="grid gap-6" data-testid="agronautas-hydrology-panel">
       <Card className="border-emerald-200 bg-emerald-50/50">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <CardTitle>Iberá-Alerta · Tarjeta hidrológica {zone}</CardTitle>
-              <CardDescription>Monitoreo centralizado PNA + INA + INMET + SMN para decisiones agrícolas y logísticas.</CardDescription>
+              <CardTitle>Agronautas · Tarjeta hidrológica {zone}</CardTitle>
+              <CardDescription>Monitoreo PNA + INA + INMET + SMN como una señal más del riesgo agrícola persistido.</CardDescription>
             </div>
             <Badge variant={dashboard?.status.riskLevel === 'high' ? 'destructive' : dashboard?.status.riskLevel === 'moderate' ? 'warning' : 'success'}>{toRiskLabel(dashboard?.status.riskLevel)}</Badge>
           </div>
@@ -349,13 +456,13 @@ function HydrologyPanel({ dashboard, locality, hydrologyAnswer, hydrologyError, 
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <FutureFeatureCard title="Sentinel-1 inline" description="Próximamente: capa radar integrada en el mapa de Iberá-Alerta. Fase 1 no muestra links externos ni redirecciones." />
+            <FutureFeatureCard title="Sentinel-1 inline" description="Próximamente: capa radar integrada en el mapa de Agronautas. Fase 1 no muestra links externos ni redirecciones." />
             <FutureFeatureCard title="Simulación interactiva" description="Próximamente: escenarios de inundación dentro del panel. Fase 1 evita controles hidráulicos personalizados." />
           </div>
         </CardContent>
       </Card>
 
-      <Card data-testid="ibera-alerta-copilot-card">
+      <Card data-testid="agronautas-copilot-card">
         <CardHeader>
           <CardTitle>Copilot Hidrológico</CardTitle>
           <CardDescription>Seleccioná el lote activo y preguntá en español sobre riesgo de crecida, caminos, maquinaria o alertas locales. La respuesta se transmite en vivo con contexto oficial.</CardDescription>
@@ -466,7 +573,7 @@ function StatusRow({ label, value }: { label: string; value: string }) {
   return <div className="flex items-center justify-between gap-4 rounded-2xl bg-white/10 px-4 py-3"><span className="text-white/70">{label}</span><span className="font-medium">{value}</span></div>
 }
 
-function Field({ label, name, ...props }: { label: string; name: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+function Field({ label, name, ...props }: { label: string; name: string } & InputHTMLAttributes<HTMLInputElement>) {
   return (
     <div className="grid gap-2">
       <Label htmlFor={name}>{label}</Label>
@@ -501,6 +608,12 @@ function formatDateTime(value: string | null | undefined) {
     minute: '2-digit',
     hour12: false,
   }).format(date)
+}
+
+function confidenceLabel(confidence: number): 'alta' | 'media' | 'baja' {
+  if (confidence >= 0.75) return 'alta'
+  if (confidence >= 0.5) return 'media'
+  return 'baja'
 }
 
 function toRiskLabel(level: HydrologyDashboard['status']['riskLevel'] | undefined) {
