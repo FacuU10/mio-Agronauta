@@ -7,6 +7,7 @@ import {
   fieldIntakeSchema,
   groundedChatRequestSchema,
   hydrologyDenseContextV1Schema,
+  hydrologyGovernmentIngestResponseSchema,
   hydrologyProviderPayloadGuardSchema,
   hydrologyTelemetrySchema,
   pdfReportRequestSchema,
@@ -14,6 +15,30 @@ import {
   signalEvidenceSchema,
   sourceCadenceSchema,
 } from './agronautas.js'
+
+test('hydrology government ingest schema acepta completed, partial y failed', () => {
+  const base = { contractVersion: 'hydrology-government-ingest-v1' as const, requestedSources: ['PNA', 'SMN'] }
+  const completed = hydrologyGovernmentIngestResponseSchema.parse({
+    ...base,
+    runId: 'run-completed',
+    status: 'completed',
+    results: [{ source: 'PNA', status: 'success', recordsIngested: 2, provenanceUrl: 'https://example.com/pna', observedFrom: '2026-06-23T10:00:00.000Z', observedTo: '2026-06-23T10:30:00.000Z' }],
+  })
+  const partial = hydrologyGovernmentIngestResponseSchema.parse({
+    ...base,
+    status: 'partial',
+    results: [{ source: 'PNA', status: 'success', recordsIngested: 1 }, { source: 'SMN', status: 'failed', recordsIngested: 0, errorMessage: 'offline' }],
+  })
+  const failed = hydrologyGovernmentIngestResponseSchema.parse({
+    ...base,
+    status: 'failed',
+    results: [{ source: 'SMN', status: 'failed', recordsIngested: 0, errorMessage: 'timeout' }],
+  })
+
+  assert.equal(completed.status, 'completed')
+  assert.equal(partial.results[1]?.status, 'failed')
+  assert.equal(failed.results[0]?.recordsIngested, 0)
+})
 
 test('demo contact schema acepta payload válido y trimmea campos', () => {
   const parsed = demoContactSubmissionSchema.parse({

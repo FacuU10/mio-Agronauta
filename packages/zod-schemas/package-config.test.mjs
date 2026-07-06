@@ -121,8 +121,8 @@ test('ensure build script avoids cleaning dist while sibling tests import zod-sc
   )
   assert.equal(
     packageJson.scripts?.test,
-    'pnpm run build:ensure && node --test package-config.test.mjs',
-    'package tests should ensure dist exists when run focused, while root Turbo still provides normal build ordering',
+    'pnpm run build:ensure && node --import tsx --test package-config.test.mjs src/**/*.test.ts',
+    'package tests should ensure dist exists and execute every package .test.ts file through Node native test runner with tsx TypeScript loading',
   )
 })
 

@@ -18,11 +18,13 @@ import { logger } from '../../infrastructure/observability/logger'
 interface HydrologyGovernmentRouterDeps {
   hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
-  ingestionRunner: (input: { source?: HydrologySource; reason?: string }) => Promise<{ runId: string; status: 'queued' | 'started' | 'completed'; sources: HydrologySource[] }>
+  ingestionRunner: (input: { source?: HydrologySource; reason?: string }) => Promise<GovernmentIngestionResponse>
 }
 
 type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'>
 type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult> }
+type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string }
+type GovernmentIngestionResponse = { runId?: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources?: HydrologySource[] }
 
 interface GovernmentIngestionRunnerDeps {
   repository?: GovernmentIngestionRepository
@@ -119,8 +121,18 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
 
-    const result = await resolved.ingestionRunner(parsed.data)
-    return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
+    try {
+      const result = await resolved.ingestionRunner(parsed.data)
+      return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
+    } catch (error) {
+      logger.error({ error }, 'Government hydrology ingestion could not start')
+      return res.status(503).json(hydrologyGovernmentIngestResponseSchema.parse({
+        contractVersion: 'hydrology-government-ingest-v1',
+        status: 'failed',
+        requestedSources: parsed.data.source ? [parsed.data.source] : ALL_SOURCES,
+        results: (parsed.data.source ? [parsed.data.source] : ALL_SOURCES).map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: error instanceof Error ? error.message : 'No se pudo iniciar la ingesta hidrológica' })),
+      }))
+    }
   })
 
   router.post('/municipalities/:id/copilot/chat', async (req, res) => {
@@ -238,10 +250,11 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
 
   const allowFixtureFallback = deps.allowFixtureFallback ?? process.env['NODE_ENV'] === 'test'
 
-  return async (input: { source?: HydrologySource }): Promise<{ runId: string; status: 'completed'; sources: HydrologySource[] }> => {
+  return async (input: { source?: HydrologySource }): Promise<GovernmentIngestionResponse> => {
     const sources = input.source ? [input.source] : ALL_SOURCES
     const runId = `manual-${randomUUID()}`
     await seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool)
+    const results: GovernmentIngestionSourceResult[] = []
 
     for (const source of sources) {
       const startedAt = now()
@@ -253,14 +266,15 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         const errorMessage = `Hydrology ingestion failed for ${source}: ${fallbackReason}`
         await repository.saveTelemetryDeduped([], {
           source,
-          status: 'failed',
+          status: result.ok ? 'partial' : 'failed',
           startedAt,
           finishedAt,
           recordsIngested: 0,
           errorMessage,
         })
         logger.error({ runId, source, error: fallbackReason }, 'Government hydrology ingestion failed')
-        throw new Error(errorMessage)
+        results.push({ source, status: result.ok ? 'empty' : 'failed', recordsIngested: 0, errorMessage })
+        continue
       }
       const records = fallbackReason ? governmentFallbackTelemetry(source, now()) : liveRecords
       const observedTimes = records.map((record) => record.observedAt).sort((a, b) => a.getTime() - b.getTime())
@@ -273,16 +287,24 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         finishedAt: now(),
         observedFrom,
         observedTo,
-        lastSuccessfulObservedAt: now(),
+        lastSuccessfulObservedAt: observedTo,
         recordsIngested: records.length,
         errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined,
         provenanceUrl: records[0]?.sourceUrl,
       })
       void saveResult
+      results.push({ source, status: records.length > 0 ? 'success' : 'empty', recordsIngested: records.length, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined })
     }
 
-    return { runId, status: 'completed', sources }
+    return { runId, status: ingestionStatus(results), requestedSources: sources, results, sources }
   }
+}
+
+function ingestionStatus(results: GovernmentIngestionSourceResult[]): 'completed' | 'partial' | 'failed' {
+  const successCount = results.filter((item) => item.status === 'success' || item.status === 'empty').length
+  if (successCount === results.length) return 'completed'
+  if (successCount > 0) return 'partial'
+  return 'failed'
 }
 
 async function fetchWithDeadline(client: GovernmentSourceClient, timeoutMs: number): Promise<ScraperResult> {
@@ -317,7 +339,6 @@ function governmentFallbackTelemetry(source: HydrologySource, observedAt: Date):
 }
 
 export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>>; rowCount?: number | null }> }): Promise<{ inserted: number; skipped: boolean }> {
-  await db.query('CREATE EXTENSION IF NOT EXISTS postgis')
   const pnaIds = PNA_FLOOD_RISK_PORTS.map((municipality) => municipality.id)
   const existing = await db.query('SELECT COUNT(*)::int AS count FROM agronautas_municipalities WHERE id = ANY($1)', [pnaIds])
   if (Number(existing.rows[0]?.['count'] ?? 0) === PNA_FLOOD_RISK_PORTS.length) return { inserted: 0, skipped: true }
@@ -341,7 +362,14 @@ export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: strin
     await db.query(
       `INSERT INTO agronautas_municipalities (id, locality_id, name, province_code, boundary, alert_height_m, evacuation_height_m)
        VALUES ($1, $2, $3, $4, ST_Multi(ST_GeomFromText($5, 4326)), $6, $7)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO UPDATE SET
+         locality_id = EXCLUDED.locality_id,
+         name = EXCLUDED.name,
+         province_code = EXCLUDED.province_code,
+         boundary = EXCLUDED.boundary,
+         alert_height_m = EXCLUDED.alert_height_m,
+         evacuation_height_m = EXCLUDED.evacuation_height_m,
+         updated_at = now()`,
       [municipality.id, municipality.localityId, municipality.name, municipality.provinceCode, municipality.boundaryWkt, municipality.alertHeightM, municipality.evacuationHeightM],
     )
     await db.query(

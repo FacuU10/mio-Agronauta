@@ -16,7 +16,7 @@
     "build": "node scripts/clean-build-output.mjs && tsc",
     "build:ensure": "node scripts/ensure-build-output.mjs",
     "lint": "eslint . --ext .ts",
-    "test": "pnpm run build:ensure && node --test package-config.test.mjs"
+    "test": "pnpm run build:ensure && node --import tsx --test package-config.test.mjs src/**/*.test.ts"
   },
   "dependencies": {
     "@repo/typescript-config": "workspace:*",
@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
+    "tsx": "^4.20.6",
     "typescript": "^5.3.3"
   }
 }

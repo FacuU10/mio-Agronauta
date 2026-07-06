@@ -1,24 +1,24 @@
 'use client'
 
 import Link from 'next/link'
+import React from 'react'
 import { FormEvent, useEffect, useState } from 'react'
 import { ArrowLeft, Bot, DatabaseZap, Send, ShieldAlert } from 'lucide-react'
 import { formatOfficialTime, statusLabel } from './format'
 
 type TelemetryCard = { source: string; stationId: string; metric: string; value: number | null; unit: string; observedAt?: string | null; lastSuccessfulObservedAt?: string | null; label: string }
-type ForecastRow = { stationId: string; horizonDays: number; forecastHeightM: number; observedAt: string; confidence: string }
-type Provenance = { source: string; url?: string; lastRunStatus?: string; errorMessage?: string }
+type ForecastRow = TelemetryCard & { forecastHorizonDays?: number | null; confidence?: string | null; sourceUrl?: string | null }
+type Provenance = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
 type DashboardPayload = {
   municipality: { id: string; localityId: string; name: string; alertHeightM?: number; evacuationHeightM?: number }
   telemetryCards: TelemetryCard[]
-  inaForecast30Days: ForecastRow[]
-  smn: { alerts: unknown[]; rainfall: unknown[]; freshness: string }
-  inmet: { stations: unknown[]; rainfall: unknown[]; freshness: string }
+  inaPredictions30d: ForecastRow[]
+  alerts: TelemetryCard[]
   provenance: Provenance[]
 }
 
-export function GovernmentDetail({ municipalityId }: { municipalityId: string }) {
-  const [data, setData] = useState<DashboardPayload | null>(null)
+export function GovernmentDetail({ municipalityId, initialData = null }: { municipalityId: string; initialData?: DashboardPayload | null }) {
+  const [data, setData] = useState<DashboardPayload | null>(initialData)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [answer, setAnswer] = useState('')
@@ -26,6 +26,7 @@ export function GovernmentDetail({ municipalityId }: { municipalityId: string })
 
   useEffect(() => {
     let active = true
+    if (initialData) return () => { active = false }
     fetch(`/api/hydrology/municipalities/${municipalityId}/dashboard`)
       .then((response) => {
         if (!response.ok) throw new Error('No se pudo cargar el tablero local')
@@ -36,7 +37,7 @@ export function GovernmentDetail({ municipalityId }: { municipalityId: string })
     return () => {
       active = false
     }
-  }, [municipalityId])
+  }, [municipalityId, initialData])
 
   async function submitChat(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -49,16 +50,13 @@ export function GovernmentDetail({ municipalityId }: { municipalityId: string })
       body: JSON.stringify({ contractVersion: '1.0.0', message }),
     })
     const text = await response.text()
-    const tokens = Array.from(text.matchAll(/data:\s*(\{[^\n]+\})/g))
-      .map((match) => safeJson(match[1]))
-      .filter((eventData): eventData is { text: string } => Boolean(eventData?.text))
-      .map((eventData) => eventData.text)
+    const tokens = text.split('\n').filter((line) => line.startsWith('data:')).map((line) => parseSseData(line.slice(5).trim())).filter(Boolean)
     setAnswer(tokens.join('') || 'Sin tokens recibidos desde el asesor.')
     setChatStatus('Respuesta generada con contexto municipal')
     setMessage('')
   }
 
-  const degraded = data?.provenance.some((item) => item.lastRunStatus === 'degraded' || item.errorMessage)
+  const degraded = data?.provenance.some((item) => item.freshness !== 'fresh')
 
   return (
     <main className="min-h-screen bg-stone-950 text-stone-50">
@@ -92,6 +90,15 @@ export function GovernmentDetail({ municipalityId }: { municipalityId: string })
                   <p className="mt-4 text-sm text-stone-300">{formatOfficialTime(card.lastSuccessfulObservedAt ?? card.observedAt)}</p>
                 </article>
               ))}
+              {data && data.telemetryCards.length === 0 ? <p className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 text-stone-300">Sin telemetría oficial reciente para este municipio.</p> : null}
+            </div>
+          </section>
+
+          <section aria-labelledby="alerts-heading" className="mt-10 rounded-[2rem] border border-amber-200/20 bg-amber-200/10 p-4 shadow-2xl sm:p-6">
+            <h2 id="alerts-heading" className="text-2xl font-black">Alertas oficiales</h2>
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              {(data?.alerts ?? []).map((alert) => (<article key={`${alert.source}-${alert.stationId}-${alert.observedAt}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{alert.source} · {alert.stationId}</h3><p className="mt-2 text-stone-200">{alert.value === null ? 'Alerta vigente o en seguimiento.' : `${alert.value} ${alert.unit}`}</p><p className="mt-2 text-sm text-amber-100">{formatOfficialTime(alert.lastSuccessfulObservedAt ?? alert.observedAt)}</p></article>))}
+              {data && data.alerts.length === 0 ? <p className="text-stone-300">Sin alertas oficiales recientes.</p> : null}
             </div>
           </section>
 
@@ -100,13 +107,13 @@ export function GovernmentDetail({ municipalityId }: { municipalityId: string })
             <div className="mt-5 overflow-x-auto">
               <table aria-label="Predicción INA a 30 días" className="w-full min-w-[620px] border-separate border-spacing-y-2 text-left">
                 <thead><tr className="text-sm uppercase tracking-[0.2em] text-stone-400"><th className="px-4 py-2">Horizonte</th><th className="px-4 py-2">Estación</th><th className="px-4 py-2">Altura</th><th className="px-4 py-2">Confianza</th><th className="px-4 py-2">Observado</th></tr></thead>
-                <tbody>{(data?.inaForecast30Days ?? []).map((row) => (<tr key={`${row.stationId}-${row.horizonDays}`} className="rounded-2xl bg-stone-900/80"><td className="px-4 py-3 font-black">Día {row.horizonDays}</td><td className="px-4 py-3">{row.stationId}</td><td className="px-4 py-3 tabular-nums">{row.forecastHeightM} m</td><td className="px-4 py-3">{row.confidence === 'speculative' ? 'tendencia' : 'normal'}</td><td className="px-4 py-3">{formatOfficialTime(row.observedAt).replace('Último dato obtenido: ', '')}</td></tr>))}</tbody>
+                <tbody>{(data?.inaPredictions30d ?? []).map((row) => (<tr key={`${row.stationId}-${row.forecastHorizonDays}-${row.observedAt}`} className="rounded-2xl bg-stone-900/80"><td className="px-4 py-3 font-black">Día {row.forecastHorizonDays ?? '—'}</td><td className="px-4 py-3">{row.stationId}</td><td className="px-4 py-3 tabular-nums">{row.value ?? '—'} {row.unit}</td><td className="px-4 py-3">{row.confidence === 'speculative' ? 'tendencia' : 'normal'}</td><td className="px-4 py-3">{formatOfficialTime(row.observedAt).replace('Último dato obtenido: ', '')}</td></tr>))}</tbody>
               </table>
             </div>
           </section>
 
           <section aria-labelledby="provenance-heading" className="mt-10 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-5"><h2 id="provenance-heading" className="text-2xl font-black">Procedencia oficial</h2><div className="mt-5 space-y-3">{(data?.provenance ?? []).map((item) => (<article key={`${item.source}-${item.errorMessage ?? item.url ?? 'ok'}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{item.source}</h3><p className="text-sm text-stone-300">Estado: {statusLabel(item.lastRunStatus)}</p>{item.url ? <a href={item.url} className="break-words text-sm text-lime-200 underline decoration-lime-200/40 underline-offset-4">{item.url}</a> : null}{item.errorMessage ? <p role="status" className="mt-2 text-sm text-amber-100">{item.errorMessage}</p> : null}</article>))}</div></div>
+            <div className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-5"><h2 id="provenance-heading" className="text-2xl font-black">Procedencia oficial</h2><div className="mt-5 space-y-3">{(data?.provenance ?? []).map((item) => (<article key={`${item.source}-${item.lastSuccessfulObservedAt ?? 'missing'}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{item.source}</h3><p className="text-sm text-stone-300">Estado: {statusLabel(item.freshness)}</p><p className="mt-2 text-sm text-stone-300">{item.label || formatOfficialTime(item.lastSuccessfulObservedAt)}</p></article>))}</div></div>
             <CopilotPanel message={message} answer={answer} chatStatus={chatStatus} onMessageChange={setMessage} onSubmit={submitChat} />
           </section>
         </div>
@@ -129,11 +136,18 @@ function CopilotPanel(props: { message: string; answer: string; chatStatus: stri
   )
 }
 
-function safeJson(value: string | undefined) {
+export function parseSseData(value: string) {
+  const parsed = safeJson(value)
+  if (typeof parsed === 'string') return parsed
+  if (parsed && typeof parsed === 'object' && 'text' in parsed && typeof parsed.text === 'string') return parsed.text
+  return null
+}
+
+function safeJson(value: string | undefined): unknown {
   if (!value) return null
   try {
-    return JSON.parse(value) as { text?: string }
+    return JSON.parse(value) as unknown
   } catch {
-    return null
+    return value
   }
 }

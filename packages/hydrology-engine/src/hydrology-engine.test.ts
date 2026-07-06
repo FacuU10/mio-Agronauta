@@ -95,7 +95,7 @@ test('HydrologyRepository can fetch one municipality dashboard and preserve miss
     metric: null, value: null, unit: null, observed_at: null, ingested_at: null, last_successful_observed_at: null,
     quality: null, freshness: null, tendency: null, forecast_horizon_days: null, confidence: null, source_url: null,
   }]
-  const db = { async query(sql: string, params: unknown[] = []) { return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const db = { async query(sql: string, _params: unknown[] = []) { return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
   const repo = new HydrologyRepository(db)
 
   const dashboard = await repo.getMunicipalityTelemetryDashboard('mun-mercedes')

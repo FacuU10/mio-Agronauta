@@ -39,7 +39,7 @@ test('GET /api/hydrology/municipalities/:id/dashboard devuelve metadata, cards, 
 })
 
 test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', async () => {
-  const response = await request(createTestApp({ ingestionRunner: async (input) => ({ runId: `manual-${input.source ?? 'ALL'}`, status: 'queued', sources: input.source ? [input.source] : ['PNA', 'INA', 'INMET', 'SMN'] }) }), '/api/hydrology/ingest', {
+  const response = await request(createTestApp({ ingestionRunner: async (input) => ({ runId: `manual-${input.source ?? 'ALL'}`, status: 'completed', requestedSources: input.source ? [input.source] : ['PNA', 'INA', 'INMET', 'SMN'], sources: input.source ? [input.source] : ['PNA', 'INA', 'INMET', 'SMN'], results: [{ source: input.source ?? 'PNA', status: 'success', recordsIngested: 1 }] }) }), '/api/hydrology/ingest', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
@@ -47,8 +47,8 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
 
   assert.equal(response.status, 202)
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
-  assert.equal(json.status, 'queued')
-  assert.deepEqual(json.sources, ['PNA'])
+  assert.equal(json.status, 'completed')
+  assert.deepEqual(json.requestedSources, ['PNA'])
 })
 
 test('default government ingestion runner saves all source fixtures when live clients fail or return empty', async () => {
@@ -108,12 +108,49 @@ test('default government ingestion runner fails fast outside tests without writi
       },
     })
 
-    await assert.rejects(() => runner({ source: 'PNA' }), /Hydrology ingestion failed for PNA: offline/)
+    const result = await runner({ source: 'PNA' })
+    assert.equal(result.status, 'failed')
+    assert.equal(result.results[0]?.status, 'failed')
     assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
   } finally {
     if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
     else process.env['NODE_ENV'] = previousNodeEnv
   }
+})
+
+test('default government ingestion runner continues when one source fails and persists degraded run', async () => {
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string; observedTo?: string }> = []
+  const observedAt = new Date('2026-06-26T10:30:00.000Z')
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: {
+      PNA: { async fetchTelemetry() { return { ok: true as const, records: [{ source: 'PNA' as const, stationId: 'corrientes', observedAt, ingestedAt: observedAt, lastSuccessfulObservedAt: observedAt, value: 3.4, unit: 'm', metric: 'river_height_m' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: 'https://example.com/pna' }] } } },
+      INA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      INMET: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      SMN: { async fetchTelemetry() { return { ok: false as const, error: 'upstream unavailable' } } },
+    },
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage, observedTo: run.observedTo?.toISOString() })
+        return { inserted: records.length, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({ source: undefined })
+
+  assert.equal(result.status, 'partial')
+  assert.equal(result.results.find((item) => item.source === 'PNA')?.status, 'success')
+  assert.equal(result.results.find((item) => item.source === 'SMN')?.status, 'failed')
+  assert.ok(saved.some((item) => item.source === 'PNA' && item.status === 'success' && item.observedTo === observedAt.toISOString()))
+  assert.ok(saved.some((item) => item.source === 'SMN' && item.status === 'failed' && item.records === 0 && /upstream unavailable/.test(item.errorMessage ?? '')))
 })
 
 test('government municipality seeding inserts Corrientes PNA municipalities only when empty', async () => {
