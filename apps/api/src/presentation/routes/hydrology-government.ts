@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { Router, type Response } from 'express'
+import { Router, type Request, type Response } from 'express'
+import { ZodError } from 'zod'
 import {
   agronautasContractErrorSchema,
   groundedChatRequestSchema,
@@ -89,16 +90,57 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   }
   const router = Router()
 
-  router.get('/municipalities', async (_req, res) => {
-    const municipalities = await resolved.hydrologyRepository.getMunicipalityTelemetryOverview(PROVINCE.provinceCode)
-    const payload = hydrologyGovernmentMunicipalitiesResponseSchema.parse({
+  router.get('/municipalities', async (req, res) => {
+    const requestId = requestIdFor(req)
+    logger.info({ requestId, phase: 'repository_query', provinceCode: PROVINCE.provinceCode }, 'Government hydrology municipalities overview requested')
+    let municipalities: MunicipalityTelemetryView[]
+    try {
+      municipalities = await resolved.hydrologyRepository.getMunicipalityTelemetryOverview(PROVINCE.provinceCode)
+      logger.info({ requestId, phase: 'repository_query', municipalityCount: municipalities.length, telemetryCount: municipalities.flatMap((item) => item.latestTelemetry).length }, 'Government hydrology municipalities repository query succeeded')
+    } catch (error) {
+      logHydrologyRouteError(requestId, 'repository_query', error)
+      return respondHydrologyUnavailable(res, 503, requestId, 'repository_query')
+    }
+
+    const payloadInput = {
       contractVersion: 'hydrology-government-municipalities-v1',
       province: PROVINCE,
       sourceFreshness: sourceFreshnessFor(municipalities.flatMap((item) => item.latestTelemetry)),
       provinceAlerts: municipalities.flatMap(toProvinceAlerts),
       municipalities,
+    }
+    const parsed = hydrologyGovernmentMunicipalitiesResponseSchema.safeParse(payloadInput)
+    if (parsed.success) return res.setHeader('x-request-id', requestId).json(parsed.data)
+
+    logHydrologyRouteError(requestId, 'contract_validation', parsed.error)
+    const fallbackMunicipalities = municipalities.map((item) => ({ ...item, latestTelemetry: [] }))
+    const fallback = hydrologyGovernmentMunicipalitiesResponseSchema.safeParse({
+      contractVersion: 'hydrology-government-municipalities-v1',
+      province: PROVINCE,
+      sourceFreshness: sourceFreshnessFor([]),
+      provinceAlerts: [],
+      municipalities: fallbackMunicipalities,
     })
-    return res.json(payload)
+    if (fallback.success) {
+      logger.warn({ requestId, phase: 'contract_validation', municipalityCount: fallback.data.municipalities.length }, 'Government hydrology municipalities returned telemetry-stripped fallback after contract validation failure')
+      return res.setHeader('x-request-id', requestId).json(fallback.data)
+    }
+    logHydrologyRouteError(requestId, 'contract_validation_fallback', fallback.error)
+    return respondHydrologyUnavailable(res, 503, requestId, 'contract_validation')
+  })
+
+  router.get('/municipalities/debug', (req, res) => {
+    const requestId = requestIdFor(req)
+    const diagnostics = {
+      contractVersion: 'hydrology-government-diagnostics-v1',
+      requestId,
+      nodeEnv: process.env['NODE_ENV'] ?? 'unset',
+      hasDatabaseUrl: Boolean(process.env['DATABASE_URL']),
+      hydrologyProvinceCode: PROVINCE.provinceCode,
+      repository: 'HydrologyRepository.getMunicipalityTelemetryOverview',
+    }
+    logger.info(diagnostics, 'Government hydrology municipalities debug diagnostics requested')
+    return res.setHeader('x-request-id', requestId).json(diagnostics)
   })
 
   router.get('/municipalities/:id/dashboard', async (req, res) => {
@@ -235,6 +277,33 @@ function writeSse(res: Response, event: string, data: unknown) {
 
 function respondContractError(res: Response, status: number, message: string, details?: Record<string, unknown>) {
   return res.status(status).json(agronautasContractErrorSchema.parse({ contractVersion: '1.0.0', code: 'INVALID_CONTRACT', message, retryable: false, details }))
+}
+
+type MunicipalitiesFailurePhase = 'repository_query' | 'contract_validation' | 'contract_validation_fallback'
+
+function requestIdFor(req: Request): string {
+  return req.header('x-request-id') || randomUUID()
+}
+
+function logHydrologyRouteError(requestId: string, phase: MunicipalitiesFailurePhase, error: unknown) {
+  if (error instanceof ZodError) {
+    logger.error({ requestId, phase, issueCount: error.issues.length, issues: error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join('.'), code: issue.code, message: issue.message })) }, 'Government hydrology municipalities contract validation failed')
+    return
+  }
+  logger.error({ requestId, phase, errorName: error instanceof Error ? error.name : typeof error, errorMessage: error instanceof Error ? error.message : String(error) }, 'Government hydrology municipalities failed')
+}
+
+function respondHydrologyUnavailable(res: Response, status: number, requestId: string, phase: Exclude<MunicipalitiesFailurePhase, 'contract_validation_fallback'>) {
+  return res
+    .status(status)
+    .setHeader('x-request-id', requestId)
+    .json({
+      contractVersion: '1.0.0',
+      code: 'HYDROLOGY_MUNICIPALITIES_UNAVAILABLE',
+      message: 'El servicio de municipios hidrológicos no está disponible temporalmente.',
+      retryable: true,
+      details: { requestId, phase },
+    })
 }
 
 export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerDeps = {}) {

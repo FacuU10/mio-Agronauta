@@ -205,10 +205,10 @@ const municipalityTelemetrySql = (where: string) => `SELECT
     m.alert_height_m,
     m.evacuation_height_m,
     mgm.primary_pna_port_id,
-    COALESCE(mgm.secondary_pna_port_ids, '{}') AS secondary_pna_port_ids,
-    COALESCE(mgm.ina_station_ids, '{}') AS ina_station_ids,
-    COALESCE(mgm.smn_region_ids, '{}') AS smn_region_ids,
-    COALESCE(mgm.inmet_station_ids, '{}') AS inmet_station_ids,
+    COALESCE(mgm.secondary_pna_port_ids, ARRAY[]::text[]) AS secondary_pna_port_ids,
+    COALESCE(mgm.ina_station_ids, ARRAY[]::text[]) AS ina_station_ids,
+    COALESCE(mgm.smn_region_ids, ARRAY[]::text[]) AS smn_region_ids,
+    COALESCE(mgm.inmet_station_ids, ARRAY[]::text[]) AS inmet_station_ids,
     latest.source,
     latest.station_id,
     latest.observed_at,
@@ -243,11 +243,11 @@ const municipalityTelemetrySql = (where: string) => `SELECT
       ht.source_url
     FROM hydrology_telemetry ht
     WHERE ht.station_id = ANY(array_remove(
-      ARRAY[mgm.primary_pna_port_id]
-        || COALESCE(mgm.secondary_pna_port_ids, '{}')
-        || COALESCE(mgm.ina_station_ids, '{}')
-        || COALESCE(mgm.smn_region_ids, '{}')
-        || COALESCE(mgm.inmet_station_ids, '{}'),
+      ARRAY[mgm.primary_pna_port_id]::text[]
+        || COALESCE(mgm.secondary_pna_port_ids, ARRAY[]::text[])
+        || COALESCE(mgm.ina_station_ids, ARRAY[]::text[])
+        || COALESCE(mgm.smn_region_ids, ARRAY[]::text[])
+        || COALESCE(mgm.inmet_station_ids, ARRAY[]::text[]),
       NULL
     ))
       AND (ht.forecast_horizon_days IS NULL OR ht.forecast_horizon_days <= 30)
@@ -256,8 +256,21 @@ const municipalityTelemetrySql = (where: string) => `SELECT
   WHERE ${where}
   ORDER BY m.name, latest.source, latest.station_id, latest.metric`
 
-const asNumber = (value: unknown): number | undefined => value === null || value === undefined ? undefined : Number(value)
-const asTextArray = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : []
+const asNumber = (value: unknown): number | undefined => {
+  if (value === null || value === undefined || value === '') return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+const asTextArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.filter((item) => item !== null && item !== undefined && item !== '').map(String)
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed || trimmed === '{}') return []
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed.slice(1, -1).split(',').map((item) => item.trim().replace(/^"|"$/g, '')).filter(Boolean)
+    return [trimmed]
+  }
+  return []
+}
 const TELEMETRY_VALUE_EPSILON = 0.0001
 const isTelemetryValueUnchanged = (stored: string | number | null | undefined, next: number | null): boolean => {
   if (stored === undefined) return false
@@ -286,25 +299,46 @@ const toMunicipalityTelemetryViews = (rows: MunicipalityTelemetryRow[]): Municip
       latestTelemetry: [],
     }
     if (!byId.has(row.municipality_id)) byId.set(row.municipality_id, current)
-    if (row.station_id) current.latestTelemetry.push(toTelemetry(row))
+    const telemetry = toTelemetryOrNull(row)
+    if (telemetry) current.latestTelemetry.push(telemetry)
   }
   return [...byId.values()]
 }
 
-const toIso = (value: unknown): string => value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString()
-const toTelemetry = (row: Record<string, unknown>): HydrologyTelemetry => ({
-  source: row['source'] as HydrologyTelemetry['source'],
-  stationId: String(row['station_id']),
-  observedAt: toIso(row['observed_at']),
-  ingestedAt: toIso(row['ingested_at']),
-  lastSuccessfulObservedAt: toIso(row['last_successful_observed_at']),
-  value: row['value'] === null ? null : Number(row['value']),
-  unit: String(row['unit']),
-  metric: row['metric'] as HydrologyTelemetry['metric'],
-  quality: row['quality'] as HydrologyTelemetry['quality'],
-  freshness: row['freshness'] as HydrologyTelemetry['freshness'],
-  tendency: row['tendency'] ? String(row['tendency']) : undefined,
-  forecastHorizonDays: row['forecast_horizon_days'] === null ? undefined : Number(row['forecast_horizon_days']),
-  confidence: row['confidence'] as HydrologyTelemetry['confidence'],
-  sourceUrl: row['source_url'] ? String(row['source_url']) : undefined,
-})
+const toIsoOrNull = (value: unknown): string | null => {
+  if (value === null || value === undefined || value === '') return null
+  const date = value instanceof Date ? value : new Date(String(value))
+  const time = date.getTime()
+  return Number.isFinite(time) ? date.toISOString() : null
+}
+const toTelemetryOrNull = (row: Record<string, unknown>): HydrologyTelemetry | null => {
+  if (!row['station_id']) return null
+  const observedAt = toIsoOrNull(row['observed_at'])
+  const ingestedAt = toIsoOrNull(row['ingested_at'])
+  const lastSuccessfulObservedAt = toIsoOrNull(row['last_successful_observed_at'])
+  if (!row['source'] || !observedAt || !ingestedAt || !lastSuccessfulObservedAt || !row['unit'] || !row['metric'] || !row['quality'] || !row['freshness']) return null
+  const value = row['value'] === null ? null : Number(row['value'])
+  if (value !== null && !Number.isFinite(value)) return null
+  const forecastHorizonDays = asNumber(row['forecast_horizon_days'])
+  return {
+    source: row['source'] as HydrologyTelemetry['source'],
+    stationId: String(row['station_id']),
+    observedAt,
+    ingestedAt,
+    lastSuccessfulObservedAt,
+    value,
+    unit: String(row['unit']),
+    metric: row['metric'] as HydrologyTelemetry['metric'],
+    quality: row['quality'] as HydrologyTelemetry['quality'],
+    freshness: row['freshness'] as HydrologyTelemetry['freshness'],
+    tendency: row['tendency'] ? String(row['tendency']) : undefined,
+    forecastHorizonDays,
+    confidence: row['confidence'] as HydrologyTelemetry['confidence'],
+    sourceUrl: row['source_url'] ? String(row['source_url']) : undefined,
+  }
+}
+const toTelemetry = (row: Record<string, unknown>): HydrologyTelemetry => {
+  const telemetry = toTelemetryOrNull(row)
+  if (!telemetry) throw new Error('Invalid hydrology telemetry row')
+  return telemetry
+}

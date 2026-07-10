@@ -23,6 +23,50 @@ test('GET /api/hydrology/municipalities devuelve resumen provincial y municipios
   assert.equal(json.provinceAlerts[0]?.zone, 'Mercedes')
 })
 
+test('GET /api/hydrology/municipalities returns classified error when repository query fails', async () => {
+  const response = await request(createTestApp({
+    hydrologyRepository: {
+      async getMunicipalityTelemetryOverview() { throw new Error('relation missing') },
+      async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    },
+  }), '/api/hydrology/municipalities', { headers: { 'x-request-id': 'route-repo-failure' } })
+
+  assert.equal(response.status, 503)
+  assert.equal(response.headers.get('x-request-id'), 'route-repo-failure')
+  const json = await response.json() as { code: string; details: { requestId: string; phase: string } }
+  assert.equal(json.code, 'HYDROLOGY_MUNICIPALITIES_UNAVAILABLE')
+  assert.equal(json.details.requestId, 'route-repo-failure')
+  assert.equal(json.details.phase, 'repository_query')
+})
+
+test('GET /api/hydrology/municipalities strips bad telemetry when contract validation fails', async () => {
+  const badMunicipality = municipalityView()
+  badMunicipality.latestTelemetry = [{ ...badMunicipality.latestTelemetry[0]!, confidence: 'bad-confidence' as never }]
+  const response = await request(createTestApp({
+    hydrologyRepository: {
+      async getMunicipalityTelemetryOverview() { return [badMunicipality] },
+      async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    },
+  }), '/api/hydrology/municipalities', { headers: { 'x-request-id': 'route-parse-fallback' } })
+
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('x-request-id'), 'route-parse-fallback')
+  const json = hydrologyGovernmentMunicipalitiesResponseSchema.parse(await response.json())
+  assert.equal(json.municipalities.length, 1)
+  assert.deepEqual(json.municipalities[0]?.latestTelemetry, [])
+})
+
+test('GET /api/hydrology/municipalities/debug exposes non-sensitive diagnostics', async () => {
+  const response = await request(createTestApp(), '/api/hydrology/municipalities/debug', { headers: { 'x-request-id': 'route-debug' } })
+
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('x-request-id'), 'route-debug')
+  const json = await response.json() as { contractVersion: string; requestId: string; hasDatabaseUrl: boolean }
+  assert.equal(json.contractVersion, 'hydrology-government-diagnostics-v1')
+  assert.equal(json.requestId, 'route-debug')
+  assert.equal(typeof json.hasDatabaseUrl, 'boolean')
+})
+
 test('GET /api/hydrology/municipalities/:id/dashboard devuelve metadata, cards, pronósticos INA, alertas y provenance', async () => {
   const response = await request(createTestApp(), '/api/hydrology/municipalities/mercedes/dashboard')
 

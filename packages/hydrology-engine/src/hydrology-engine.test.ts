@@ -87,6 +87,35 @@ test('HydrologyRepository resolves municipality telemetry from gauge mappings wi
   assert.doesNotMatch(calls[0]?.sql ?? '', /\bfields\b|\blots\b|crop_copilot/i)
 })
 
+test('HydrologyRepository normalizes production-shaped municipality rows with null mappings and invalid telemetry safely', async () => {
+  const rows = [
+    {
+      municipality_id: 'mun-goya', locality_id: 'goya', municipality_name: 'Goya', province_code: 'AR-W',
+      alert_height_m: '5.200', evacuation_height_m: '5.700', primary_pna_port_id: null, secondary_pna_port_ids: null,
+      ina_station_ids: '{}', smn_region_ids: ['smn-corrientes'], inmet_station_ids: null, source: null, station_id: null,
+      metric: null, value: null, unit: null, observed_at: null, ingested_at: null, last_successful_observed_at: null,
+      quality: null, freshness: null, tendency: null, forecast_horizon_days: null, confidence: null, source_url: null,
+    },
+    {
+      municipality_id: 'mun-esquina', locality_id: 'esquina', municipality_name: 'Esquina', province_code: 'AR-W',
+      alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'esquina', secondary_pna_port_ids: '{corrientes,barranqueras}',
+      ina_station_ids: null, smn_region_ids: null, inmet_station_ids: null, source: 'PNA', station_id: 'esquina',
+      metric: 'river_height_m', value: 'not-a-number', unit: 'm', observed_at: 'bad-date', ingested_at: null, last_successful_observed_at: null,
+      quality: 'ok', freshness: 'fresh', tendency: null, forecast_horizon_days: null, confidence: 'normal', source_url: null,
+    },
+  ]
+  const db = { async query(sql: string, _params: unknown[] = []) { return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const repo = new HydrologyRepository(db)
+
+  const municipalities = await repo.getMunicipalityTelemetryOverview('AR-W')
+
+  assert.equal(municipalities.length, 2)
+  assert.deepEqual(municipalities[0]?.gaugeMappings.inaStationIds, [])
+  assert.deepEqual(municipalities[0]?.latestTelemetry, [])
+  assert.deepEqual(municipalities[1]?.gaugeMappings.secondaryPnaPortIds, ['corrientes', 'barranqueras'])
+  assert.deepEqual(municipalities[1]?.latestTelemetry, [])
+})
+
 test('HydrologyRepository can fetch one municipality dashboard and preserve missing telemetry explicitly', async () => {
   const rows = [{
     municipality_id: 'mun-mercedes', locality_id: 'mercedes', municipality_name: 'Mercedes', province_code: 'AR-W',

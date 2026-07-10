@@ -55,3 +55,71 @@ test('hydrology BFF proxies POST ingest preserving body, status and content-type
     else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
   }
 })
+
+test('hydrology BFF rejects missing production upstream before fetch', async () => {
+  const previousFetch = globalThis.fetch
+  const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  const previousNodeEnv = process.env['NODE_ENV']
+  let fetchCalled = false
+  process.env['NODE_ENV'] = 'production'
+  delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+  globalThis.fetch = (async () => { fetchCalled = true; throw new Error('should not fetch') }) as typeof fetch
+  try {
+    const request = new NextRequest('http://web.local/api/hydrology/municipalities', { headers: { 'x-request-id': 'missing-prod-upstream' } })
+    const response = await GET(request, { params: Promise.resolve({ path: ['municipalities'] }) })
+
+    assert.equal(response.status, 503)
+    assert.equal(fetchCalled, false)
+    assert.equal(response.headers.get('x-request-id'), 'missing-prod-upstream')
+    const json = await response.json()
+    assert.equal(json.code, 'HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE')
+    assert.equal(json.details.phase, 'upstream_configuration')
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+    else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
+    if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
+    else process.env['NODE_ENV'] = previousNodeEnv
+  }
+})
+
+test('hydrology BFF rejects localhost production upstream', async () => {
+  const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  const previousNodeEnv = process.env['NODE_ENV']
+  process.env['NODE_ENV'] = 'production'
+  process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'http://localhost:3001'
+  try {
+    const request = new NextRequest('http://web.local/api/hydrology/municipalities')
+    const response = await GET(request, { params: Promise.resolve({ path: ['municipalities'] }) })
+
+    assert.equal(response.status, 503)
+    const json = await response.json()
+    assert.equal(json.details.phase, 'upstream_configuration')
+  } finally {
+    if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+    else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
+    if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
+    else process.env['NODE_ENV'] = previousNodeEnv
+  }
+})
+
+test('hydrology BFF returns structured 502 when upstream fetch throws', async () => {
+  const previousFetch = globalThis.fetch
+  const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'https://api.internal'
+  globalThis.fetch = (async () => { throw new Error('connect ECONNREFUSED') }) as typeof fetch
+  try {
+    const request = new NextRequest('http://web.local/api/hydrology/municipalities', { headers: { 'x-request-id': 'upstream-fetch-fail' } })
+    const response = await GET(request, { params: Promise.resolve({ path: ['municipalities'] }) })
+
+    assert.equal(response.status, 502)
+    assert.equal(response.headers.get('x-request-id'), 'upstream-fetch-fail')
+    const json = await response.json()
+    assert.equal(json.code, 'HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE')
+    assert.equal(json.details.phase, 'upstream_fetch')
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+    else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
+  }
+})
