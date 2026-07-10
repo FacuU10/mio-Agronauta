@@ -3,8 +3,9 @@ import { InmetAdapter } from '../adapters/inmet-adapter.js'
 import { PnaAdapter } from '../adapters/pna-adapter.js'
 import { SmnAdapter } from '../adapters/smn-adapter.js'
 import type { NormalizedHydrologyTelemetry } from '../types.js'
+import type { HydrologyGovernmentIngestDiagnostic } from '@repo/zod-schemas'
 
-export type ScraperResult = { ok: true; records: NormalizedHydrologyTelemetry[] } | { ok: false; error: string }
+export type ScraperResult = { ok: true; records: NormalizedHydrologyTelemetry[] } | { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic }
 
 interface ClientOptions {
   url?: string
@@ -14,6 +15,7 @@ interface ClientOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
+const DEFAULT_PNA_REQUEST_TIMEOUT_MS = 10_000
 const CHROME_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 const DEFAULT_HEADERS = {
   'user-agent': CHROME_USER_AGENT,
@@ -33,21 +35,41 @@ abstract class OfficialHttpClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
-  protected async fetchText(expectedContent: 'any' | 'json' = 'any'): Promise<{ ok: true; body: string } | { ok: false; error: string }> {
+  protected async fetchText(expectedContent: 'any' | 'json' = 'any'): Promise<{ ok: true; body: string } | { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic }> {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
       const response = await this.fetchImpl(this.url, { headers: { ...DEFAULT_HEADERS, 'user-agent': this.userAgent }, signal: controller.signal })
-      if (!response.ok) return { ok: false, error: `${this.source} HTTP ${response.status} ${response.statusText}`.trim() }
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: `${this.source} HTTP ${response.status} ${response.statusText}`.trim(),
+          diagnostic: this.diagnostic('http_status', `${this.source} upstream returned HTTP ${response.status}`, { upstreamStatus: response.status }),
+        }
+      }
       const contentType = response.headers.get('content-type') ?? ''
       const body = await response.text()
       if (expectedContent === 'json' && !isJsonResponse(contentType, body)) {
-        return { ok: false, error: `${this.source} unexpected content-type ${contentType || 'unknown'}; expected JSON payload` }
+        return {
+          ok: false,
+          error: `${this.source} unexpected content-type ${contentType || 'unknown'}; expected JSON payload`,
+          diagnostic: this.diagnostic('unexpected_content_type', `${this.source} returned unsupported content type`),
+        }
       }
       return { ok: true, body }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return { ok: false, error: `${this.source} network failure: timeout after ${this.timeoutMs}ms` }
-      return { ok: false, error: `${this.source} network failure: ${error instanceof Error ? error.message : String(error)}` }
+      if (error instanceof Error && error.name === 'AbortError') {
+        return {
+          ok: false,
+          error: `${this.source} network failure: timeout after ${this.timeoutMs}ms`,
+          diagnostic: this.diagnostic('timeout', `${this.source} request timed out`),
+        }
+      }
+      return {
+        ok: false,
+        error: `${this.source} network failure`,
+        diagnostic: this.diagnostic('network_failure', `${this.source} network request failed`),
+      }
     } finally {
       clearTimeout(timeout)
     }
@@ -57,13 +79,32 @@ abstract class OfficialHttpClient {
     try {
       return { ok: true, records: parse(body) }
     } catch (error) {
-      return { ok: false, error: `${this.source} payload parse failure: ${error instanceof Error ? error.message : String(error)}` }
+      void error
+      return { ok: false, error: `${this.source} payload parse failure`, diagnostic: this.diagnostic('parse_failure', `${this.source} payload parse failed`) }
+    }
+  }
+
+  private diagnostic(failureKind: NonNullable<HydrologyGovernmentIngestDiagnostic['failureKind']>, reason: string, extra: Partial<Pick<HydrologyGovernmentIngestDiagnostic, 'upstreamStatus'>> = {}): HydrologyGovernmentIngestDiagnostic {
+    const safeUrl = safeProviderUrl(this.url)
+    return {
+      failureKind,
+      reason,
+      attempts: 1,
+      timeoutMs: this.timeoutMs,
+      ...safeUrl,
+      ...extra,
     }
   }
 }
 
 export class PnaHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('PNA', options.url ?? process.env['HYDROLOGY_PNA_URL'] ?? 'https://www.prefecturanaval.gob.ar/alturas', options) }
+  constructor(options: ClientOptions = {}) {
+    super('PNA', options.url ?? process.env['HYDROLOGY_PNA_URL'] ?? 'https://www.prefecturanaval.gob.ar/alturas', {
+      ...options,
+      userAgent: options.userAgent ?? process.env['HYDROLOGY_PNA_USER_AGENT'],
+      timeoutMs: options.timeoutMs ?? parsePositiveInt(process.env['HYDROLOGY_PNA_TIMEOUT_MS'], DEFAULT_PNA_REQUEST_TIMEOUT_MS),
+    })
+  }
   async fetchTelemetry(): Promise<ScraperResult> {
     const fetched = await this.fetchText()
     return fetched.ok ? this.parseSafely(fetched.body, (body) => new PnaAdapter().parse(body)) : fetched
@@ -98,4 +139,19 @@ function isJsonResponse(contentType: string, body: string): boolean {
   if (/\bjson\b/i.test(contentType)) return true
   if (!contentType) return /^\s*[[{]/.test(body)
   return false
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function safeProviderUrl(url: string): Pick<HydrologyGovernmentIngestDiagnostic, 'providerHost' | 'providerPath'> {
+  try {
+    const parsed = new URL(url)
+    return { providerHost: parsed.host, providerPath: parsed.pathname || '/' }
+  } catch {
+    return {}
+  }
 }

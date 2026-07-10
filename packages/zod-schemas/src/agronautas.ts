@@ -27,6 +27,7 @@ export const hydrologyQualityStates = ['ok', 'estimated', 'degraded', 'missing']
 export const hydrologyTargetZones = ['Mercedes', 'Ituzaingó', 'Virasoro'] as const
 export const hydrologyMetrics = ['river_height_m', 'rain_mm', 'storm_alert'] as const
 export const hydrologyForecastConfidence = ['normal', 'speculative'] as const
+export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure'] as const
 export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
 export const hydrologyExcludedInputs = [
   'itaipu_discharge',
@@ -75,6 +76,7 @@ const hydrologyQualitySchema = z.enum(hydrologyQualityStates)
 const hydrologyTargetZoneSchema = z.enum(hydrologyTargetZones)
 const hydrologyMetricSchema = z.enum(hydrologyMetrics)
 const hydrologyForecastConfidenceSchema = z.enum(hydrologyForecastConfidence)
+const hydrologyGovernmentIngestFailureKindSchema = z.enum(hydrologyGovernmentIngestFailureKinds)
 
 export const hydrologyExcludedSourceSchema = z.enum(hydrologyExcludedSources)
 export const hydrologyExcludedInputSchema = z.enum(hydrologyExcludedInputs)
@@ -458,6 +460,18 @@ export const hydrologyGovernmentIngestRequestSchema = z.object({
   reason: z.string().trim().max(240).optional(),
 })
 
+export const hydrologyGovernmentIngestDiagnosticSchema = z.object({
+  failureKind: hydrologyGovernmentIngestFailureKindSchema.optional(),
+  reason: z.string().trim().min(1).max(160).optional(),
+  attempts: z.literal(1),
+  timeoutMs: z.number().int().positive().max(60_000).optional(),
+  durationMs: z.number().int().nonnegative().max(60_000).optional(),
+  elapsedMs: z.number().int().nonnegative().max(60_000).optional(),
+  providerHost: z.string().trim().min(1).max(120).regex(/^[a-z0-9.-]+(?::\d{1,5})?$/i).optional(),
+  providerPath: z.string().trim().min(1).max(240).regex(/^\/[^?#]*$/).optional(),
+  upstreamStatus: z.number().int().min(100).max(599).optional(),
+}).strict()
+
 export const hydrologyGovernmentIngestResponseSchema = z.object({
   contractVersion: z.literal('hydrology-government-ingest-v1'),
   runId: z.string().min(1).max(120).optional(),
@@ -471,6 +485,7 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
     provenanceUrl: z.string().min(1).max(500).optional(),
     observedFrom: z.string().datetime().optional(),
     observedTo: z.string().datetime().optional(),
+    diagnostic: hydrologyGovernmentIngestDiagnosticSchema.optional(),
   })).min(1),
   sources: z.array(hydrologySourceSchema).min(1).optional(),
 })
@@ -573,6 +588,7 @@ export type HydrologyRiskSnapshot = z.infer<typeof hydrologyRiskSnapshotSchema>
 export type HydrologyDenseContextV1 = z.infer<typeof hydrologyDenseContextV1Schema>
 export type HydrologyGovernmentMunicipalitiesResponse = z.infer<typeof hydrologyGovernmentMunicipalitiesResponseSchema>
 export type HydrologyGovernmentDashboardResponse = z.infer<typeof hydrologyGovernmentDashboardResponseSchema>
+export type HydrologyGovernmentIngestDiagnostic = z.infer<typeof hydrologyGovernmentIngestDiagnosticSchema>
 export type HydrologyGovernmentIngestRequest = z.infer<typeof hydrologyGovernmentIngestRequestSchema>
 export type HydrologyGovernmentIngestResponse = z.infer<typeof hydrologyGovernmentIngestResponseSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>

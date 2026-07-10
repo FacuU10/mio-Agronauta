@@ -100,9 +100,9 @@ test('default government ingestion runner saves all source fixtures when live cl
   const runner = createGovernmentIngestionRunner({
     now: () => new Date('2026-06-26T12:00:00.000Z'),
     clients: {
-      PNA: { async fetchTelemetry() { return { ok: false as const, error: 'offline' } } },
+      PNA: { async fetchTelemetry() { return { ok: false as const, error: 'offline', diagnostic: { failureKind: 'network_failure' as const, reason: 'network request failed', attempts: 1 } } } },
       INA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
-      INMET: { async fetchTelemetry() { return { ok: false as const, error: 'timeout' } } },
+      INMET: { async fetchTelemetry() { return { ok: false as const, error: 'timeout', diagnostic: { failureKind: 'timeout' as const, reason: 'INMET request timed out', attempts: 1, timeoutMs: 12_000 } } } },
       SMN: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
     },
     allowFixtureFallback: true,
@@ -137,7 +137,7 @@ test('default government ingestion runner fails fast outside tests without writi
   try {
     const runner = createGovernmentIngestionRunner({
       now: () => new Date('2026-06-26T12:00:00.000Z'),
-      clients: { PNA: { async fetchTelemetry() { return { ok: false as const, error: 'offline' } } } },
+      clients: { PNA: { async fetchTelemetry() { return { ok: false as const, error: 'offline', diagnostic: { failureKind: 'network_failure' as const, reason: 'network request failed', attempts: 1, timeoutMs: 10_000, providerHost: 'pna.example', providerPath: '/alturas' } } } } },
       repository: {
         async saveTelemetryDeduped(records, run) {
           saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
@@ -155,11 +155,67 @@ test('default government ingestion runner fails fast outside tests without writi
     const result = await runner({ source: 'PNA' })
     assert.equal(result.status, 'failed')
     assert.equal(result.results[0]?.status, 'failed')
+    assert.equal(result.results[0]?.diagnostic?.failureKind, 'network_failure')
+    assert.equal(result.results[0]?.diagnostic?.attempts, 1)
+    assert.equal(result.results[0]?.diagnostic?.timeoutMs, 10_000)
     assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
   } finally {
     if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
     else process.env['NODE_ENV'] = previousNodeEnv
   }
+})
+
+test('default government ingestion runner reports partial with safe diagnostics and one client call per source', async () => {
+  const calls: { PNA: number; SMN: number } = { PNA: 0, SMN: 0 }
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  const observedAt = new Date('2026-06-26T10:30:00.000Z')
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: {
+      PNA: { async fetchTelemetry() { calls.PNA += 1; return { ok: false as const, error: 'timeout after 10000ms', diagnostic: { failureKind: 'timeout' as const, reason: 'PNA request timed out', attempts: 1, timeoutMs: 10_000, providerHost: 'www.prefecturanaval.gob.ar', providerPath: '/alturas' } } } },
+      INA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      INMET: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      SMN: { async fetchTelemetry() { calls.SMN += 1; return { ok: true as const, records: [{ source: 'SMN' as const, stationId: 'smn-corrientes', observedAt, ingestedAt: observedAt, lastSuccessfulObservedAt: observedAt, value: null, unit: 'alerta', metric: 'storm_alert' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: 'https://example.com/smn' }] } } },
+    },
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+        return { inserted: records.length, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({ source: undefined })
+
+  assert.equal(result.status, 'partial')
+  assert.equal(calls.PNA, 1)
+  assert.equal(calls.SMN, 1)
+  assert.equal(result.results.find((item) => item.source === 'PNA')?.diagnostic?.failureKind, 'timeout')
+  assert.equal(result.results.find((item) => item.source === 'PNA')?.diagnostic?.attempts, 1)
+  assert.equal(result.results.find((item) => item.source === 'SMN')?.status, 'success')
+  assert.ok(saved.some((item) => item.source === 'PNA' && item.status === 'failed' && item.records === 0))
+})
+
+test('POST /api/hydrology/ingest returns safe structured startup failure response', async () => {
+  const response = await request(createTestApp({ ingestionRunner: async () => { throw new Error('database password secret') } }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+  })
+
+  assert.equal(response.status, 503)
+  const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
+  assert.equal(json.status, 'failed')
+  assert.equal(json.results[0]?.diagnostic?.failureKind, 'startup_failure')
+  assert.equal(json.results[0]?.diagnostic?.attempts, 1)
+  assert.doesNotMatch(JSON.stringify(json), /password secret/)
 })
 
 test('default government ingestion runner continues when one source fails and persists degraded run', async () => {
@@ -172,7 +228,7 @@ test('default government ingestion runner continues when one source fails and pe
       PNA: { async fetchTelemetry() { return { ok: true as const, records: [{ source: 'PNA' as const, stationId: 'corrientes', observedAt, ingestedAt: observedAt, lastSuccessfulObservedAt: observedAt, value: 3.4, unit: 'm', metric: 'river_height_m' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: 'https://example.com/pna' }] } } },
       INA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
       INMET: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
-      SMN: { async fetchTelemetry() { return { ok: false as const, error: 'upstream unavailable' } } },
+      SMN: { async fetchTelemetry() { return { ok: false as const, error: 'upstream unavailable', diagnostic: { failureKind: 'network_failure' as const, reason: 'SMN network request failed', attempts: 1 } } } },
     },
     repository: {
       async saveTelemetryDeduped(records, run) {

@@ -211,14 +211,18 @@ test('government HTTP clients set user agent and parse successful official paylo
 test('government HTTP clients return parsed failures for network, status, and malformed payload errors', async () => {
   const networkFailure = await new PnaHttpClient({ url: 'https://official.test/pna', fetch: async () => { throw new Error('socket hang up') } }).fetchTelemetry()
   const statusFailure = await new SmnHttpClient({ url: 'https://official.test/smn', fetch: async () => new Response('{}', { status: 503, statusText: 'Service Unavailable' }) }).fetchTelemetry()
-  const parseFailure = await new InaHttpClient({ url: 'https://official.test/ina', fetch: async () => new Response('{bad json', { status: 200 }) }).fetchTelemetry()
+  const parseFailure = await new InaHttpClient({ url: 'https://official.test/ina', fetch: async () => new Response('{bad json', { status: 200, headers: { 'content-type': 'application/json; charset=utf-8' } }) }).fetchTelemetry()
   const htmlFailure = await new InmetHttpClient({ url: 'https://official.test/inmet', fetch: async () => new Response('<html>maintenance</html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }) }).fetchTelemetry()
 
   assert.deepEqual([networkFailure.ok, statusFailure.ok, parseFailure.ok, htmlFailure.ok], [false, false, false, false])
-  assert.match(networkFailure.ok ? '' : networkFailure.error, /PNA.*socket hang up/)
+  assert.equal(networkFailure.ok ? '' : networkFailure.diagnostic.failureKind, 'network_failure')
+  assert.equal(networkFailure.ok ? '' : networkFailure.diagnostic.providerHost, 'official.test')
   assert.match(statusFailure.ok ? '' : statusFailure.error, /SMN.*503/)
+  assert.equal(statusFailure.ok ? 0 : statusFailure.diagnostic.upstreamStatus, 503)
   assert.match(parseFailure.ok ? '' : parseFailure.error, /INA.*payload/i)
+  assert.equal(parseFailure.ok ? '' : parseFailure.diagnostic.failureKind, 'parse_failure')
   assert.match(htmlFailure.ok ? '' : htmlFailure.error, /INMET.*content-type.*JSON/i)
+  assert.equal(htmlFailure.ok ? '' : htmlFailure.diagnostic.failureKind, 'unexpected_content_type')
 })
 
 test('government HTTP clients abort official requests after configured timeout', async () => {
@@ -235,4 +239,44 @@ test('government HTTP clients abort official requests after configured timeout',
   assert.equal(timeoutFailure.ok, false)
   assert.equal(abortSignal?.aborted, true)
   assert.match(timeoutFailure.ok ? '' : timeoutFailure.error, /SMN.*timeout after 1ms/)
+  assert.deepEqual(timeoutFailure.ok ? undefined : timeoutFailure.diagnostic, {
+    failureKind: 'timeout',
+    reason: 'SMN request timed out',
+    attempts: 1,
+    timeoutMs: 1,
+    providerHost: 'official.test',
+    providerPath: '/smn',
+  })
+})
+
+test('PNA HTTP client uses env timeout and user-agent options with one network attempt', async () => {
+  const previousTimeout = process.env['HYDROLOGY_PNA_TIMEOUT_MS']
+  const previousUserAgent = process.env['HYDROLOGY_PNA_USER_AGENT']
+  const previousUrl = process.env['HYDROLOGY_PNA_URL']
+  const requests: Array<{ url: string; headers: unknown }> = []
+  process.env['HYDROLOGY_PNA_TIMEOUT_MS'] = '7'
+  process.env['HYDROLOGY_PNA_USER_AGENT'] = 'AgronautasBot/1.0'
+  process.env['HYDROLOGY_PNA_URL'] = 'https://pna.example/alturas?token=secret'
+  try {
+    const result = await new PnaHttpClient({
+      fetch: async (input, init) => {
+        requests.push({ url: String(input), headers: init?.headers })
+        return new Response('no data', { status: 502, statusText: 'Bad Gateway' })
+      },
+    }).fetchTelemetry()
+
+    assert.equal(result.ok, false)
+    assert.equal(requests.length, 1)
+    assert.match(JSON.stringify(requests[0]?.headers), /AgronautasBot\/1\.0/)
+    assert.equal(result.ok ? 0 : result.diagnostic.timeoutMs, 7)
+    assert.equal(result.ok ? '' : result.diagnostic.providerHost, 'pna.example')
+    assert.equal(result.ok ? '' : result.diagnostic.providerPath, '/alturas')
+  } finally {
+    if (previousTimeout === undefined) delete process.env['HYDROLOGY_PNA_TIMEOUT_MS']
+    else process.env['HYDROLOGY_PNA_TIMEOUT_MS'] = previousTimeout
+    if (previousUserAgent === undefined) delete process.env['HYDROLOGY_PNA_USER_AGENT']
+    else process.env['HYDROLOGY_PNA_USER_AGENT'] = previousUserAgent
+    if (previousUrl === undefined) delete process.env['HYDROLOGY_PNA_URL']
+    else process.env['HYDROLOGY_PNA_URL'] = previousUrl
+  }
 })

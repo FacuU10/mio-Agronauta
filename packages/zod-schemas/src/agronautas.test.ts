@@ -6,6 +6,7 @@ import {
   demoContactSubmissionSchema,
   fieldIntakeSchema,
   groundedChatRequestSchema,
+  hydrologyGovernmentIngestDiagnosticSchema,
   hydrologyDenseContextV1Schema,
   hydrologyGovernmentIngestResponseSchema,
   hydrologyProviderPayloadGuardSchema,
@@ -38,6 +39,59 @@ test('hydrology government ingest schema acepta completed, partial y failed', ()
   assert.equal(completed.status, 'completed')
   assert.equal(partial.results[1]?.status, 'failed')
   assert.equal(failed.results[0]?.recordsIngested, 0)
+})
+
+test('hydrology government ingest schema accepts public bounded diagnostics', () => {
+  const parsed = hydrologyGovernmentIngestResponseSchema.parse({
+    contractVersion: 'hydrology-government-ingest-v1',
+    status: 'failed',
+    requestedSources: ['PNA'],
+    results: [{
+      source: 'PNA',
+      status: 'failed',
+      recordsIngested: 0,
+      errorMessage: 'Hydrology ingestion failed for PNA: timeout',
+      provenanceUrl: 'https://www.prefecturanaval.gob.ar/alturas',
+      diagnostic: {
+        failureKind: 'timeout',
+        reason: 'PNA request timed out',
+        attempts: 1,
+        timeoutMs: 10_000,
+        durationMs: 10_001,
+        providerHost: 'www.prefecturanaval.gob.ar',
+        providerPath: '/alturas',
+      },
+    }],
+  })
+
+  assert.equal(parsed.results[0]?.diagnostic?.failureKind, 'timeout')
+  assert.equal(parsed.results[0]?.diagnostic?.attempts, 1)
+  assert.equal(parsed.results[0]?.diagnostic?.providerPath, '/alturas')
+})
+
+test('hydrology ingest diagnostic schema rejects unsafe or unbounded public fields', () => {
+  const withSecretField = hydrologyGovernmentIngestDiagnosticSchema.safeParse({
+    failureKind: 'network_failure',
+    reason: 'network request failed',
+    attempts: 1,
+    stack: 'Error: password=secret',
+  })
+  const withQueryString = hydrologyGovernmentIngestDiagnosticSchema.safeParse({
+    failureKind: 'timeout',
+    reason: 'timed out',
+    attempts: 1,
+    providerHost: 'www.prefecturanaval.gob.ar',
+    providerPath: '/alturas?token=secret',
+  })
+  const withRetryAttempt = hydrologyGovernmentIngestDiagnosticSchema.safeParse({
+    failureKind: 'timeout',
+    reason: 'timed out',
+    attempts: 2,
+  })
+
+  assert.equal(withSecretField.success, false)
+  assert.equal(withQueryString.success, false)
+  assert.equal(withRetryAttempt.success, false)
 })
 
 test('demo contact schema acepta payload válido y trimmea campos', () => {
