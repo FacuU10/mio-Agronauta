@@ -355,8 +355,14 @@ export const hydrologyGovernmentIngestRequestSchema = z.object({
 export const hydrologyGovernmentIngestResponseSchema = z.object({
   contractVersion: z.literal('hydrology-government-ingest-v1'),
   runId: z.string().min(1).max(120),
-  status: z.enum(['queued', 'started', 'completed']),
+  status: z.enum(['queued', 'started', 'completed', 'partial', 'failed']),
   sources: z.array(hydrologySourceSchema).min(1),
+  sourceResults: z.array(z.object({
+    source: hydrologySourceSchema,
+    status: z.enum(['success', 'failed']),
+    recordsIngested: z.number().int().nonnegative().default(0),
+    errorMessage: z.string().min(1).max(240).optional(),
+  })).default([]),
 })
 
 export const monitoringStatusSchema = z.object({

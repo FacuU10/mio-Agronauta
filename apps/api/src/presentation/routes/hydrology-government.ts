@@ -18,11 +18,25 @@ import { logger } from '../../infrastructure/observability/logger'
 interface HydrologyGovernmentRouterDeps {
   hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
-  ingestionRunner: (input: { source?: HydrologySource; reason?: string }) => Promise<{ runId: string; status: 'queued' | 'started' | 'completed'; sources: HydrologySource[] }>
+  ingestionRunner: (input: { source?: HydrologySource; reason?: string }) => Promise<GovernmentIngestionRunResult | { runId: string; status: 'queued' | 'started' | 'completed'; sources: HydrologySource[] }>
 }
 
 type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'>
 type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult> }
+type GovernmentIngestionSourceStatus = 'success' | 'failed'
+interface GovernmentIngestionSourceResult {
+  source: HydrologySource
+  status: GovernmentIngestionSourceStatus
+  recordsIngested: number
+  errorMessage?: string
+}
+
+interface GovernmentIngestionRunResult {
+  runId: string
+  status: 'completed' | 'partial' | 'failed'
+  sources: HydrologySource[]
+  sourceResults: GovernmentIngestionSourceResult[]
+}
 
 interface GovernmentIngestionRunnerDeps {
   repository?: GovernmentIngestionRepository
@@ -121,8 +135,13 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
 
-    const result = await resolved.ingestionRunner(parsed.data)
-    return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
+    try {
+      const result = await resolved.ingestionRunner(parsed.data)
+      return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
+    } catch (error) {
+      logger.error({ errorName: error instanceof Error ? error.name : 'UnknownError' }, 'Government hydrology ingest could not start')
+      return respondContractError(res, 503, 'La ingesta hidrológica no está disponible.', { reason: 'ingest_unavailable' })
+    }
   })
 
   router.post('/municipalities/:id/copilot/chat', async (req, res) => {
@@ -265,10 +284,11 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
 
   const allowFixtureFallback = deps.allowFixtureFallback ?? process.env['NODE_ENV'] === 'test'
 
-  return async (input: { source?: HydrologySource }): Promise<{ runId: string; status: 'completed'; sources: HydrologySource[] }> => {
+  return async (input: { source?: HydrologySource }): Promise<GovernmentIngestionRunResult> => {
     const sources = input.source ? [input.source] : ALL_SOURCES
     const runId = `manual-${randomUUID()}`
     await seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool)
+    const sourceResults: GovernmentIngestionSourceResult[] = []
 
     for (const source of sources) {
       const startedAt = now()
@@ -287,7 +307,8 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
           errorMessage,
         })
         logger.error({ runId, source, error: fallbackReason }, 'Government hydrology ingestion failed')
-        throw new Error(errorMessage)
+        sourceResults.push({ source, status: 'failed', recordsIngested: 0, errorMessage })
+        continue
       }
       const records = fallbackReason ? governmentFallbackTelemetry(source, now()) : liveRecords
       const observedTimes = records.map((record) => record.observedAt).sort((a, b) => a.getTime() - b.getTime())
@@ -306,10 +327,18 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         provenanceUrl: records[0]?.sourceUrl,
       })
       void saveResult
+      sourceResults.push({ source, status: 'success', recordsIngested: records.length })
     }
 
-    return { runId, status: 'completed', sources }
+    return { runId, status: summarizeGovernmentIngestionStatus(sourceResults), sources, sourceResults }
   }
+}
+
+function summarizeGovernmentIngestionStatus(sourceResults: GovernmentIngestionSourceResult[]): GovernmentIngestionRunResult['status'] {
+  const failed = sourceResults.filter((result) => result.status === 'failed').length
+  if (failed === 0) return 'completed'
+  if (failed === sourceResults.length) return 'failed'
+  return 'partial'
 }
 
 async function fetchWithDeadline(client: GovernmentSourceClient, timeoutMs: number): Promise<ScraperResult> {

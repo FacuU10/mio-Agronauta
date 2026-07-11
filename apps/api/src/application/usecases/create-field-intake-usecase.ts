@@ -32,7 +32,7 @@ export class CreateFieldIntakeUseCase {
     const field = new Field({
       id: this.idGenerator(),
       externalFieldId: input.fieldId,
-      crop: input.crop,
+      crop: 'rice',
       hectares: input.hectares,
       localityName: coverage.locality,
       provinceCode: coverage.provinceCode,

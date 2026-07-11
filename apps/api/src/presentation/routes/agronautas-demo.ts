@@ -22,8 +22,11 @@ export function createDemoFieldOverview(fieldId: string) {
     contractVersion: AGRONAUTAS_CONTRACT_VERSION,
     fieldId: fieldId.replace(/^demo-/, ''),
     crop: 'rice',
+    cropCategory: 'rice',
     hectares: 42.5,
     locality: 'Mercedes',
+    provinceCode: 'AR-W',
+    countryCode: 'AR',
     location: { lat: -29.1846, lng: -58.0759 },
   })
 }

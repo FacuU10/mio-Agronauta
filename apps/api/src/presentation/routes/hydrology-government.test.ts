@@ -4,6 +4,7 @@ import express from 'express'
 import { createServer } from 'node:http'
 import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, isHydrologyIngestAuthorized, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
 import {
+  agronautasContractErrorSchema,
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
   hydrologyGovernmentMunicipalitiesResponseSchema,
@@ -91,6 +92,22 @@ test('POST /api/hydrology/ingest accepts hydrology bearer token and local safe u
   })
 })
 
+test('POST /api/hydrology/ingest returns a safe contract error when ingest startup fails', async () => {
+  const response = await request(createTestApp({ ingestionRunner: async () => { throw new Error('database password secret: postgres://user:pass@example') } }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+  })
+
+  assert.equal(response.status, 503)
+  const json = agronautasContractErrorSchema.parse(await response.json())
+  assert.equal(json.contractVersion, '1.0.0')
+  assert.equal(json.code, 'INVALID_CONTRACT')
+  assert.match(json.message, /ingesta hidrológica no está disponible/i)
+  assert.equal(json.details?.['reason'], 'ingest_unavailable')
+  assert.doesNotMatch(JSON.stringify(json), /postgres|password|secret|pass@example/i)
+})
+
 test('isHydrologyIngestAuthorized accepts operator/admin fallback when auth is enabled and preserves local safe mode', () => {
   assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
   assert.equal(isHydrologyIngestAuthorized('Bearer admin-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_ADMIN: 'admin-secret' }), true)
@@ -133,7 +150,59 @@ test('default government ingestion runner saves all source fixtures when live cl
   assert.ok(saved.every((item) => item.records > 0))
 })
 
-test('default government ingestion runner fails fast outside tests without writing fixtures', async () => {
+test('default government ingestion runner returns partial production results and continues after one source fails', async () => {
+  const previousNodeEnv = process.env['NODE_ENV']
+  process.env['NODE_ENV'] = 'production'
+  const clientCalls: string[] = []
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  try {
+    const runner = createGovernmentIngestionRunner({
+      now: () => new Date('2026-06-26T12:00:00.000Z'),
+      clients: {
+        PNA: { async fetchTelemetry() { clientCalls.push('PNA'); return { ok: false as const, error: 'offline' } } },
+        INA: { async fetchTelemetry() { clientCalls.push('INA'); return { ok: true as const, records: [telemetryRecord('INA')] } } },
+        INMET: { async fetchTelemetry() { clientCalls.push('INMET'); return { ok: true as const, records: [telemetryRecord('INMET')] } } },
+        SMN: { async fetchTelemetry() { clientCalls.push('SMN'); return { ok: true as const, records: [telemetryRecord('SMN')] } } },
+      },
+      repository: {
+        async saveTelemetryDeduped(records, run) {
+          saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+          return { inserted: records.length, unchanged: 0 }
+        },
+      },
+      seedDb: {
+        async query(sql: string) {
+          if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+          return { rows: [], rowCount: 1 }
+        },
+      },
+    })
+
+    const result = await runner({})
+
+    assert.equal(result.status, 'partial')
+    assert.deepEqual(result.sources, ['PNA', 'INA', 'INMET', 'SMN'])
+    assert.deepEqual(clientCalls, ['PNA', 'INA', 'INMET', 'SMN'])
+    assert.deepEqual(saved.map((item) => [item.source, item.status, item.records]), [
+      ['PNA', 'failed', 0],
+      ['INA', 'success', 1],
+      ['INMET', 'success', 1],
+      ['SMN', 'success', 1],
+    ])
+    assert.deepEqual(result.sourceResults.map((item) => [item.source, item.status, item.recordsIngested]), [
+      ['PNA', 'failed', 0],
+      ['INA', 'success', 1],
+      ['INMET', 'success', 1],
+      ['SMN', 'success', 1],
+    ])
+    assert.match(result.sourceResults[0]?.errorMessage ?? '', /Hydrology ingestion failed for PNA: offline/)
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
+    else process.env['NODE_ENV'] = previousNodeEnv
+  }
+})
+
+test('default government ingestion runner returns failed for one production source failure without fixture writes', async () => {
   const previousNodeEnv = process.env['NODE_ENV']
   process.env['NODE_ENV'] = 'production'
   const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
@@ -155,7 +224,10 @@ test('default government ingestion runner fails fast outside tests without writi
       },
     })
 
-    await assert.rejects(() => runner({ source: 'PNA' }), /Hydrology ingestion failed for PNA: offline/)
+    const result = await runner({ source: 'PNA' })
+
+    assert.equal(result.status, 'failed')
+    assert.deepEqual(result.sourceResults, [{ source: 'PNA', status: 'failed', recordsIngested: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
     assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
   } finally {
     if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
@@ -306,6 +378,23 @@ function municipalityView() {
       { source: 'INA' as const, stationId: 'ina-mercedes', observedAt: '2026-07-13T10:30:00.000Z', ingestedAt: '2026-06-23T10:35:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.8, unit: 'm', metric: 'river_height_m' as const, quality: 'estimated' as const, freshness: 'fresh' as const, forecastHorizonDays: 20, confidence: 'speculative' as const, sourceUrl: 'https://example.com/ina' },
       { source: 'SMN' as const, stationId: 'smn-corrientes', observedAt: '2026-06-23T09:00:00.000Z', ingestedAt: '2026-06-23T09:05:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z', value: null, unit: 'alerta', metric: 'storm_alert' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: 'https://example.com/smn' },
     ],
+  }
+}
+
+function telemetryRecord(source: 'INA' | 'INMET' | 'SMN') {
+  return {
+    source,
+    stationId: `${source.toLowerCase()}-station`,
+    observedAt: new Date('2026-06-26T12:00:00.000Z'),
+    ingestedAt: new Date('2026-06-26T12:00:00.000Z'),
+    lastSuccessfulObservedAt: new Date('2026-06-26T12:00:00.000Z'),
+    value: 1,
+    unit: source === 'SMN' ? 'alerta' : 'm',
+    metric: source === 'SMN' ? 'storm_alert' as const : 'river_height_m' as const,
+    quality: 'ok' as const,
+    freshness: 'fresh' as const,
+    sourceUrl: `https://example.com/${source.toLowerCase()}`,
+    raw: { source },
   }
 }
 

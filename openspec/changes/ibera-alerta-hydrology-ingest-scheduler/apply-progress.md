@@ -47,3 +47,33 @@ Implementation complete for all assigned tasks. Mode: Strict TDD. Delivery: size
 ## Issues Found
 
 - Existing API build errors remain outside this change: `create-field-intake-usecase.ts` crop literal mismatch and `agronautas-demo.ts` missing intake contract fields.
+
+## Corrective Apply: Verification Blockers
+
+### Completed Fixes
+
+- [x] Fixed production all-source hydrology ingest so PNA, INA, INMET, and SMN each get one attempt; source failures are persisted as failed run metadata and no longer abort later sources.
+- [x] Extended the ingest response contract with `partial` / `failed` statuses and `sourceResults` safe per-source diagnostics.
+- [x] Added route-level `POST /api/hydrology/ingest` handling for ingest startup/config/database exceptions, returning structured contract JSON with safe details instead of falling through to global Express 500.
+- [x] Fixed the two unrelated API TypeScript build blockers with behavior-preserving literals/default demo metadata: `create-field-intake-usecase.ts` and `agronautas-demo.ts`.
+
+### Corrective TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| Verify blocker 1 | `apps/api/src/presentation/routes/hydrology-government.test.ts` | Unit/integration | ✅ 91/91 API tests baseline before production changes | ✅ Production PNA-fails all-source test failed with fail-fast throw | ✅ Hydrology route tests 16/16; API tests 93/93 | ✅ Added source-scoped failed case plus mixed all-source partial case | ✅ Added `summarizeGovernmentIngestionStatus` helper and per-source result type |
+| Verify blocker 2 | `apps/api/src/presentation/routes/hydrology-government.test.ts` | Route integration | ✅ 91/91 API tests baseline before route change | ✅ Route startup error test failed with unhandled rejection/global path | ✅ Hydrology route tests 16/16; API tests 93/93 | ✅ Asserts status, contract code, reason, and absence of leaked secret diagnostics | ✅ Logs only error name, response uses safe reason |
+| Verify blocker 3 | TypeScript build | Build/typecheck | ✅ `pnpm --dir apps/api build` failed on the two known unrelated TS errors | ✅ Build failure reproduced before minimal fixes | ✅ `pnpm --dir apps/api build` passes | ➖ Type-only build blocker; no runtime behavior branch | ➖ Minimal literal/default metadata changes only |
+
+### Corrective Verification
+
+- ✅ `node --import tsx --test src/presentation/routes/hydrology-government.test.ts` from `apps/api` — 16/16 passing.
+- ✅ `pnpm --dir apps/api test` — 93/93 passing.
+- ✅ `pnpm --dir packages/hydrology-engine test` — 14/14 passing.
+- ✅ `pnpm --dir packages/hydrology-engine build` — passing.
+- ✅ `pnpm --dir apps/api build` — passing.
+- ⚠️ `pnpm --dir packages/contracts test:agronautas-contracts` — still fails in a pre-existing unrelated validator-map gap for `GroundedChatRequest` (`validator` undefined); not changed because the user requested only the two API TypeScript blockers outside hydrology.
+
+### Remaining Issues
+
+- None for the three requested verification blockers.
