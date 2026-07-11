@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { Router, type Response } from 'express'
+import { Router, type Response, type Request } from 'express'
 import {
   agronautasContractErrorSchema,
   groundedChatRequestSchema,
@@ -108,7 +108,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       municipality: municipality.municipality,
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
-      inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays !== undefined && item.forecastHorizonDays <= 30),
+      inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
       alerts: municipality.latestTelemetry.filter((item) => item.metric === 'storm_alert'),
       provenance: sourceFreshnessFor(municipality.latestTelemetry),
     })
@@ -116,6 +116,8 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   router.post('/ingest', async (req, res) => {
+    if (!isHydrologyIngestAuthorized(req.header('authorization'))) return respondContractError(res, 401, 'Bearer token requerido para ingesta hidrológica')
+
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
 
@@ -150,6 +152,31 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   return router
+}
+
+type HydrologyIngestAuthEnv = Partial<Record<'HYDROLOGY_INGEST_TOKEN' | 'AGRONAUTAS_AUTH_ENABLED' | 'AGRONAUTAS_AUTH_TOKEN_OPERATOR' | 'AGRONAUTAS_AUTH_TOKEN_ADMIN', string | undefined>>
+
+export function isHydrologyIngestAuthorized(authorization: Request['headers']['authorization'], env: HydrologyIngestAuthEnv = process.env): boolean {
+  const configuredTokens = hydrologyIngestAcceptedTokens(env)
+  if (configuredTokens.length === 0) return true
+  const bearer = parseBearerToken(authorization)
+  return bearer !== null && configuredTokens.includes(bearer)
+}
+
+function hydrologyIngestAcceptedTokens(env: HydrologyIngestAuthEnv): string[] {
+  const tokens = compactTokenList([env.HYDROLOGY_INGEST_TOKEN])
+  if (env.AGRONAUTAS_AUTH_ENABLED === 'true') tokens.push(...compactTokenList([env.AGRONAUTAS_AUTH_TOKEN_OPERATOR, env.AGRONAUTAS_AUTH_TOKEN_ADMIN]))
+  return [...new Set(tokens)]
+}
+
+function compactTokenList(values: Array<string | undefined>): string[] {
+  return values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))
+}
+
+function parseBearerToken(authorization: Request['headers']['authorization']): string | null {
+  if (typeof authorization !== 'string') return null
+  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim())
+  return match?.[1]?.trim() || null
 }
 
 function sourceFreshnessFor(telemetry: HydrologyTelemetry[]) {

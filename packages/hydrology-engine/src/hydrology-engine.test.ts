@@ -179,6 +179,36 @@ test('government HTTP clients set user agent and parse successful official paylo
   assert.ok(requests.every((request) => JSON.stringify(request.headers).includes('application/json')))
 })
 
+test('government HTTP clients use HYDROLOGY_*_URL environment overrides', async () => withEnv({
+  HYDROLOGY_PNA_URL: 'https://override.test/pna',
+  HYDROLOGY_INA_URL: 'https://override.test/ina',
+  HYDROLOGY_INMET_URL: 'https://override.test/inmet',
+  HYDROLOGY_SMN_URL: 'https://override.test/smn',
+}, async () => {
+  const requestedUrls: string[] = []
+  const fetchOk = async (input: string | URL | Request) => {
+    requestedUrls.push(String(input))
+    const body = String(input).includes('/pna')
+      ? '<tr data-station="ituzaingo" data-observed-at="2026-06-23T10:30:00.000Z"><td>Altura: 3,21</td></tr>'
+      : String(input).includes('/smn')
+        ? JSON.stringify({ rainfall: [{ stationId: 'posadas', province: 'Misiones', observedAt: '2026-06-23T09:00:00.000Z', rainMm: 80 }] })
+        : String(input).includes('/inmet')
+          ? JSON.stringify({ measurements: [{ stationId: 'br-pr-1', uf: 'PR', observedAt: '2026-06-23T09:00:00.000Z', rainMm: 55 }] })
+          : JSON.stringify({ predictions: [{ stationId: 'corrientes', observedAt: '2026-06-23T10:30:00.000Z', heightM: 4.1 }] })
+    return new Response(body, { status: 200, headers: { 'content-type': String(input).includes('/pna') ? 'text/html' : 'application/json' } })
+  }
+
+  const results = await Promise.all([
+    new PnaHttpClient({ fetch: fetchOk }).fetchTelemetry(),
+    new InaHttpClient({ fetch: fetchOk }).fetchTelemetry(),
+    new InmetHttpClient({ fetch: fetchOk }).fetchTelemetry(),
+    new SmnHttpClient({ fetch: fetchOk }).fetchTelemetry(),
+  ])
+
+  assert.deepEqual(results.map((result) => result.ok), [true, true, true, true])
+  assert.deepEqual(requestedUrls, ['https://override.test/pna', 'https://override.test/ina', 'https://override.test/inmet', 'https://override.test/smn'])
+}))
+
 test('government HTTP clients return parsed failures for network, status, and malformed payload errors', async () => {
   const networkFailure = await new PnaHttpClient({ url: 'https://official.test/pna', fetch: async () => { throw new Error('socket hang up') } }).fetchTelemetry()
   const statusFailure = await new SmnHttpClient({ url: 'https://official.test/smn', fetch: async () => new Response('{}', { status: 503, statusText: 'Service Unavailable' }) }).fetchTelemetry()
@@ -207,3 +237,21 @@ test('government HTTP clients abort official requests after configured timeout',
   assert.equal(abortSignal?.aborted, true)
   assert.match(timeoutFailure.ok ? '' : timeoutFailure.error, /SMN.*timeout after 1ms/)
 })
+
+async function withEnv<T>(values: Record<string, string | undefined>, run: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key])
+    const value = values[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}

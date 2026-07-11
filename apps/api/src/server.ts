@@ -8,12 +8,19 @@ import { createRateLimitMiddleware } from './presentation/middleware/rate-limit'
 import { corsMiddleware } from './presentation/middleware/cors'
 import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
-import { createHydrologyGovernmentRouter } from './presentation/routes/hydrology-government'
+import { createGovernmentIngestionRunner, createHydrologyGovernmentRouter } from './presentation/routes/hydrology-government'
 import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
+import { HydrologyIngestionScheduler, type HydrologyIngestionRunner, type HydrologyIngestionSource } from './infrastructure/jobs/hydrology-ingestion-scheduler'
+import type { HydrologySource } from '@repo/zod-schemas'
 
 dotenv.config()
 
 const PORT = process.env['API_PORT'] || 3001
+
+interface HydrologySchedulerStartupDeps {
+  ingestionRunner?: (input: { source?: HydrologySource; reason?: string }) => Promise<{ runId: string; status: 'queued' | 'started' | 'completed'; sources: HydrologySource[] }>
+  schedulerFactory?: (runner: HydrologyIngestionRunner) => Pick<HydrologyIngestionScheduler, 'start'>
+}
 
 export function createApp(): Application {
   const app = express()
@@ -51,4 +58,32 @@ export function startServer(): void {
   app.listen(PORT, () => {
     logger.info({ port: PORT }, 'API server listening')
   })
+
+  startHydrologySchedulerFromEnv(process.env)
+}
+
+export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: HydrologySchedulerStartupDeps = {}): Pick<HydrologyIngestionScheduler, 'start'> | null {
+  if (env['HYDROLOGY_SCHEDULER_ENABLED'] !== 'true') {
+    logger.info({ enabled: false }, 'Hydrology ingestion scheduler disabled')
+    return null
+  }
+
+  const ingestionRunner = deps.ingestionRunner ?? createGovernmentIngestionRunner()
+  const schedulerRunner: HydrologyIngestionRunner = {
+    async run(source, metadata) {
+      await ingestionRunner({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}` })
+      return { inserted: 0, unchanged: 0 }
+    },
+  }
+  const scheduler = deps.schedulerFactory?.(schedulerRunner) ?? new HydrologyIngestionScheduler(schedulerRunner, {
+    onBackgroundError: (error, metadata) => logger.error({ error, ...metadata }, 'Hydrology scheduler background ingestion failed'),
+  })
+  scheduler.start()
+  logger.info({ enabled: true }, 'Hydrology ingestion scheduler started')
+  return scheduler
+}
+
+function toGovernmentHydrologySource(source: HydrologyIngestionSource): HydrologySource {
+  if (source === 'SMN_ALERTS' || source === 'SMN_RAINFALL') return 'SMN'
+  return source
 }

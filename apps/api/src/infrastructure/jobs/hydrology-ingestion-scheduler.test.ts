@@ -6,6 +6,7 @@ import {
   shouldScheduleHydrologyRetry,
   type HydrologyIngestionSource,
 } from './hydrology-ingestion-scheduler'
+import { startHydrologySchedulerFromEnv } from '../../server'
 
 test('hydrologyIngestionCadences defines approved official source schedules', () => {
   assert.deepEqual(hydrologyIngestionCadences.PNA, { kind: 'interval', everyMs: 60 * 60 * 1000 })
@@ -33,6 +34,60 @@ test('HydrologyIngestionScheduler schedules interval sources and INA at 18:30 UT
     { source: 'SMN_RAINFALL', ms: 3 * 60 * 60 * 1000 },
   ])
   assert.deepEqual(timeouts, [{ source: 'INA', ms: 30 * 60 * 1000 }])
+})
+
+test('startHydrologySchedulerFromEnv is disabled by default and does not create timers', () => {
+  let factoryCalls = 0
+  const scheduler = startHydrologySchedulerFromEnv({}, {
+    schedulerFactory: () => {
+      factoryCalls += 1
+      return { start() { throw new Error('must not start') } }
+    },
+  })
+
+  assert.equal(scheduler, null)
+  assert.equal(factoryCalls, 0)
+})
+
+test('startHydrologySchedulerFromEnv starts once when enabled without running ingestion immediately', () => {
+  const runnerCalls: string[] = []
+  let startCalls = 0
+  const scheduler = startHydrologySchedulerFromEnv({ HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
+    ingestionRunner: async ({ source }) => {
+      runnerCalls.push(source ?? 'PNA')
+      return { runId: `manual-${source ?? 'ALL'}`, status: 'completed', sources: source ? [source] : ['PNA', 'INA', 'INMET', 'SMN'] }
+    },
+    schedulerFactory: (runner) => ({
+      start() {
+        startCalls += 1
+        void runner
+      },
+    }),
+  })
+
+  assert.ok(scheduler)
+  assert.equal(startCalls, 1)
+  assert.deepEqual(runnerCalls, [])
+})
+
+test('startHydrologySchedulerFromEnv maps scheduler sources to one manual government ingest call', async () => {
+  const manualSources: Array<string | undefined> = []
+  let capturedRunner: { run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date }): Promise<{ inserted: number; unchanged: number }> } | undefined
+  startHydrologySchedulerFromEnv({ HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
+    ingestionRunner: async ({ source }) => {
+      manualSources.push(source)
+      return { runId: `manual-${source ?? 'ALL'}`, status: 'completed', sources: source ? [source] : ['PNA', 'INA', 'INMET', 'SMN'] }
+    },
+    schedulerFactory: (runner) => {
+      capturedRunner = runner
+      return { start() {} }
+    },
+  })
+
+  assert.deepEqual(await capturedRunner?.run('SMN_ALERTS', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
+  assert.deepEqual(await capturedRunner?.run('SMN_RAINFALL', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
+  assert.deepEqual(await capturedRunner?.run('INA', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
+  assert.deepEqual(manualSources, ['SMN', 'SMN', 'INA'])
 })
 
 test('HydrologyIngestionScheduler prunes completed daily timeout handles', async () => {

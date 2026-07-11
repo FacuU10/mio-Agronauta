@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, isHydrologyIngestAuthorized, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -48,6 +48,54 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
   assert.equal(json.status, 'queued')
   assert.deepEqual(json.sources, ['PNA'])
+})
+
+test('POST /api/hydrology/ingest rejects missing or invalid hydrology bearer before runner execution', async () => withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
+  let runnerCalls = 0
+  const app = createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-forbidden', status: 'queued', sources: ['PNA'] } } })
+
+  const missing = await request(app, '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+  })
+  const invalid = await request(app, '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer wrong-secret' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+  })
+
+  assert.equal(missing.status, 401)
+  assert.equal(invalid.status, 401)
+  assert.equal(runnerCalls, 0)
+}))
+
+test('POST /api/hydrology/ingest accepts hydrology bearer token and local safe unauthenticated mode', async () => {
+  await withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
+    const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-auth', status: 'queued', sources: ['PNA', 'INA', 'INMET', 'SMN'] }) }), '/api/hydrology/ingest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer cron-secret' },
+      body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+    })
+    assert.equal(response.status, 202)
+    assert.deepEqual(hydrologyGovernmentIngestResponseSchema.parse(await response.json()).sources, ['PNA', 'INA', 'INMET', 'SMN'])
+  })
+
+  await withEnv({ HYDROLOGY_INGEST_TOKEN: undefined, AGRONAUTAS_AUTH_ENABLED: undefined, AGRONAUTAS_AUTH_TOKEN_OPERATOR: undefined, AGRONAUTAS_AUTH_TOKEN_ADMIN: undefined }, async () => {
+    const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-local', status: 'queued', sources: ['PNA'] }) }), '/api/hydrology/ingest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+    })
+    assert.equal(response.status, 202)
+  })
+})
+
+test('isHydrologyIngestAuthorized accepts operator/admin fallback when auth is enabled and preserves local safe mode', () => {
+  assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
+  assert.equal(isHydrologyIngestAuthorized('Bearer admin-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_ADMIN: 'admin-secret' }), true)
+  assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'false', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
+  assert.equal(isHydrologyIngestAuthorized(undefined, { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), false)
 })
 
 test('default government ingestion runner saves all source fixtures when live clients fail or return empty', async () => {
@@ -270,5 +318,23 @@ async function request(app: express.Express, path: string, init?: RequestInit) {
     return await fetch(`http://127.0.0.1:${address.port}${path}`, init)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+}
+
+async function withEnv<T>(values: Record<string, string | undefined>, run: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key])
+    const value = values[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 }

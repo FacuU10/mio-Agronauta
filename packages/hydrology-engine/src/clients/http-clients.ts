@@ -63,7 +63,7 @@ abstract class OfficialHttpClient {
 }
 
 export class PnaHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('PNA', options.url ?? 'https://www.prefecturanaval.gob.ar/alturas', options) }
+  constructor(options: ClientOptions = {}) { super('PNA', options.url ?? process.env['HYDROLOGY_PNA_URL'] ?? 'https://www.prefecturanaval.gob.ar/alturas', options) }
   async fetchTelemetry(): Promise<ScraperResult> {
     const fetched = await this.fetchText()
     return fetched.ok ? this.parseSafely(fetched.body, (body) => new PnaAdapter().parse(body)) : fetched
@@ -71,7 +71,7 @@ export class PnaHttpClient extends OfficialHttpClient {
 }
 
 export class SmnHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('SMN', options.url ?? 'https://www.smn.gob.ar/alertas', options) }
+  constructor(options: ClientOptions = {}) { super('SMN', options.url ?? process.env['HYDROLOGY_SMN_URL'] ?? 'https://www.smn.gob.ar/alertas', options) }
   async fetchTelemetry(): Promise<ScraperResult> {
     const fetched = await this.fetchText('json')
     return fetched.ok ? this.parseSafely(fetched.body, (body) => new SmnAdapter().parse(body)) : fetched
@@ -79,7 +79,7 @@ export class SmnHttpClient extends OfficialHttpClient {
 }
 
 export class InmetHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('INMET', options.url ?? 'https://portal.inmet.gov.br/dadoshistoricos', options) }
+  constructor(options: ClientOptions = {}) { super('INMET', options.url ?? process.env['HYDROLOGY_INMET_URL'] ?? 'https://portal.inmet.gov.br/dadoshistoricos', options) }
   async fetchTelemetry(): Promise<ScraperResult> {
     const fetched = await this.fetchText('json')
     return fetched.ok ? this.parseSafely(fetched.body, (body) => new InmetAdapter().parse(body)) : fetched
@@ -87,7 +87,7 @@ export class InmetHttpClient extends OfficialHttpClient {
 }
 
 export class InaHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('INA', options.url ?? 'https://www.ina.gob.ar/alerta/index.php', options) }
+  constructor(options: ClientOptions = {}) { super('INA', options.url ?? process.env['HYDROLOGY_INA_URL'] ?? 'https://www.ina.gob.ar/alerta/index.php', options) }
   async fetchTelemetry(): Promise<ScraperResult> {
     const fetched = await this.fetchText('json')
     return fetched.ok ? this.parseSafely(fetched.body, (body) => new InaAdapter().parse(body)) : fetched
