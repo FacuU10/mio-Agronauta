@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, isHydrologyIngestAuthorized, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -95,6 +95,70 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   assert.deepEqual(json.requestedSources, ['PNA'])
 })
 
+test('POST /api/hydrology/ingest rejects missing or invalid hydrology bearer before runner execution', async () => withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
+  let runnerCalls = 0
+  const app = createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-forbidden', status: 'queued', sources: ['PNA'] } } })
+
+  const missing = await request(app, '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+  })
+  const invalid = await request(app, '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer wrong-secret' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+  })
+
+  assert.equal(missing.status, 401)
+  assert.equal(invalid.status, 401)
+  assert.equal(runnerCalls, 0)
+}))
+
+test('POST /api/hydrology/ingest accepts hydrology bearer token and local safe unauthenticated mode', async () => {
+  await withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
+    const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-auth', status: 'queued', sources: ['PNA', 'INA', 'INMET', 'SMN'] }) }), '/api/hydrology/ingest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer cron-secret' },
+      body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+    })
+    assert.equal(response.status, 202)
+    assert.deepEqual(hydrologyGovernmentIngestResponseSchema.parse(await response.json()).sources, ['PNA', 'INA', 'INMET', 'SMN'])
+  })
+
+  await withEnv({ HYDROLOGY_INGEST_TOKEN: undefined, AGRONAUTAS_AUTH_ENABLED: undefined, AGRONAUTAS_AUTH_TOKEN_OPERATOR: undefined, AGRONAUTAS_AUTH_TOKEN_ADMIN: undefined }, async () => {
+    const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-local', status: 'queued', sources: ['PNA'] }) }), '/api/hydrology/ingest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+    })
+    assert.equal(response.status, 202)
+  })
+})
+
+test('POST /api/hydrology/ingest returns a safe contract error when ingest startup fails', async () => {
+  const response = await request(createTestApp({ ingestionRunner: async () => { throw new Error('database password secret: postgres://user:pass@example') } }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+  })
+
+  assert.equal(response.status, 503)
+  const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
+  assert.equal(json.contractVersion, 'hydrology-government-ingest-v1')
+  assert.equal(json.status, 'failed')
+  assert.deepEqual(json.requestedSources, ['PNA', 'INA', 'INMET', 'SMN'])
+  assert.equal(json.results[0]?.diagnostic?.failureKind, 'startup_failure')
+  assert.doesNotMatch(JSON.stringify(json), /postgres|password|secret|pass@example/i)
+})
+
+test('isHydrologyIngestAuthorized accepts operator/admin fallback when auth is enabled and preserves local safe mode', () => {
+  assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
+  assert.equal(isHydrologyIngestAuthorized('Bearer admin-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_ADMIN: 'admin-secret' }), true)
+  assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'false', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
+  assert.equal(isHydrologyIngestAuthorized(undefined, { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), false)
+})
+
 test('default government ingestion runner saves all source fixtures when live clients fail or return empty', async () => {
   const saved: Array<{ source: string; records: number }> = []
   const runner = createGovernmentIngestionRunner({
@@ -130,7 +194,59 @@ test('default government ingestion runner saves all source fixtures when live cl
   assert.ok(saved.every((item) => item.records > 0))
 })
 
-test('default government ingestion runner fails fast outside tests without writing fixtures', async () => {
+test('default government ingestion runner returns partial production results and continues after one source fails', async () => {
+  const previousNodeEnv = process.env['NODE_ENV']
+  process.env['NODE_ENV'] = 'production'
+  const clientCalls: string[] = []
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  try {
+    const runner = createGovernmentIngestionRunner({
+      now: () => new Date('2026-06-26T12:00:00.000Z'),
+      clients: {
+        PNA: { async fetchTelemetry() { clientCalls.push('PNA'); return { ok: false as const, error: 'offline', diagnostic: { failureKind: 'network_failure' as const, reason: 'network request failed', attempts: 1 } } } },
+        INA: { async fetchTelemetry() { clientCalls.push('INA'); return { ok: true as const, records: [telemetryRecord('INA')] } } },
+        INMET: { async fetchTelemetry() { clientCalls.push('INMET'); return { ok: true as const, records: [telemetryRecord('INMET')] } } },
+        SMN: { async fetchTelemetry() { clientCalls.push('SMN'); return { ok: true as const, records: [telemetryRecord('SMN')] } } },
+      },
+      repository: {
+        async saveTelemetryDeduped(records, run) {
+          saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+          return { inserted: records.length, unchanged: 0 }
+        },
+      },
+      seedDb: {
+        async query(sql: string) {
+          if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+          return { rows: [], rowCount: 1 }
+        },
+      },
+    })
+
+    const result = await runner({})
+
+    assert.equal(result.status, 'partial')
+    assert.deepEqual(result.sources, ['PNA', 'INA', 'INMET', 'SMN'])
+    assert.deepEqual(clientCalls, ['PNA', 'INA', 'INMET', 'SMN'])
+    assert.deepEqual(saved.map((item) => [item.source, item.status, item.records]), [
+      ['PNA', 'failed', 0],
+      ['INA', 'success', 1],
+      ['INMET', 'success', 1],
+      ['SMN', 'success', 1],
+    ])
+    assert.deepEqual(result.sourceResults.map((item) => [item.source, item.status, item.recordsIngested]), [
+      ['PNA', 'failed', 0],
+      ['INA', 'success', 1],
+      ['INMET', 'success', 1],
+      ['SMN', 'success', 1],
+    ])
+    assert.match(result.sourceResults[0]?.errorMessage ?? '', /Hydrology ingestion failed for PNA: offline/)
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
+    else process.env['NODE_ENV'] = previousNodeEnv
+  }
+})
+
+test('default government ingestion runner returns failed for one production source failure without fixture writes', async () => {
   const previousNodeEnv = process.env['NODE_ENV']
   process.env['NODE_ENV'] = 'production'
   const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
@@ -153,11 +269,13 @@ test('default government ingestion runner fails fast outside tests without writi
     })
 
     const result = await runner({ source: 'PNA' })
+
     assert.equal(result.status, 'failed')
     assert.equal(result.results[0]?.status, 'failed')
     assert.equal(result.results[0]?.diagnostic?.failureKind, 'network_failure')
     assert.equal(result.results[0]?.diagnostic?.attempts, 1)
     assert.equal(result.results[0]?.diagnostic?.timeoutMs, 10_000)
+    assert.deepEqual(result.sourceResults, [{ source: 'PNA', status: 'failed', recordsIngested: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
     assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
   } finally {
     if (previousNodeEnv === undefined) delete process.env['NODE_ENV']
@@ -400,6 +518,23 @@ function municipalityView() {
   }
 }
 
+function telemetryRecord(source: 'INA' | 'INMET' | 'SMN') {
+  return {
+    source,
+    stationId: `${source.toLowerCase()}-station`,
+    observedAt: new Date('2026-06-26T12:00:00.000Z'),
+    ingestedAt: new Date('2026-06-26T12:00:00.000Z'),
+    lastSuccessfulObservedAt: new Date('2026-06-26T12:00:00.000Z'),
+    value: 1,
+    unit: source === 'SMN' ? 'alerta' : 'm',
+    metric: source === 'SMN' ? 'storm_alert' as const : 'river_height_m' as const,
+    quality: 'ok' as const,
+    freshness: 'fresh' as const,
+    sourceUrl: `https://example.com/${source.toLowerCase()}`,
+    raw: { source },
+  }
+}
+
 async function request(app: express.Express, path: string, init?: RequestInit) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))
@@ -409,5 +544,23 @@ async function request(app: express.Express, path: string, init?: RequestInit) {
     return await fetch(`http://127.0.0.1:${address.port}${path}`, init)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+}
+
+async function withEnv<T>(values: Record<string, string | undefined>, run: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key])
+    const value = values[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 }

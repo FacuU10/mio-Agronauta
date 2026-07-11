@@ -26,7 +26,8 @@ interface HydrologyGovernmentRouterDeps {
 type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'>
 type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult> }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; diagnostic?: HydrologyGovernmentIngestDiagnostic }
-type GovernmentIngestionResponse = { runId?: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources?: HydrologySource[] }
+type GovernmentIngestionResponse = { runId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+type CompletedGovernmentIngestionResponse = { runId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 
 interface GovernmentIngestionRunnerDeps {
   repository?: GovernmentIngestionRepository
@@ -162,6 +163,8 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   router.post('/ingest', async (req, res) => {
+    if (!isHydrologyIngestAuthorized(req.header('authorization'))) return respondContractError(res, 401, 'Bearer token requerido para ingesta hidrológica')
+
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
 
@@ -169,13 +172,17 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       const result = await resolved.ingestionRunner(parsed.data)
       return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
     } catch (error) {
-      logger.error({ error }, 'Government hydrology ingestion could not start')
+      logger.error({ errorName: error instanceof Error ? error.name : 'UnknownError' }, 'Government hydrology ingestion could not start')
       const diagnostic = startupFailureDiagnostic()
+      const requestedSources = parsed.data.source ? [parsed.data.source] : ALL_SOURCES
+      const results: GovernmentIngestionSourceResult[] = requestedSources.map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: 'No se pudo iniciar la ingesta hidrológica', diagnostic }))
       return res.status(503).json(hydrologyGovernmentIngestResponseSchema.parse({
         contractVersion: 'hydrology-government-ingest-v1',
         status: 'failed',
-        requestedSources: parsed.data.source ? [parsed.data.source] : ALL_SOURCES,
-        results: (parsed.data.source ? [parsed.data.source] : ALL_SOURCES).map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: 'No se pudo iniciar la ingesta hidrológica', diagnostic })),
+        requestedSources,
+        results,
+        sources: requestedSources,
+        sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
       }))
     }
   })
@@ -207,6 +214,31 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   return router
+}
+
+type HydrologyIngestAuthEnv = Partial<Record<'HYDROLOGY_INGEST_TOKEN' | 'AGRONAUTAS_AUTH_ENABLED' | 'AGRONAUTAS_AUTH_TOKEN_OPERATOR' | 'AGRONAUTAS_AUTH_TOKEN_ADMIN', string | undefined>>
+
+export function isHydrologyIngestAuthorized(authorization: Request['headers']['authorization'], env: HydrologyIngestAuthEnv = process.env): boolean {
+  const configuredTokens = hydrologyIngestAcceptedTokens(env)
+  if (configuredTokens.length === 0) return true
+  const bearer = parseBearerToken(authorization)
+  return bearer !== null && configuredTokens.includes(bearer)
+}
+
+function hydrologyIngestAcceptedTokens(env: HydrologyIngestAuthEnv): string[] {
+  const tokens = compactTokenList([env.HYDROLOGY_INGEST_TOKEN])
+  if (env.AGRONAUTAS_AUTH_ENABLED === 'true') tokens.push(...compactTokenList([env.AGRONAUTAS_AUTH_TOKEN_OPERATOR, env.AGRONAUTAS_AUTH_TOKEN_ADMIN]))
+  return [...new Set(tokens)]
+}
+
+function compactTokenList(values: Array<string | undefined>): string[] {
+  return values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))
+}
+
+function parseBearerToken(authorization: Request['headers']['authorization']): string | null {
+  if (typeof authorization !== 'string') return null
+  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim())
+  return match?.[1]?.trim() || null
 }
 
 function sourceFreshnessFor(telemetry: HydrologyTelemetry[]) {
@@ -322,7 +354,7 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
 
   const allowFixtureFallback = deps.allowFixtureFallback ?? process.env['NODE_ENV'] === 'test'
 
-  return async (input: { source?: HydrologySource }): Promise<GovernmentIngestionResponse> => {
+  return async (input: { source?: HydrologySource }): Promise<CompletedGovernmentIngestionResponse> => {
     const sources = input.source ? [input.source] : ALL_SOURCES
     const runId = `manual-${randomUUID()}`
     await seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool)
@@ -369,7 +401,7 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
       results.push({ source, status: records.length > 0 ? 'success' : 'empty', recordsIngested: records.length, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined })
     }
 
-    return { runId, status: ingestionStatus(results), requestedSources: sources, results, sources }
+    return { runId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
   }
 }
 
@@ -378,6 +410,15 @@ function ingestionStatus(results: GovernmentIngestionSourceResult[]): 'completed
   if (successCount === results.length) return 'completed'
   if (successCount > 0) return 'partial'
   return 'failed'
+}
+
+function toSourceResults(results: GovernmentIngestionSourceResult[]): Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> {
+  return results.map((result) => ({
+    source: result.source,
+    status: result.status === 'failed' ? 'failed' : 'success',
+    recordsIngested: result.recordsIngested,
+    errorMessage: result.errorMessage,
+  }))
 }
 
 async function fetchWithDeadline(client: GovernmentSourceClient, source: HydrologySource, timeoutMs: number): Promise<ScraperResult> {

@@ -23,10 +23,10 @@ export function createDemoFieldOverview(fieldId: string) {
     fieldId: fieldId.replace(/^demo-/, ''),
     cropCategory: 'cereal',
     crop: 'rice',
-    provinceCode: 'AR-W',
-    countryCode: 'AR',
     hectares: 42.5,
     locality: 'Mercedes',
+    provinceCode: 'AR-W',
+    countryCode: 'AR',
     location: { lat: -29.1846, lng: -58.0759 },
   })
 }
