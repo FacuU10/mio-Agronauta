@@ -3,35 +3,40 @@
 **Change**: ibera-alerta-hydrology-ingest-scheduler  
 **Version**: N/A  
 **Mode**: Standard  
-**Date**: 2026-07-11
+**Date**: 2026-07-11  
+**Verification pass**: Final re-run after blocker fixes
 
 ### Completeness
 | Metric | Value |
 |--------|-------|
-| Tasks total | 10 |
-| Tasks complete | 10 claimed in tasks/apply-progress |
-| Tasks incomplete | 0 claimed; 2 verification blockers found against spec behavior |
+| Tasks total | 10 planned + 3 corrective blocker fixes |
+| Tasks complete | 13 |
+| Tasks incomplete | 0 for this change |
 
 ### Build & Tests Execution
-**Build**: ❌ Failed
+**Build**: ✅ Passed
 ```text
-pnpm --dir packages/hydrology-engine build
+pnpm --dir apps/api build
 > tsc
 PASS
 
-pnpm --dir apps/api build
+pnpm --dir packages/hydrology-engine build
 > tsc
-src/application/usecases/create-field-intake-usecase.ts(35,7): error TS2322: Type 'string' is not assignable to type '"rice"'.
-src/presentation/routes/agronautas-demo.ts(21,26): error TS2345: Argument ... is missing cropCategory, provinceCode, countryCode.
-ELIFECYCLE Command failed with exit code 2.
+PASS
 ```
 
-**Tests**: ✅ 105 passed / ❌ 0 failed / ⚠️ 0 skipped
+**Tests**: ✅ 133 passed / ❌ 0 failed for hydrology/API verification scope; unrelated contracts failure listed separately.
 ```text
+node --import tsx --test src/presentation/routes/hydrology-government.test.ts src/infrastructure/jobs/hydrology-ingestion-scheduler.test.ts
+1..26
+# tests 26
+# pass 26
+# fail 0
+
 pnpm --dir apps/api test
-1..91
-# tests 91
-# pass 91
+1..93
+# tests 93
+# pass 93
 # fail 0
 
 pnpm --dir packages/hydrology-engine test
@@ -45,69 +50,84 @@ pnpm --dir packages/hydrology-engine test
 
 ### Local Bounded All-Source Verification Evidence
 
-Bounded local evidence was collected from the API test suite without live network, polling, retries, browser automation, or DB writes:
+Bounded local evidence remains test-harness based: no live provider loop, polling, browser automation, repeated POSTs, or DB writes beyond repository stubs.
 
 ```text
-Subtest: default government ingestion runner saves all source fixtures when live clients fail or return empty
-ok 80
-assert.deepEqual(result.sources, ['PNA', 'INA', 'INMET', 'SMN'])
-assert.deepEqual(saved.map((item) => item.source), ['PNA', 'INA', 'INMET', 'SMN'])
+Subtest: default government ingestion runner returns partial production results and continues after one source fails
+ok 19
+assert.deepEqual(clientCalls, ['PNA', 'INA', 'INMET', 'SMN'])
+assert.deepEqual(result.sourceResults.map((item) => [item.source, item.status, item.recordsIngested]), [
+  ['PNA', 'failed', 0],
+  ['INA', 'success', 1],
+  ['INMET', 'success', 1],
+  ['SMN', 'success', 1],
+])
+
+Subtest: default government ingestion runner returns failed for one production source failure without fixture writes
+ok 20
+assert.equal(result.status, 'failed')
+assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: offline' }])
 ```
 
-This proves the local all-source runner path can attempt PNA, INA, INMET, and SMN once each under the bounded stub harness. It does not prove production degraded all-source independence because the production-mode test currently proves fail-fast behavior.
+This proves all-source ingest continues independently across a failed PNA source, each configured source is attempted exactly once, source-scoped failure remains structured, and production mode does not write offline fixture telemetry.
 
 ### Spec Compliance Matrix
 | Requirement | Scenario | Test | Result |
 |-------------|----------|------|--------|
-| Hydrology ingest scheduling configuration | Render Free uses external cron | `docs/runbooks/ibera-alerta-hydrology-ingest-scheduler.md` + scheduler tests | ✅ COMPLIANT |
-| Hydrology ingest scheduling configuration | Optional scheduler starts safely | `apps/api/src/infrastructure/jobs/hydrology-ingestion-scheduler.test.ts` > disabled by default; enabled start without immediate ingestion | ✅ COMPLIANT |
-| Hydrology ingest scheduling configuration | Provider overrides are explicit | `packages/hydrology-engine/src/hydrology-engine.test.ts` > HYDROLOGY_*_URL overrides | ✅ COMPLIANT |
-| Production-safe hydrology ingest | Manual all-source operator run | `hydrology-government.test.ts` > local all-source runner; static inspection of runner loop | ⚠️ PARTIAL |
-| Production-safe hydrology ingest | Source-scoped run remains available | `POST /api/hydrology/ingest dispara ingesta manual...` | ✅ COMPLIANT |
-| Production-safe hydrology ingest | Production token enforcement | `rejects missing or invalid hydrology bearer before runner execution`; `accepts hydrology bearer token`; `isHydrologyIngestAuthorized...fallback` | ✅ COMPLIANT |
-| Production-safe hydrology ingest | Unrecoverable ingest startup error returns contract error, not unhandled Express 500 | No covering passing test; route has no local try/catch around `resolved.ingestionRunner(parsed.data)` | ❌ UNTESTED / LIKELY FAILING |
-| Bounded deployed smoke verification | Local bounded all-source verification | API test subtest 80, stubbed all-source path | ✅ COMPLIANT |
-| Bounded deployed smoke verification | Production bounded smoke after deploy | Not applicable before commit/deploy; runbook documents exactly one POST after deploy | ⚠️ PARTIAL |
+| Hydrology ingest scheduling configuration | Render Free uses external cron | `docs/runbooks/ibera-alerta-hydrology-ingest-scheduler.md` lines 3-19 + scheduler cadence tests | ✅ COMPLIANT |
+| Hydrology ingest scheduling configuration | Optional scheduler starts safely | `hydrology-ingestion-scheduler.test.ts` > disabled by default; enabled start without immediate ingestion | ✅ COMPLIANT |
+| Hydrology ingest scheduling configuration | Provider overrides are explicit | `packages/hydrology-engine/src/hydrology-engine.test.ts` > `government HTTP clients use HYDROLOGY_*_URL environment overrides` | ✅ COMPLIANT |
+| Production-safe hydrology ingest | Manual all-source operator run | `hydrology-government.test.ts` > all-source fixtures; production partial continues after PNA failure | ✅ COMPLIANT |
+| Production-safe hydrology ingest | Source-scoped run remains available | `hydrology-government.test.ts` > source-scoped PNA contract + one-source failed production result | ✅ COMPLIANT |
+| Production-safe hydrology ingest | Production token enforcement | `hydrology-government.test.ts` > missing/invalid bearer rejects before runner; valid bearer accepted; fallback helper tested | ✅ COMPLIANT |
+| Production-safe hydrology ingest | Unrecoverable ingest startup error | `hydrology-government.test.ts` > safe contract error when ingest startup fails | ✅ COMPLIANT |
+| Bounded deployed smoke verification | Local bounded all-source verification | One local all-source production-mode runner test; no retry/poll loop | ✅ COMPLIANT |
+| Bounded deployed smoke verification | Production bounded smoke after deploy | Runbook documents exactly one post-deploy POST; cannot execute pre-deploy | ⚠️ PARTIAL |
 
-**Compliance summary**: 6/9 scenarios compliant; 2 partial; 1 critical untested/likely failing.
+**Compliance summary**: 8/9 scenarios compliant; 1 partial because production smoke is necessarily post-deploy.
 
 ### Correctness (Static Evidence)
 | Requirement | Status | Notes |
 |------------|--------|-------|
-| Manual ingest auth with `HYDROLOGY_INGEST_TOKEN` | ✅ Implemented | `hydrology-government.ts:118-124` rejects before parsing/running; helper accepts configured bearer. Tests prove missing/invalid rejected with zero runner calls. |
-| Operator/admin token fallback | ✅ Implemented | `isHydrologyIngestAuthorized` includes operator/admin only when `AGRONAUTAS_AUTH_ENABLED === 'true'`. Tests cover operator/admin fallback. |
-| Scheduler env flag default false | ✅ Implemented | `server.ts:65-69` returns null unless value is exactly `true`; test proves factory not called by default. |
-| Scheduler true startup | ✅ Implemented | `server.ts:71-83` creates scheduler and calls `start()` only when enabled; test proves one `start()` call. |
-| No immediate boot ingest | ✅ Implemented | `HydrologyIngestionScheduler.start()` only registers intervals/timeouts; startup test captures zero ingestion runner calls. |
-| Safe cadence / no retry storms | ✅ Mostly implemented | PNA/INMET/SMN alerts hourly, SMN rainfall 3h, INA daily. Startup wiring does not pass `enqueueDelayedRetry`; manual runner performs one `fetchWithDeadline` per source. Scheduler class still contains one delayed PNA/INA retry path when explicitly provided, but startup does not enable it. |
-| Provider URL env overrides | ✅ Implemented | HTTP clients read `HYDROLOGY_PNA_URL`, `HYDROLOGY_INA_URL`, `HYDROLOGY_INMET_URL`, `HYDROLOGY_SMN_URL`; tests assert requested URLs. |
-| Independent per-source degraded all-source production response | ❌ Failing by inspection/test | In production mode, `createGovernmentIngestionRunner` throws on the first source failure (`hydrology-government.ts:278-290`), aborting remaining sources and likely returning global 500 instead of 202 independent statuses. Existing test `default government ingestion runner fails fast outside tests without writing fixtures` confirms this behavior. |
+| All-source ingest continues across failed sources independently | ✅ Implemented | `createGovernmentIngestionRunner` loops `ALL_SOURCES`, pushes failed `sourceResults`, persists failed run metadata, and `continue`s rather than throwing (`hydrology-government.ts:287-333`). Runtime test proves calls `PNA`, `INA`, `INMET`, `SMN` after PNA failure. |
+| Safe structured route-level error handling | ✅ Implemented | `POST /ingest` wraps `resolved.ingestionRunner(parsed.data)` in local `try/catch` and returns contract JSON `503` with `{ reason: 'ingest_unavailable' }`; test asserts no secret leak (`hydrology-government.ts:138-144`). |
+| API build passes | ✅ Implemented | `pnpm --dir apps/api build` passes. |
+| Anti-DDoS constraints | ✅ Implemented with documented operational guard | Scheduler cadences are PNA/INMET/SMN alerts hourly, SMN rainfall every 3h, INA daily; startup wiring does not pass `enqueueDelayedRetry`; manual runner has one `fetchWithDeadline` per source. The scheduler class still has opt-in delayed retry metadata when an explicit `enqueueDelayedRetry` is supplied, but production startup does not enable it. |
+| Auth behavior | ✅ Implemented | `HYDROLOGY_INGEST_TOKEN` bearer is enforced when configured; missing/invalid tokens return 401 before runner execution. Operator/admin fallback is accepted only when `AGRONAUTAS_AUTH_ENABLED === 'true'`; local no-token mode remains open by design. |
+| Scheduler env behavior | ✅ Implemented | `startHydrologySchedulerFromEnv` returns `null` unless `HYDROLOGY_SCHEDULER_ENABLED === 'true'`; enabled mode calls scheduler `start()` once and does not run ingestion immediately. |
+| Provider override behavior | ✅ Implemented | HTTP clients read `HYDROLOGY_PNA_URL`, `HYDROLOGY_INA_URL`, `HYDROLOGY_INMET_URL`, `HYDROLOGY_SMN_URL`; tests assert exact requested override URLs. |
 
 ### Coherence (Design)
 | Decision | Followed? | Notes |
 |----------|-----------|-------|
-| Keep manual endpoint canonical | ✅ Yes | Scheduler adapter reuses `createGovernmentIngestionRunner`. |
-| Env-gated scheduler startup | ✅ Yes | `HYDROLOGY_SCHEDULER_ENABLED` must equal `true`. |
-| Auth before provider calls | ✅ Yes | Missing/invalid bearer returns 401 and runner call count remains zero. |
-| Render Free external cron | ✅ Yes | Runbook keeps in-process scheduler disabled and documents hourly external cron. |
+| Keep manual endpoint canonical | ✅ Yes | Scheduler adapter still invokes the government ingestion runner. |
+| Env-gated scheduler startup | ✅ Yes | Default disabled; enabled only by exact string `true`. |
+| Auth before provider calls | ✅ Yes | Unauthorized test verifies runner call count stays zero. |
+| Render Free external cron | ✅ Yes | Runbook keeps scheduler disabled and documents hourly external cron with bearer auth. |
 | Provider overrides documented and tested | ✅ Yes | Runbook and hydrology-engine tests cover all four env vars. |
-| Independent statuses / no abort on one source failure | ❌ No | Runner fail-fast contradicts spec and the design's all-source resilient behavior. |
+| Independent per-source statuses | ✅ Yes | Runtime test verifies partial result with failed PNA and successful INA/INMET/SMN. |
+
+### Unrelated Failure
+```text
+pnpm --dir packages/contracts test:agronautas-contracts
+1..2
+# pass 1
+# fail 1
+not ok 2 - acepta y rechaza fixtures de contratos de forma consistente en TypeScript
+TypeError: Cannot read properties of undefined (reading 'safeParse')
+packages/contracts/tests/agronautas-contracts.test.ts:43:30
+```
+
+This is the same unrelated contracts validator-map gap previously observed for `GroundedChatRequest`; it is outside the hydrology ingest scheduler/API blocker scope.
 
 ### Issues Found
-**CRITICAL**:
-- Production/degraded all-source ingest can abort on first failed source: `hydrology-government.ts:278-290` throws outside tests, so one failed provider can prevent remaining sources and prevent a structured HTTP 202 response with independent source statuses. This violates “one source failure MUST NOT abort others.”
-- Unrecoverable ingest startup/config/database failure has no passing covering test and no route-level contract error handling around `resolved.ingestionRunner(...)`; likely falls through global Express 500 rather than the specified contract error response.
-- `pnpm --dir apps/api build` fails with unrelated TypeScript errors in `create-field-intake-usecase.ts` and `agronautas-demo.ts`.
-
+**CRITICAL**: None for this change.  
 **WARNING**:
-- Production smoke verification is correctly deferred until after deployment, but the current change is not ready for main because local verification found blockers first.
-- Local bounded all-source evidence is stubbed/offline. That is acceptable for pre-commit bounded verification, but it does not validate live provider availability.
-
-**SUGGESTION**:
-- Add a route/runner test where PNA fails and INA/INMET/SMN still run, returning HTTP 202 with independent failed/success statuses.
-- Add a test where the runner throws before provider calls and the endpoint returns the agreed contract error shape rather than the global 500 envelope.
+- Production bounded smoke remains a post-deploy action and should be exactly one authenticated `POST /api/hydrology/ingest` as documented.
+- Repository-wide merge gates may still fail if they include `packages/contracts test:agronautas-contracts`; that failure is unrelated to this change but not green.
+**SUGGESTION**: Fix the unrelated `GroundedChatRequest` contracts validator-map gap before requiring full monorepo green CI.
 
 ### Verdict
-FAIL
+PASS WITH WARNINGS
 
-The auth gate, scheduler flag/startup behavior, boot safety, cadence, and provider URL overrides are verified. The change is not spec-compliant yet because production all-source failure handling is fail-fast and the API build currently fails.
+The previous hydrology/API blockers are fixed: all-source ingest is independent across source failures, route-level ingest errors are structured and safe, the API build passes, anti-DDoS constraints remain bounded, and auth/scheduler/env/provider override behavior remains verified. Safe to merge/deploy for the hydrology scheduler/API scope; if main requires full monorepo contract tests, resolve or explicitly waive the unrelated contracts failure first.
