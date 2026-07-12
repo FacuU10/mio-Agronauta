@@ -269,14 +269,13 @@ test('government HTTP clients abort official requests after configured timeout',
   assert.equal(timeoutFailure.ok, false)
   assert.equal(abortSignal?.aborted, true)
   assert.match(timeoutFailure.ok ? '' : timeoutFailure.error, /SMN.*timeout after 1ms/)
-  assert.deepEqual(timeoutFailure.ok ? undefined : timeoutFailure.diagnostic, {
-    failureKind: 'timeout',
-    reason: 'SMN request timed out',
-    attempts: 1,
-    timeoutMs: 1,
-    providerHost: 'official.test',
-    providerPath: '/smn',
-  })
+  assert.equal(timeoutFailure.ok ? '' : timeoutFailure.diagnostic.failureKind, 'timeout')
+  assert.equal(timeoutFailure.ok ? '' : timeoutFailure.diagnostic.reason, 'SMN request timed out')
+  assert.equal(timeoutFailure.ok ? 0 : timeoutFailure.diagnostic.attempts, 1)
+  assert.equal(timeoutFailure.ok ? 0 : timeoutFailure.diagnostic.timeoutMs, 1)
+  assert.equal(timeoutFailure.ok ? '' : timeoutFailure.diagnostic.providerHost, 'official.test')
+  assert.equal(timeoutFailure.ok ? '' : timeoutFailure.diagnostic.providerPath, '/smn')
+  assert.equal(typeof (timeoutFailure.ok ? undefined : timeoutFailure.diagnostic.elapsedMs), 'number')
 })
 
 test('PNA HTTP client uses env timeout and user-agent options with one network attempt', async () => {
@@ -299,6 +298,7 @@ test('PNA HTTP client uses env timeout and user-agent options with one network a
     assert.equal(requests.length, 1)
     assert.match(JSON.stringify(requests[0]?.headers), /AgronautasBot\/1\.0/)
     assert.equal(result.ok ? 0 : result.diagnostic.timeoutMs, 7)
+    assert.equal(typeof (result.ok ? undefined : result.diagnostic.elapsedMs), 'number')
     assert.equal(result.ok ? '' : result.diagnostic.providerHost, 'pna.example')
     assert.equal(result.ok ? '' : result.diagnostic.providerPath, '/alturas')
   } finally {

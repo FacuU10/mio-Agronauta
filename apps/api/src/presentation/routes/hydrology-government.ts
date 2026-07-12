@@ -434,9 +434,34 @@ async function fetchWithDeadline(client: GovernmentSourceClient, source: Hydrolo
         }), timeoutMs)
       }),
     ])
+  } catch (error) {
+    return thrownProviderFailureDiagnostic(source, error, timeoutMs)
   } finally {
     if (timeout) clearTimeout(timeout)
   }
+}
+
+function thrownProviderFailureDiagnostic(source: HydrologySource, error: unknown, timeoutMs: number): ScraperResult {
+  const message = error instanceof Error ? error.message : String(error)
+  const upstreamStatus = statusFromThrownProviderMessage(message)
+  return {
+    ok: false,
+    error: upstreamStatus ? `${source} upstream returned HTTP ${upstreamStatus}` : `${source} provider execution failed`,
+    diagnostic: {
+      failureKind: upstreamStatus ? 'http_status' : 'network_failure',
+      reason: upstreamStatus ? `${source} upstream returned HTTP ${upstreamStatus}` : `${source} provider request failed`,
+      attempts: 1,
+      timeoutMs,
+      ...(upstreamStatus ? { upstreamStatus } : {}),
+    },
+  }
+}
+
+function statusFromThrownProviderMessage(message: string): number | undefined {
+  const match = /\bHTTP\s+([1-5]\d{2})\b/i.exec(message)
+  if (!match?.[1]) return undefined
+  const status = Number.parseInt(match[1], 10)
+  return Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined
 }
 
 function mergeIngestDiagnostic(diagnostic: HydrologyGovernmentIngestDiagnostic, startedAt: Date, finishedAt: Date, timeoutMs: number): HydrologyGovernmentIngestDiagnostic {
@@ -445,6 +470,7 @@ function mergeIngestDiagnostic(diagnostic: HydrologyGovernmentIngestDiagnostic, 
     attempts: 1,
     timeoutMs: diagnostic.timeoutMs ?? timeoutMs,
     durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+    elapsedMs: diagnostic.elapsedMs ?? Math.max(0, finishedAt.getTime() - startedAt.getTime()),
   }
 }
 

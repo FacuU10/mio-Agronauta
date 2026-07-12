@@ -37,6 +37,7 @@ abstract class OfficialHttpClient {
 
   protected async fetchText(expectedContent: 'any' | 'json' = 'any'): Promise<{ ok: true; body: string } | { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic }> {
     const controller = new AbortController()
+    const startedAt = Date.now()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
       const response = await this.fetchImpl(this.url, { headers: { ...DEFAULT_HEADERS, 'user-agent': this.userAgent }, signal: controller.signal })
@@ -44,7 +45,7 @@ abstract class OfficialHttpClient {
         return {
           ok: false,
           error: `${this.source} HTTP ${response.status} ${response.statusText}`.trim(),
-          diagnostic: this.diagnostic('http_status', `${this.source} upstream returned HTTP ${response.status}`, { upstreamStatus: response.status }),
+          diagnostic: this.diagnostic('http_status', `${this.source} upstream returned HTTP ${response.status}`, startedAt, { upstreamStatus: response.status }),
         }
       }
       const contentType = response.headers.get('content-type') ?? ''
@@ -53,7 +54,7 @@ abstract class OfficialHttpClient {
         return {
           ok: false,
           error: `${this.source} unexpected content-type ${contentType || 'unknown'}; expected JSON payload`,
-          diagnostic: this.diagnostic('unexpected_content_type', `${this.source} returned unsupported content type`),
+          diagnostic: this.diagnostic('unexpected_content_type', `${this.source} returned unsupported content type`, startedAt),
         }
       }
       return { ok: true, body }
@@ -62,13 +63,13 @@ abstract class OfficialHttpClient {
         return {
           ok: false,
           error: `${this.source} network failure: timeout after ${this.timeoutMs}ms`,
-          diagnostic: this.diagnostic('timeout', `${this.source} request timed out`),
+          diagnostic: this.diagnostic('timeout', `${this.source} request timed out`, startedAt),
         }
       }
       return {
         ok: false,
         error: `${this.source} network failure`,
-        diagnostic: this.diagnostic('network_failure', `${this.source} network request failed`),
+        diagnostic: this.diagnostic('network_failure', `${this.source} network request failed`, startedAt),
       }
     } finally {
       clearTimeout(timeout)
@@ -76,21 +77,23 @@ abstract class OfficialHttpClient {
   }
 
   protected parseSafely(body: string, parse: (body: string) => NormalizedHydrologyTelemetry[]): ScraperResult {
+    const startedAt = Date.now()
     try {
       return { ok: true, records: parse(body) }
     } catch (error) {
       void error
-      return { ok: false, error: `${this.source} payload parse failure`, diagnostic: this.diagnostic('parse_failure', `${this.source} payload parse failed`) }
+      return { ok: false, error: `${this.source} payload parse failure`, diagnostic: this.diagnostic('parse_failure', `${this.source} payload parse failed`, startedAt) }
     }
   }
 
-  private diagnostic(failureKind: NonNullable<HydrologyGovernmentIngestDiagnostic['failureKind']>, reason: string, extra: Partial<Pick<HydrologyGovernmentIngestDiagnostic, 'upstreamStatus'>> = {}): HydrologyGovernmentIngestDiagnostic {
+  private diagnostic(failureKind: NonNullable<HydrologyGovernmentIngestDiagnostic['failureKind']>, reason: string, startedAt: number, extra: Partial<Pick<HydrologyGovernmentIngestDiagnostic, 'upstreamStatus'>> = {}): HydrologyGovernmentIngestDiagnostic {
     const safeUrl = safeProviderUrl(this.url)
     return {
       failureKind,
       reason,
       attempts: 1,
       timeoutMs: this.timeoutMs,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
       ...safeUrl,
       ...extra,
     }

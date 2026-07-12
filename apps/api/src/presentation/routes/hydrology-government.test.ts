@@ -95,6 +95,60 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   assert.deepEqual(json.requestedSources, ['PNA'])
 })
 
+test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when all providers fail after execution starts', async () => {
+  let runnerCalls = 0
+  const allSources = ['PNA', 'INA', 'INMET', 'SMN'] as const
+  const response = await request(createTestApp({
+    ingestionRunner: async () => {
+      runnerCalls += 1
+      const results = allSources.map((source, index) => ({
+        source,
+        status: 'failed' as const,
+        recordsIngested: 0,
+        errorMessage: `Hydrology ingestion failed for ${source}: provider degraded`,
+        diagnostic: {
+          failureKind: index === 0 ? 'timeout' as const : index === 3 ? 'http_status' as const : 'unexpected_content_type' as const,
+          reason: `${source} provider failed safely`,
+          attempts: 1 as const,
+          timeoutMs: 12_000,
+          elapsedMs: 25 + index,
+          providerHost: `${source.toLowerCase()}.example`,
+          providerPath: '/feed',
+          upstreamStatus: index === 3 ? 403 : undefined,
+        },
+      }))
+      return {
+        runId: 'manual-all-source-provider-failures',
+        status: 'failed' as const,
+        requestedSources: [...allSources],
+        sources: [...allSources],
+        results,
+        sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
+      }
+    },
+  }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'local-real-parity' }),
+  })
+
+  assert.equal(response.status, 202)
+  assert.equal(runnerCalls, 1)
+  const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
+  assert.equal(json.status, 'failed')
+  assert.deepEqual(json.requestedSources, [...allSources])
+  assert.deepEqual(json.results.map((item) => [item.source, item.status, item.recordsIngested, item.diagnostic?.attempts]), [
+    ['PNA', 'failed', 0, 1],
+    ['INA', 'failed', 0, 1],
+    ['INMET', 'failed', 0, 1],
+    ['SMN', 'failed', 0, 1],
+  ])
+  assert.equal(json.results[0]?.diagnostic?.failureKind, 'timeout')
+  assert.equal(json.results[3]?.diagnostic?.upstreamStatus, 403)
+  assert.deepEqual(json.sourceResults.map((item) => [item.source, item.status]), [['PNA', 'failed'], ['INA', 'failed'], ['INMET', 'failed'], ['SMN', 'failed']])
+  assert.doesNotMatch(JSON.stringify(json), /startup_failure|secret|password|postgres/i)
+})
+
 test('POST /api/hydrology/ingest rejects missing or invalid hydrology bearer before runner execution', async () => withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
   let runnerCalls = 0
   const app = createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-forbidden', status: 'queued', sources: ['PNA'] } } })
@@ -319,6 +373,46 @@ test('default government ingestion runner reports partial with safe diagnostics 
   assert.equal(result.results.find((item) => item.source === 'PNA')?.diagnostic?.attempts, 1)
   assert.equal(result.results.find((item) => item.source === 'SMN')?.status, 'success')
   assert.ok(saved.some((item) => item.source === 'PNA' && item.status === 'failed' && item.records === 0))
+})
+
+test('default government ingestion runner captures thrown provider failures and continues each source once', async () => {
+  const calls: Record<'PNA' | 'INA' | 'INMET' | 'SMN', number> = { PNA: 0, INA: 0, INMET: 0, SMN: 0 }
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: {
+      PNA: { async fetchTelemetry() { calls.PNA += 1; throw new Error('socket secret should stay private') } },
+      INA: { async fetchTelemetry() { calls.INA += 1; throw new TypeError('invalid json payload') } },
+      INMET: { async fetchTelemetry() { calls.INMET += 1; throw new Error('html parser failed') } },
+      SMN: { async fetchTelemetry() { calls.SMN += 1; throw new Error('HTTP 403 Forbidden') } },
+    },
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+        return { inserted: 0, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({ source: undefined })
+
+  assert.equal(result.status, 'failed')
+  assert.deepEqual(calls, { PNA: 1, INA: 1, INMET: 1, SMN: 1 })
+  assert.deepEqual(result.results.map((item) => [item.source, item.status, item.recordsIngested, item.diagnostic?.failureKind, item.diagnostic?.attempts]), [
+    ['PNA', 'failed', 0, 'network_failure', 1],
+    ['INA', 'failed', 0, 'network_failure', 1],
+    ['INMET', 'failed', 0, 'network_failure', 1],
+    ['SMN', 'failed', 0, 'http_status', 1],
+  ])
+  assert.deepEqual(saved.map((item) => [item.source, item.status, item.records]), [['PNA', 'failed', 0], ['INA', 'failed', 0], ['INMET', 'failed', 0], ['SMN', 'failed', 0]])
+  assert.doesNotMatch(JSON.stringify(result), /secret should stay private|invalid json payload|html parser failed/i)
 })
 
 test('POST /api/hydrology/ingest returns safe structured startup failure response', async () => {
