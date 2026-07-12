@@ -6,6 +6,7 @@ import { hydrologyGovernmentIngestResponseSchema } from '@repo/zod-schemas'
 
 interface VerifyOptions {
   out: string
+  expectPnaRecords: boolean
 }
 
 const DEFAULT_OUT = '../../artifacts/hydrology-local-real.json'
@@ -57,15 +58,19 @@ async function main() {
       httpStatus: response.status,
       contractValid: parsed.success,
       response: parsed.success ? parsed.data : body,
+      sourceResponses: parsed.success ? parsed.data.results : undefined,
+      assertions: parsed.success ? verifierAssertions(response.status, parsed.data, options.expectPnaRecords) : { http202: false, contractValid: false, pnaRecordsIngested: null, passed: false },
       parseIssues: parsed.success ? undefined : parsed.error.flatten(),
     }
 
     const outPath = resolve(process.cwd(), options.out)
     await mkdir(dirname(outPath), { recursive: true })
     await writeFile(outPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-    console.log(JSON.stringify({ outPath, httpStatus: response.status, contractValid: parsed.success, status: parsed.success ? parsed.data.status : 'invalid_contract' }, null, 2))
-    if (response.status !== 202 && response.status !== 503) process.exitCode = 1
+    const assertions = parsed.success ? verifierAssertions(response.status, parsed.data, options.expectPnaRecords) : { passed: false }
+    console.log(JSON.stringify({ outPath, httpStatus: response.status, contractValid: parsed.success, status: parsed.success ? parsed.data.status : 'invalid_contract', assertions }, null, 2))
+    if (response.status !== 202) process.exitCode = 1
     if (!parsed.success) process.exitCode = 1
+    if (!assertions.passed) process.exitCode = 1
   } finally {
     await new Promise<void>((resolveClose, reject) => server.close((error) => (error ? reject(error) : resolveClose())))
   }
@@ -79,7 +84,15 @@ function parseArgs(args: string[]): VerifyOptions {
   const modeIndex = args.indexOf('--mode')
   const mode = modeIndex >= 0 ? args[modeIndex + 1] : 'api'
   if (mode !== 'api') throw new Error('Only --mode api is supported by this local-real verifier')
-  return { out }
+  return { out, expectPnaRecords: !args.includes('--allow-empty-pna') }
+}
+
+function verifierAssertions(responseStatus: number, data: { results?: Array<{ source: string; recordsIngested: number }> }, expectPnaRecords: boolean) {
+  const pna = data.results?.find((result) => result.source === 'PNA')
+  const pnaRecordsIngested = pna?.recordsIngested ?? null
+  const http202 = responseStatus === 202
+  const pnaOk = !expectPnaRecords || (pnaRecordsIngested ?? 0) > 0
+  return { http202, contractValid: true, expectPnaRecords, pnaRecordsIngested, passed: http202 && pnaOk }
 }
 
 function requestHeaders(): Record<string, string> {

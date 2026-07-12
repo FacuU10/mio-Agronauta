@@ -415,6 +415,45 @@ test('default government ingestion runner captures thrown provider failures and 
   assert.doesNotMatch(JSON.stringify(result), /secret should stay private|invalid json payload|html parser failed/i)
 })
 
+test('default government ingestion runner uses client timeout cushion instead of masking provider diagnostics', async () => {
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  const client = {
+    timeoutMs: 25_000,
+    async fetchTelemetry() {
+      return {
+        ok: false as const,
+        error: 'PNA network failure: timeout after 25000ms',
+        diagnostic: { failureKind: 'timeout' as const, reason: 'PNA request timed out', attempts: 1 as const, timeoutMs: 25_000, elapsedMs: 25_001, providerHost: 'contenidosweb.prefecturanaval.gob.ar', providerPath: '/alturas/' },
+      }
+    },
+  }
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: { PNA: client },
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+        return { inserted: 0, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({ source: 'PNA' })
+
+  assert.equal(result.results[0]?.diagnostic?.failureKind, 'timeout')
+  assert.equal(result.results[0]?.diagnostic?.timeoutMs, 25_000)
+  assert.equal(result.results[0]?.diagnostic?.durationMs, 0)
+  assert.equal(result.results[0]?.diagnostic?.providerHost, 'contenidosweb.prefecturanaval.gob.ar')
+  assert.deepEqual(saved, [{ source: 'PNA', status: 'failed', records: 0, errorMessage: 'Hydrology ingestion failed for PNA: PNA network failure: timeout after 25000ms' }])
+})
+
 test('default government ingestion runner keeps provider diagnostics when failed-source persistence rejects', async () => {
   const calls: Record<'PNA' | 'INA' | 'INMET' | 'SMN', number> = { PNA: 0, INA: 0, INMET: 0, SMN: 0 }
   const attemptedPersistence: string[] = []

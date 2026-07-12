@@ -53,8 +53,8 @@ test('hydrology government ingest schema accepts public bounded diagnostics', ()
       errorMessage: 'Hydrology ingestion failed for PNA: timeout',
       provenanceUrl: 'https://www.prefecturanaval.gob.ar/alturas',
       diagnostic: {
-        failureKind: 'timeout',
-        reason: 'PNA request timed out',
+        failureKind: 'response_too_large',
+        reason: 'PNA response exceeded safe size limit',
         attempts: 1,
         timeoutMs: 10_000,
         durationMs: 10_001,
@@ -64,7 +64,7 @@ test('hydrology government ingest schema accepts public bounded diagnostics', ()
     }],
   })
 
-  assert.equal(parsed.results[0]?.diagnostic?.failureKind, 'timeout')
+  assert.equal(parsed.results[0]?.diagnostic?.failureKind, 'response_too_large')
   assert.equal(parsed.results[0]?.diagnostic?.attempts, 1)
   assert.equal(parsed.results[0]?.diagnostic?.providerPath, '/alturas')
 })

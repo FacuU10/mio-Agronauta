@@ -24,7 +24,7 @@ interface HydrologyGovernmentRouterDeps {
 }
 
 type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'>
-type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult> }
+type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult>; timeoutMs?: number }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; diagnostic?: HydrologyGovernmentIngestDiagnostic }
 type GovernmentIngestionResponse = { runId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type CompletedGovernmentIngestionResponse = { runId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
@@ -41,7 +41,9 @@ interface GovernmentIngestionRunnerDeps {
 }
 
 const ALL_SOURCES: HydrologySource[] = ['PNA', 'INA', 'INMET', 'SMN']
-const SOURCE_RUNNER_TIMEOUT_MS = 12_000
+const DEFAULT_SOURCE_RUNNER_TIMEOUT_MS = 12_000
+const SOURCE_RUNNER_TIMEOUT_CUSHION_MS = 2_000
+const SOURCE_RUNNER_TIMEOUT_CAP_MS = 60_000
 const PROVINCE = { provinceCode: 'AR-W', name: 'Corrientes' }
 type FloodRiskRiver = 'Paraná' | 'Uruguay'
 type PnaFloodRiskPort = {
@@ -366,13 +368,14 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
 
     for (const source of sources) {
       const startedAt = now()
-      const result = await fetchWithDeadline(clients[source], source, SOURCE_RUNNER_TIMEOUT_MS)
+      const runnerTimeoutMs = runnerTimeoutFor(clients[source])
+      const result = await fetchWithDeadline(clients[source], source, runnerTimeoutMs)
       const liveRecords = result.ok ? result.records : []
       const fallbackReason = !result.ok ? result.error : liveRecords.length === 0 ? `${source} returned no records` : undefined
       if (fallbackReason && !allowFixtureFallback) {
         const finishedAt = now()
         const errorMessage = `Hydrology ingestion failed for ${source}: ${fallbackReason}`
-        const diagnostic = mergeIngestDiagnostic(result.ok ? emptyResponseDiagnostic(source) : result.diagnostic ?? genericFailureDiagnostic(source, fallbackReason), startedAt, finishedAt, SOURCE_RUNNER_TIMEOUT_MS)
+        const diagnostic = mergeIngestDiagnostic(result.ok ? emptyResponseDiagnostic(source, runnerTimeoutMs) : result.diagnostic ?? genericFailureDiagnostic(source, fallbackReason, runnerTimeoutMs), startedAt, finishedAt, runnerTimeoutMs)
         const persisted = await persistHydrologySourceRun(repository, {
           source,
           status: result.ok ? 'partial' : 'failed',
@@ -401,7 +404,7 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined,
         provenanceUrl: records[0]?.sourceUrl,
       }, records, runId, source)
-      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, diagnostic: persisted ? undefined : genericFailureDiagnostic(source, `${source} persistence write failed`) })
+      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, diagnostic: persisted ? undefined : genericFailureDiagnostic(source, `${source} persistence write failed`, runnerTimeoutMs) })
     }
 
     return { runId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
@@ -502,16 +505,21 @@ function mergeIngestDiagnostic(diagnostic: HydrologyGovernmentIngestDiagnostic, 
   }
 }
 
-function emptyResponseDiagnostic(source: HydrologySource): HydrologyGovernmentIngestDiagnostic {
-  return { failureKind: 'empty_response', reason: `${source} returned no records`, attempts: 1, timeoutMs: SOURCE_RUNNER_TIMEOUT_MS }
+export function runnerTimeoutFor(client: GovernmentSourceClient): number {
+  const sourceTimeout = Number.isFinite(client.timeoutMs) && (client.timeoutMs ?? 0) > 0 ? client.timeoutMs as number : DEFAULT_SOURCE_RUNNER_TIMEOUT_MS
+  return Math.min(SOURCE_RUNNER_TIMEOUT_CAP_MS, sourceTimeout + SOURCE_RUNNER_TIMEOUT_CUSHION_MS)
 }
 
-function genericFailureDiagnostic(source: HydrologySource, reason: string): HydrologyGovernmentIngestDiagnostic {
-  return { failureKind: 'network_failure', reason: reason.length > 120 ? `${source} ingest failed` : reason, attempts: 1, timeoutMs: SOURCE_RUNNER_TIMEOUT_MS }
+function emptyResponseDiagnostic(source: HydrologySource, timeoutMs = DEFAULT_SOURCE_RUNNER_TIMEOUT_MS): HydrologyGovernmentIngestDiagnostic {
+  return { failureKind: 'empty_response', reason: `${source} returned no records`, attempts: 1, timeoutMs }
+}
+
+function genericFailureDiagnostic(source: HydrologySource, reason: string, timeoutMs = DEFAULT_SOURCE_RUNNER_TIMEOUT_MS): HydrologyGovernmentIngestDiagnostic {
+  return { failureKind: 'network_failure', reason: reason.length > 120 ? `${source} ingest failed` : reason, attempts: 1, timeoutMs }
 }
 
 function startupFailureDiagnostic(operation: HydrologyStartupOperation = 'runner_execution'): HydrologyGovernmentIngestDiagnostic {
-  return { failureKind: 'startup_failure', reason: `ingest startup failed during ${operation}`, attempts: 1, timeoutMs: SOURCE_RUNNER_TIMEOUT_MS }
+  return { failureKind: 'startup_failure', reason: `ingest startup failed during ${operation}`, attempts: 1, timeoutMs: DEFAULT_SOURCE_RUNNER_TIMEOUT_MS }
 }
 
 export function describeHydrologyStartupFailure(error: unknown, fallbackOperation: HydrologyStartupOperation): HydrologyStartupFailureDetails {

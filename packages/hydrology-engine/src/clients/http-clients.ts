@@ -12,10 +12,15 @@ interface ClientOptions {
   fetch?: typeof fetch
   userAgent?: string
   timeoutMs?: number
+  maxResponseBytes?: number
+  maxResponseChars?: number
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_PNA_REQUEST_TIMEOUT_MS = 10_000
+const DEFAULT_PNA_MAX_RESPONSE_BYTES = 1_000_000
+const DEFAULT_PNA_MAX_RESPONSE_CHARS = 1_000_000
+const FAST_PNA_URL = 'https://contenidosweb.prefecturanaval.gob.ar/alturas/'
 const CHROME_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 const DEFAULT_HEADERS = {
   'user-agent': CHROME_USER_AGENT,
@@ -27,15 +32,19 @@ const DEFAULT_HEADERS = {
 abstract class OfficialHttpClient {
   protected readonly fetchImpl: typeof fetch
   protected readonly userAgent: string
-  protected readonly timeoutMs: number
+  readonly timeoutMs: number
+  private readonly maxResponseBytes?: number
+  private readonly maxResponseChars?: number
 
   protected constructor(protected readonly source: string, protected readonly url: string, options: ClientOptions = {}) {
     this.fetchImpl = options.fetch ?? fetch
     this.userAgent = options.userAgent ?? CHROME_USER_AGENT
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.maxResponseBytes = options.maxResponseBytes
+    this.maxResponseChars = options.maxResponseChars
   }
 
-  protected async fetchText(expectedContent: 'any' | 'json' = 'any'): Promise<{ ok: true; body: string } | { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic }> {
+  protected async fetchText(expectedContent: 'any' | 'json' = 'any'): Promise<{ ok: true; body: string; status: number } | { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic }> {
     const controller = new AbortController()
     const startedAt = Date.now()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
@@ -48,16 +57,18 @@ abstract class OfficialHttpClient {
           diagnostic: this.diagnostic('http_status', `${this.source} upstream returned HTTP ${response.status}`, startedAt, { upstreamStatus: response.status }),
         }
       }
+      if (response.status === 204) return { ok: true, body: '', status: response.status }
       const contentType = response.headers.get('content-type') ?? ''
-      const body = await response.text()
-      if (expectedContent === 'json' && !isJsonResponse(contentType, body)) {
+      const body = await this.readBoundedResponseText(response, startedAt)
+      if (!body.ok) return body
+      if (expectedContent === 'json' && !isJsonResponse(contentType, body.body)) {
         return {
           ok: false,
           error: `${this.source} unexpected content-type ${contentType || 'unknown'}; expected JSON payload`,
           diagnostic: this.diagnostic('unexpected_content_type', `${this.source} returned unsupported content type`, startedAt),
         }
       }
-      return { ok: true, body }
+      return { ok: true, body: body.body, status: response.status }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         return {
@@ -74,6 +85,43 @@ abstract class OfficialHttpClient {
     } finally {
       clearTimeout(timeout)
     }
+  }
+
+  private async readBoundedResponseText(response: Response, startedAt: number): Promise<{ ok: true; body: string } | { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic }> {
+    if (!response.body) return { ok: true, body: '' }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let bytesRead = 0
+    let body = ''
+    let reading = true
+    try {
+      while (reading) {
+        const { done, value } = await reader.read()
+        if (done) {
+          reading = false
+          continue
+        }
+        bytesRead += value.byteLength
+        if (this.maxResponseBytes !== undefined && bytesRead > this.maxResponseBytes) {
+          await reader.cancel().catch(() => undefined)
+          return this.tooLargeDiagnostic(startedAt)
+        }
+        body += decoder.decode(value, { stream: true })
+        if (this.maxResponseChars !== undefined && body.length > this.maxResponseChars) {
+          await reader.cancel().catch(() => undefined)
+          return this.tooLargeDiagnostic(startedAt)
+        }
+      }
+      body += decoder.decode()
+      if (this.maxResponseChars !== undefined && body.length > this.maxResponseChars) return this.tooLargeDiagnostic(startedAt)
+      return { ok: true, body }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  private tooLargeDiagnostic(startedAt: number): { ok: false; error: string; diagnostic: HydrologyGovernmentIngestDiagnostic } {
+    return { ok: false, error: `${this.source} response exceeded safe size limit`, diagnostic: this.diagnostic('response_too_large', `${this.source} response exceeded safe size limit`, startedAt) }
   }
 
   protected parseSafely(body: string, parse: (body: string) => NormalizedHydrologyTelemetry[]): ScraperResult {
@@ -102,10 +150,12 @@ abstract class OfficialHttpClient {
 
 export class PnaHttpClient extends OfficialHttpClient {
   constructor(options: ClientOptions = {}) {
-    super('PNA', options.url ?? process.env['HYDROLOGY_PNA_URL'] ?? 'https://www.prefecturanaval.gob.ar/alturas', {
+    super('PNA', options.url ?? process.env['HYDROLOGY_PNA_URL'] ?? FAST_PNA_URL, {
       ...options,
       userAgent: options.userAgent ?? process.env['HYDROLOGY_PNA_USER_AGENT'],
       timeoutMs: options.timeoutMs ?? parsePositiveInt(process.env['HYDROLOGY_PNA_TIMEOUT_MS'], DEFAULT_PNA_REQUEST_TIMEOUT_MS),
+      maxResponseBytes: options.maxResponseBytes ?? DEFAULT_PNA_MAX_RESPONSE_BYTES,
+      maxResponseChars: options.maxResponseChars ?? DEFAULT_PNA_MAX_RESPONSE_CHARS,
     })
   }
   async fetchTelemetry(): Promise<ScraperResult> {
@@ -123,9 +173,10 @@ export class SmnHttpClient extends OfficialHttpClient {
 }
 
 export class InmetHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('INMET', options.url ?? process.env['HYDROLOGY_INMET_URL'] ?? 'https://portal.inmet.gov.br/dadoshistoricos', options) }
+  constructor(options: ClientOptions = {}) { super('INMET', options.url ?? process.env['HYDROLOGY_INMET_URL'] ?? defaultInmetUrl(), options) }
   async fetchTelemetry(): Promise<ScraperResult> {
     const fetched = await this.fetchText('json')
+    if (fetched.ok && fetched.status === 204) return { ok: true, records: [] }
     return fetched.ok ? this.parseSafely(fetched.body, (body) => new InmetAdapter().parse(body)) : fetched
   }
 }
@@ -148,6 +199,11 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function defaultInmetUrl(): string {
+  const date = new Date().toISOString().slice(0, 10)
+  return `https://apitempo.inmet.gov.br/estacao/diaria/${date}`
 }
 
 function safeProviderUrl(url: string): Pick<HydrologyGovernmentIngestDiagnostic, 'providerHost' | 'providerPath'> {

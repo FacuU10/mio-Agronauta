@@ -27,7 +27,7 @@ export const hydrologyQualityStates = ['ok', 'estimated', 'degraded', 'missing']
 export const hydrologyTargetZones = ['Mercedes', 'Ituzaingó', 'Virasoro'] as const
 export const hydrologyMetrics = ['river_height_m', 'rain_mm', 'storm_alert'] as const
 export const hydrologyForecastConfidence = ['normal', 'speculative'] as const
-export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure'] as const
+export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure', 'response_too_large'] as const
 export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
 export const hydrologyExcludedInputs = [
   'itaipu_discharge',

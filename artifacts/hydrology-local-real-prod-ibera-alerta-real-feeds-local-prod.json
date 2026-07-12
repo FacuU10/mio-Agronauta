@@ -1,0 +1,199 @@
+{
+  "verifier": "hydrology-local-real-v1",
+  "mode": "api",
+  "oneShot": true,
+  "repeatedCalls": false,
+  "request": {
+    "method": "POST",
+    "path": "/api/hydrology/ingest",
+    "body": {
+      "contractVersion": "1.0.0",
+      "reason": "local-real-one-shot-all-sources"
+    },
+    "authorized": false
+  },
+  "environment": {
+    "nodeEnv": "production",
+    "hasDatabaseUrl": true,
+    "databaseTarget": "remote",
+    "providerOverrides": {
+      "PNA": false,
+      "INA": false,
+      "INMET": false,
+      "SMN": false
+    }
+  },
+  "startedAt": "2026-07-12T13:13:15.951Z",
+  "finishedAt": "2026-07-12T13:13:28.789Z",
+  "httpStatus": 202,
+  "contractValid": true,
+  "response": {
+    "contractVersion": "hydrology-government-ingest-v1",
+    "runId": "manual-5638746b-03cc-4e04-ab1c-ea2bdd1697c0",
+    "status": "partial",
+    "requestedSources": [
+      "PNA",
+      "INA",
+      "INMET",
+      "SMN"
+    ],
+    "results": [
+      {
+        "source": "PNA",
+        "status": "success",
+        "recordsIngested": 9,
+        "provenanceUrl": "https://contenidosweb.prefecturanaval.gob.ar/alturas/",
+        "observedFrom": "2026-07-12T13:13:22.447Z",
+        "observedTo": "2026-07-12T13:13:22.447Z"
+      },
+      {
+        "source": "INA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INA: INA unexpected content-type text/html; charset=UTF-8; expected JSON payload",
+        "diagnostic": {
+          "failureKind": "unexpected_content_type",
+          "reason": "INA returned unsupported content type",
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "durationMs": 571,
+          "elapsedMs": 571,
+          "providerHost": "www.ina.gob.ar",
+          "providerPath": "/alerta/index.php"
+        }
+      },
+      {
+        "source": "INMET",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INMET: INMET HTTP 404 Not Found",
+        "diagnostic": {
+          "failureKind": "http_status",
+          "reason": "INMET upstream returned HTTP 404",
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "durationMs": 1126,
+          "elapsedMs": 1126,
+          "providerHost": "apitempo.inmet.gov.br",
+          "providerPath": "/estacao/diaria/2026-07-12",
+          "upstreamStatus": 404
+        }
+      },
+      {
+        "source": "SMN",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for SMN: SMN HTTP 403 Forbidden",
+        "diagnostic": {
+          "failureKind": "http_status",
+          "reason": "SMN upstream returned HTTP 403",
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "durationMs": 633,
+          "elapsedMs": 633,
+          "providerHost": "www.smn.gob.ar",
+          "providerPath": "/alertas",
+          "upstreamStatus": 403
+        }
+      }
+    ],
+    "sources": [
+      "PNA",
+      "INA",
+      "INMET",
+      "SMN"
+    ],
+    "sourceResults": [
+      {
+        "source": "PNA",
+        "status": "success",
+        "recordsIngested": 9
+      },
+      {
+        "source": "INA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INA: INA unexpected content-type text/html; charset=UTF-8; expected JSON payload"
+      },
+      {
+        "source": "INMET",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INMET: INMET HTTP 404 Not Found"
+      },
+      {
+        "source": "SMN",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for SMN: SMN HTTP 403 Forbidden"
+      }
+    ]
+  },
+  "sourceResponses": [
+    {
+      "source": "PNA",
+      "status": "success",
+      "recordsIngested": 9,
+      "provenanceUrl": "https://contenidosweb.prefecturanaval.gob.ar/alturas/",
+      "observedFrom": "2026-07-12T13:13:22.447Z",
+      "observedTo": "2026-07-12T13:13:22.447Z"
+    },
+    {
+      "source": "INA",
+      "status": "failed",
+      "recordsIngested": 0,
+      "errorMessage": "Hydrology ingestion failed for INA: INA unexpected content-type text/html; charset=UTF-8; expected JSON payload",
+      "diagnostic": {
+        "failureKind": "unexpected_content_type",
+        "reason": "INA returned unsupported content type",
+        "attempts": 1,
+        "timeoutMs": 15000,
+        "durationMs": 571,
+        "elapsedMs": 571,
+        "providerHost": "www.ina.gob.ar",
+        "providerPath": "/alerta/index.php"
+      }
+    },
+    {
+      "source": "INMET",
+      "status": "failed",
+      "recordsIngested": 0,
+      "errorMessage": "Hydrology ingestion failed for INMET: INMET HTTP 404 Not Found",
+      "diagnostic": {
+        "failureKind": "http_status",
+        "reason": "INMET upstream returned HTTP 404",
+        "attempts": 1,
+        "timeoutMs": 15000,
+        "durationMs": 1126,
+        "elapsedMs": 1126,
+        "providerHost": "apitempo.inmet.gov.br",
+        "providerPath": "/estacao/diaria/2026-07-12",
+        "upstreamStatus": 404
+      }
+    },
+    {
+      "source": "SMN",
+      "status": "failed",
+      "recordsIngested": 0,
+      "errorMessage": "Hydrology ingestion failed for SMN: SMN HTTP 403 Forbidden",
+      "diagnostic": {
+        "failureKind": "http_status",
+        "reason": "SMN upstream returned HTTP 403",
+        "attempts": 1,
+        "timeoutMs": 15000,
+        "durationMs": 633,
+        "elapsedMs": 633,
+        "providerHost": "www.smn.gob.ar",
+        "providerPath": "/alertas",
+        "upstreamStatus": 403
+      }
+    }
+  ],
+  "assertions": {
+    "http202": true,
+    "contractValid": true,
+    "expectPnaRecords": true,
+    "pnaRecordsIngested": 9,
+    "passed": true
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "verifier": "hydrology-local-real-v1",
+  "mode": "api",
+  "oneShot": true,
+  "repeatedCalls": false,
+  "request": {
+    "method": "POST",
+    "path": "/api/hydrology/ingest",
+    "body": {
+      "contractVersion": "1.0.0",
+      "reason": "local-real-one-shot-all-sources"
+    },
+    "authorized": false
+  },
+  "environment": {
+    "nodeEnv": "unset",
+    "hasDatabaseUrl": true,
+    "databaseTarget": "remote",
+    "providerOverrides": {
+      "PNA": false,
+      "INA": false,
+      "INMET": false,
+      "SMN": false
+    }
+  },
+  "startedAt": "2026-07-12T08:02:58.851Z",
+  "finishedAt": "2026-07-12T08:03:17.118Z",
+  "httpStatus": 202,
+  "contractValid": true,
+  "response": {
+    "contractVersion": "hydrology-government-ingest-v1",
+    "runId": "manual-d3c855f7-bedb-4bb5-b22e-f6c78fa12d07",
+    "status": "failed",
+    "requestedSources": [
+      "PNA",
+      "INA",
+      "INMET",
+      "SMN"
+    ],
+    "results": [
+      {
+        "source": "PNA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for PNA: timeout after 12000ms",
+        "diagnostic": {
+          "failureKind": "runner_timeout",
+          "reason": "PNA runner timed out",
+          "attempts": 1,
+          "timeoutMs": 12000,
+          "durationMs": 12011,
+          "elapsedMs": 12011
+        }
+      },
+      {
+        "source": "INA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INA: INA unexpected content-type text/html; charset=UTF-8; expected JSON payload",
+        "diagnostic": {
+          "failureKind": "unexpected_content_type",
+          "reason": "INA returned unsupported content type",
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "durationMs": 275,
+          "elapsedMs": 274,
+          "providerHost": "www.ina.gob.ar",
+          "providerPath": "/alerta/index.php"
+        }
+      },
+      {
+        "source": "INMET",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INMET: INMET unexpected content-type text/html; charset=UTF-8; expected JSON payload",
+        "diagnostic": {
+          "failureKind": "unexpected_content_type",
+          "reason": "INMET returned unsupported content type",
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "durationMs": 1292,
+          "elapsedMs": 1292,
+          "providerHost": "portal.inmet.gov.br",
+          "providerPath": "/dadoshistoricos"
+        }
+      },
+      {
+        "source": "SMN",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for SMN: SMN HTTP 403 Forbidden",
+        "diagnostic": {
+          "failureKind": "http_status",
+          "reason": "SMN upstream returned HTTP 403",
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "durationMs": 189,
+          "elapsedMs": 189,
+          "providerHost": "www.smn.gob.ar",
+          "providerPath": "/alertas",
+          "upstreamStatus": 403
+        }
+      }
+    ],
+    "sources": [
+      "PNA",
+      "INA",
+      "INMET",
+      "SMN"
+    ],
+    "sourceResults": [
+      {
+        "source": "PNA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for PNA: timeout after 12000ms"
+      },
+      {
+        "source": "INA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INA: INA unexpected content-type text/html; charset=UTF-8; expected JSON payload"
+      },
+      {
+        "source": "INMET",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for INMET: INMET unexpected content-type text/html; charset=UTF-8; expected JSON payload"
+      },
+      {
+        "source": "SMN",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "Hydrology ingestion failed for SMN: SMN HTTP 403 Forbidden"
+      }
+    ]
+  }
+}
