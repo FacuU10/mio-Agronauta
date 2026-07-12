@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { createApp } from '../server'
+import dotenv from 'dotenv'
 import { hydrologyGovernmentIngestResponseSchema } from '@repo/zod-schemas'
 
 interface VerifyOptions {
@@ -12,6 +12,8 @@ const DEFAULT_OUT = '../../artifacts/hydrology-local-real.json'
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
+  loadRemoteVerificationEnv()
+  const { createApp } = await import('../server.js')
   const app = createApp()
   const server = createServer(app)
   await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
@@ -42,6 +44,7 @@ async function main() {
       environment: {
         nodeEnv: process.env['NODE_ENV'] ?? 'unset',
         hasDatabaseUrl: Boolean(process.env['DATABASE_URL']),
+        databaseTarget: databaseTargetClass(process.env['DATABASE_URL']),
         providerOverrides: {
           PNA: Boolean(process.env['HYDROLOGY_PNA_URL']),
           INA: Boolean(process.env['HYDROLOGY_INA_URL']),
@@ -84,6 +87,20 @@ function requestHeaders(): Record<string, string> {
   const token = process.env['HYDROLOGY_INGEST_TOKEN']?.trim()
   if (token) headers['authorization'] = `Bearer ${token}`
   return headers
+}
+
+function loadRemoteVerificationEnv(): void {
+  dotenv.config({ path: resolve(process.cwd(), '../../.env'), override: true })
+}
+
+function databaseTargetClass(value: string | undefined): 'unset' | 'local' | 'remote' | 'invalid' {
+  if (!value) return 'unset'
+  try {
+    const parsed = new URL(value)
+    return ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname) ? 'local' : 'remote'
+  } catch {
+    return 'invalid'
+  }
 }
 
 main()

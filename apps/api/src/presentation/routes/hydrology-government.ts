@@ -28,6 +28,9 @@ type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult> }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; diagnostic?: HydrologyGovernmentIngestDiagnostic }
 type GovernmentIngestionResponse = { runId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type CompletedGovernmentIngestionResponse = { runId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+type HydrologyStartupOperation = 'runner_execution' | 'seed_municipalities'
+type SanitizedErrorDetail = { name: string; message: string; code?: string }
+type HydrologyStartupFailureDetails = { operation: HydrologyStartupOperation; errorName: string; message?: string; code?: string; aggregateErrors?: SanitizedErrorDetail[] }
 
 interface GovernmentIngestionRunnerDeps {
   repository?: GovernmentIngestionRepository
@@ -172,8 +175,9 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       const result = await resolved.ingestionRunner(parsed.data)
       return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
     } catch (error) {
-      logger.error({ errorName: error instanceof Error ? error.name : 'UnknownError' }, 'Government hydrology ingestion could not start')
-      const diagnostic = startupFailureDiagnostic()
+      const startupFailure = describeHydrologyStartupFailure(error, 'runner_execution')
+      logger.error(startupFailure, 'Government hydrology ingestion could not start')
+      const diagnostic = startupFailureDiagnostic(startupFailure.operation)
       const requestedSources = parsed.data.source ? [parsed.data.source] : ALL_SOURCES
       const results: GovernmentIngestionSourceResult[] = requestedSources.map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: 'No se pudo iniciar la ingesta hidrológica', diagnostic }))
       return res.status(503).json(hydrologyGovernmentIngestResponseSchema.parse({
@@ -357,7 +361,7 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
   return async (input: { source?: HydrologySource }): Promise<CompletedGovernmentIngestionResponse> => {
     const sources = input.source ? [input.source] : ALL_SOURCES
     const runId = `manual-${randomUUID()}`
-    await seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool)
+    await runHydrologyStartupOperation('seed_municipalities', () => seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool))
     const results: GovernmentIngestionSourceResult[] = []
 
     for (const source of sources) {
@@ -369,23 +373,23 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         const finishedAt = now()
         const errorMessage = `Hydrology ingestion failed for ${source}: ${fallbackReason}`
         const diagnostic = mergeIngestDiagnostic(result.ok ? emptyResponseDiagnostic(source) : result.diagnostic ?? genericFailureDiagnostic(source, fallbackReason), startedAt, finishedAt, SOURCE_RUNNER_TIMEOUT_MS)
-        await repository.saveTelemetryDeduped([], {
+        const persisted = await persistHydrologySourceRun(repository, {
           source,
           status: result.ok ? 'partial' : 'failed',
           startedAt,
           finishedAt,
           recordsIngested: 0,
           errorMessage,
-        })
+        }, [], runId, source)
         logger.error({ runId, source, failureKind: diagnostic.failureKind, error: fallbackReason }, 'Government hydrology ingestion failed')
-        results.push({ source, status: result.ok ? 'empty' : 'failed', recordsIngested: 0, errorMessage, diagnostic })
+        results.push({ source, status: result.ok ? 'empty' : 'failed', recordsIngested: 0, errorMessage: persisted ? errorMessage : `${errorMessage}; provider failure recorded; persistence write failed`, diagnostic })
         continue
       }
       const records = fallbackReason ? governmentFallbackTelemetry(source, now()) : liveRecords
       const observedTimes = records.map((record) => record.observedAt).sort((a, b) => a.getTime() - b.getTime())
       const observedFrom = observedTimes.at(0)
       const observedTo = observedTimes.at(-1)
-      const saveResult = await repository.saveTelemetryDeduped(records, {
+      const persisted = await persistHydrologySourceRun(repository, {
         source,
         status: 'success',
         startedAt,
@@ -396,12 +400,36 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         recordsIngested: records.length,
         errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined,
         provenanceUrl: records[0]?.sourceUrl,
-      })
-      void saveResult
-      results.push({ source, status: records.length > 0 ? 'success' : 'empty', recordsIngested: records.length, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined })
+      }, records, runId, source)
+      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, diagnostic: persisted ? undefined : genericFailureDiagnostic(source, `${source} persistence write failed`) })
     }
 
     return { runId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
+  }
+}
+
+async function runHydrologyStartupOperation<T>(operation: HydrologyStartupOperation, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    throw new HydrologyStartupError(operation, error)
+  }
+}
+
+class HydrologyStartupError extends Error {
+  constructor(readonly operation: HydrologyStartupOperation, readonly rootCause: unknown) {
+    super('Hydrology ingest startup operation failed')
+    this.name = 'HydrologyStartupError'
+  }
+}
+
+async function persistHydrologySourceRun(repository: GovernmentIngestionRepository, run: Parameters<GovernmentIngestionRepository['saveTelemetryDeduped']>[1], records: NormalizedHydrologyTelemetry[], runId: string, source: HydrologySource): Promise<boolean> {
+  try {
+    await repository.saveTelemetryDeduped(records, run)
+    return true
+  } catch (error) {
+    logger.error({ runId, source, operation: 'save_source_run', ...safeErrorLogFields(error) }, 'Government hydrology source persistence failed after provider execution')
+    return false
   }
 }
 
@@ -482,8 +510,44 @@ function genericFailureDiagnostic(source: HydrologySource, reason: string): Hydr
   return { failureKind: 'network_failure', reason: reason.length > 120 ? `${source} ingest failed` : reason, attempts: 1, timeoutMs: SOURCE_RUNNER_TIMEOUT_MS }
 }
 
-function startupFailureDiagnostic(): HydrologyGovernmentIngestDiagnostic {
-  return { failureKind: 'startup_failure', reason: 'ingest startup failed', attempts: 1, timeoutMs: SOURCE_RUNNER_TIMEOUT_MS }
+function startupFailureDiagnostic(operation: HydrologyStartupOperation = 'runner_execution'): HydrologyGovernmentIngestDiagnostic {
+  return { failureKind: 'startup_failure', reason: `ingest startup failed during ${operation}`, attempts: 1, timeoutMs: SOURCE_RUNNER_TIMEOUT_MS }
+}
+
+export function describeHydrologyStartupFailure(error: unknown, fallbackOperation: HydrologyStartupOperation): HydrologyStartupFailureDetails {
+  const startupError = error instanceof HydrologyStartupError ? error : undefined
+  const cause = startupError?.rootCause ?? error
+  return {
+    operation: startupError?.operation ?? fallbackOperation,
+    ...safeErrorLogFields(cause),
+  }
+}
+
+function safeErrorLogFields(error: unknown): Omit<HydrologyStartupFailureDetails, 'operation'> {
+  const base = error instanceof Error
+    ? { errorName: error.name || 'Error', message: safeErrorMessage(error.message), ...safeErrorCode(error) }
+    : { errorName: typeof error, message: safeErrorMessage(String(error)) }
+  const aggregateErrors = aggregateErrorDetails(error)
+  return aggregateErrors ? { ...base, aggregateErrors } : base
+}
+
+function aggregateErrorDetails(error: unknown): SanitizedErrorDetail[] | undefined {
+  if (!(error instanceof AggregateError)) return undefined
+  return error.errors.slice(0, 2).map((item: unknown) => {
+    if (item instanceof Error) return { name: item.name || 'Error', message: safeErrorMessage(item.message), ...safeErrorCode(item) }
+    return { name: typeof item, message: safeErrorMessage(String(item)) }
+  })
+}
+
+function safeErrorCode(error: Error): { code?: string } {
+  const code = (error as Error & { code?: unknown }).code
+  return typeof code === 'string' && /^[A-Z0-9_]{2,16}$/.test(code) ? { code } : {}
+}
+
+function safeErrorMessage(message: string): string {
+  if (!message.trim()) return 'error message unavailable'
+  if (/[/:@]|password|secret|token|key|credential|postgres|database|db\.|internal|\d+\.\d+\.\d+\.\d+/i.test(message)) return 'sanitized error message hidden'
+  return message.slice(0, 160)
 }
 
 function governmentFallbackTelemetry(source: HydrologySource, observedAt: Date): NormalizedHydrologyTelemetry[] {
