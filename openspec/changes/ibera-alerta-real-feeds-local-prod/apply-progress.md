@@ -2,7 +2,7 @@
 
 ## Status
 
-All implementation tasks plus the verification BLOCKER remediation are complete. PNA HTML fetching is bounded to 1MB bytes/chars by default, official table parsing is bounded by rows/cells/value length, and the local-real verifier captured an HTTP 202 proof with PNA `recordsIngested: 9`.
+All implementation tasks, verification BLOCKER remediation, and the urgent production-smoke timeout follow-up are complete. PNA HTML fetching is bounded to 1MB bytes/chars by default, official table parsing is bounded by rows/cells/value length, and the safe default PNA timeout is now `25_000ms` unless `HYDROLOGY_PNA_TIMEOUT_MS` overrides it. The latest local-real verifier ran without `HYDROLOGY_PNA_TIMEOUT_MS` and captured HTTP 202 with PNA `recordsIngested: 9`.
 
 ## Completed Tasks
 
@@ -23,6 +23,8 @@ All implementation tasks plus the verification BLOCKER remediation are complete.
 - [x] 5.2 Bound official PNA table parsing: max 50 matched rows, max 12 cells per row, max 120 chars per cell value.
 - [x] 5.3 Add oversized response and row/cell bound regression tests.
 - [x] 5.4 Re-run package/root tests, build, and one bounded local-real all-source verifier against production DB.
+- [x] 5.5 Urgent follow-up: raise default PNA timeout to 25s unless env override is set, preserving one attempt/no retries and existing runner timeout cushion.
+- [x] 5.6 Re-run tests/build and one local-real all-source verifier against production DB without `HYDROLOGY_PNA_TIMEOUT_MS`.
 
 ## TDD Cycle Evidence
 
@@ -35,17 +37,21 @@ All implementation tasks plus the verification BLOCKER remediation are complete.
 | 5.1, 5.3 | `packages/hydrology-engine/src/clients/http-clients.test.ts` | Unit | ✅ `packages/hydrology-engine` 27/27 baseline before blocker fix | ✅ Oversized PNA response test failed before bounded reader | ✅ `packages/hydrology-engine` 30/30 | ✅ Oversize path plus existing normal PNA success path | ✅ Bounded reader extracted with default PNA caps |
 | 5.2, 5.3 | `packages/hydrology-engine/src/adapters/pna-adapter.test.ts` | Unit | ✅ Same baseline | ✅ Row bound test failed at 64 records before parser bounds | ✅ `packages/hydrology-engine` 30/30 | ✅ Row bound and cell bound cases | ✅ Parser loop rewritten to bounded iteration without materializing all rows/cells |
 | 5.4 | local-real artifact | Script/contract | ✅ `pnpm build` and `pnpm test` passed before local-real rerun | ✅ N/A; verifier already enforced one-shot assertions | ✅ One-shot local-real proof passed | ✅ Captures PNA success plus degraded source diagnostics | ✅ No retries/polling added |
+| 5.5, 5.6 | `packages/hydrology-engine/src/clients/http-clients.test.ts` + local-real artifact | Unit + script/contract | ✅ Baseline before edit: hydrology-engine 30/30, API 140/140 | ✅ Default-timeout test failed at `10000 !== 25000` before implementation | ✅ `pnpm build` PASS; `pnpm test` PASS 6/6 turbo test tasks | ✅ Env override test still proves custom timeout wins; local-real without env override proves default works in API path | ✅ Only changed the PNA default timeout constant and test expectation; no retry/polling added |
 
 ## Verification Evidence
 
-- `pnpm --dir packages/hydrology-engine test` — PASS, 30/30.
+- `pnpm --dir packages/hydrology-engine test` — PASS, 30/30 after changing default PNA timeout to 25s.
 - `pnpm --dir packages/zod-schemas test` — PASS, 26/26.
 - `pnpm --dir apps/api test` — PASS, 140/140.
 - `pnpm build` — PASS, 4/4 turbo build tasks.
 - `pnpm test` — PASS, 6/6 turbo test tasks.
-- One bounded local-real verification command:
+- Previous bounded local-real verification command with explicit timeout override:
   - `$env:NODE_ENV='production'; $env:HYDROLOGY_PNA_TIMEOUT_MS='25000'; pnpm --dir apps/api exec tsx src/scripts/verify-hydrology-local-real.ts --mode api --all-sources --out ../../artifacts/hydrology-local-real-prod-ibera-alerta-real-feeds-local-prod.json`
   - Result: HTTP `202`, contract valid, `status: partial`, production DB target `remote`, PNA `status: success`, PNA `recordsIngested: 9`, `assertions.passed: true`.
+- Latest bounded local-real verification command without PNA timeout override:
+  - `$env:HYDROLOGY_PNA_TIMEOUT_MS=$null; $env:NODE_ENV='production'; pnpm exec tsx src/scripts/verify-hydrology-local-real.ts --mode api --all-sources --out ../../artifacts/hydrology-local-real-prod-no-pna-timeout-override.json` from `apps/api`.
+  - Result: HTTP `202`, contract valid, `status: partial`, production DB target `remote`, provider overrides all false, PNA `status: success`, PNA `recordsIngested: 9`, `assertions.passed: true`.
 
 ## Local-Real Source Results
 

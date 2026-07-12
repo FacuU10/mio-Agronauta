@@ -17,7 +17,7 @@ interface ClientOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
-const DEFAULT_PNA_REQUEST_TIMEOUT_MS = 10_000
+const DEFAULT_PNA_REQUEST_TIMEOUT_MS = 25_000
 const DEFAULT_PNA_MAX_RESPONSE_BYTES = 1_000_000
 const DEFAULT_PNA_MAX_RESPONSE_CHARS = 1_000_000
 const FAST_PNA_URL = 'https://contenidosweb.prefecturanaval.gob.ar/alturas/'

@@ -39,3 +39,5 @@ Chain strategy: size-exception
 - [x] 5.2 PNA parser safety: Bound official table parsing to max rows, max cells per row, and max cell value length.
 - [x] 5.3 Regression tests: Add oversized PNA response and official row/cell bound tests.
 - [x] 5.4 Readiness rerun: Re-run tests/build and one bounded local-real all-source verifier against the production DB.
+- [x] 5.5 Urgent production-smoke follow-up: Raise default PNA timeout to 25000ms unless `HYDROLOGY_PNA_TIMEOUT_MS` overrides it, preserving one attempt/no retries/polling.
+- [x] 5.6 No-override proof: Re-run tests/build and one local-real all-source verifier against the production DB without `HYDROLOGY_PNA_TIMEOUT_MS`.

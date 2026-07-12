@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { InaHttpClient, InmetHttpClient, PnaHttpClient, SmnHttpClient } from './http-clients.js'
 
-test('PnaHttpClient defaults to the fast official contenidosweb endpoint and exposes timeout', async () => {
+test('PnaHttpClient defaults to the fast official contenidosweb endpoint and safe 25s timeout', async () => {
   const requests: string[] = []
   const client = new PnaHttpClient({ fetch: async (input) => {
     requests.push(String(input))
@@ -11,7 +11,7 @@ test('PnaHttpClient defaults to the fast official contenidosweb endpoint and exp
 
   const result = await client.fetchTelemetry()
 
-  assert.equal(client.timeoutMs, 10_000)
+  assert.equal(client.timeoutMs, 25_000)
   assert.deepEqual(requests, ['https://contenidosweb.prefecturanaval.gob.ar/alturas/'])
   assert.equal(result.ok, true)
   assert.equal(result.ok ? result.records[0]?.stationId : '', 'corrientes')
