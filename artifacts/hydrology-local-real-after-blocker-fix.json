@@ -1,0 +1,121 @@
+{
+  "verifier": "hydrology-local-real-v1",
+  "mode": "api",
+  "oneShot": true,
+  "repeatedCalls": false,
+  "request": {
+    "method": "POST",
+    "path": "/api/hydrology/ingest",
+    "body": {
+      "contractVersion": "1.0.0",
+      "reason": "local-real-one-shot-all-sources"
+    },
+    "authorized": false
+  },
+  "environment": {
+    "nodeEnv": "unset",
+    "hasDatabaseUrl": true,
+    "providerOverrides": {
+      "PNA": false,
+      "INA": false,
+      "INMET": false,
+      "SMN": false
+    }
+  },
+  "startedAt": "2026-07-12T06:32:10.575Z",
+  "finishedAt": "2026-07-12T06:32:12.569Z",
+  "httpStatus": 503,
+  "contractValid": true,
+  "response": {
+    "contractVersion": "hydrology-government-ingest-v1",
+    "status": "failed",
+    "requestedSources": [
+      "PNA",
+      "INA",
+      "INMET",
+      "SMN"
+    ],
+    "results": [
+      {
+        "source": "PNA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica",
+        "diagnostic": {
+          "failureKind": "startup_failure",
+          "reason": "ingest startup failed during seed_municipalities",
+          "attempts": 1,
+          "timeoutMs": 12000
+        }
+      },
+      {
+        "source": "INA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica",
+        "diagnostic": {
+          "failureKind": "startup_failure",
+          "reason": "ingest startup failed during seed_municipalities",
+          "attempts": 1,
+          "timeoutMs": 12000
+        }
+      },
+      {
+        "source": "INMET",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica",
+        "diagnostic": {
+          "failureKind": "startup_failure",
+          "reason": "ingest startup failed during seed_municipalities",
+          "attempts": 1,
+          "timeoutMs": 12000
+        }
+      },
+      {
+        "source": "SMN",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica",
+        "diagnostic": {
+          "failureKind": "startup_failure",
+          "reason": "ingest startup failed during seed_municipalities",
+          "attempts": 1,
+          "timeoutMs": 12000
+        }
+      }
+    ],
+    "sources": [
+      "PNA",
+      "INA",
+      "INMET",
+      "SMN"
+    ],
+    "sourceResults": [
+      {
+        "source": "PNA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica"
+      },
+      {
+        "source": "INA",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica"
+      },
+      {
+        "source": "INMET",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica"
+      },
+      {
+        "source": "SMN",
+        "status": "failed",
+        "recordsIngested": 0,
+        "errorMessage": "No se pudo iniciar la ingesta hidrológica"
+      }
+    ]
+  }
+}

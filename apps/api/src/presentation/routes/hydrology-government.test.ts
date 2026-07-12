@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, isHydrologyIngestAuthorized, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, describeHydrologyStartupFailure, isHydrologyIngestAuthorized, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -93,6 +93,60 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
   assert.equal(json.status, 'completed')
   assert.deepEqual(json.requestedSources, ['PNA'])
+})
+
+test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when all providers fail after execution starts', async () => {
+  let runnerCalls = 0
+  const allSources = ['PNA', 'INA', 'INMET', 'SMN'] as const
+  const response = await request(createTestApp({
+    ingestionRunner: async () => {
+      runnerCalls += 1
+      const results = allSources.map((source, index) => ({
+        source,
+        status: 'failed' as const,
+        recordsIngested: 0,
+        errorMessage: `Hydrology ingestion failed for ${source}: provider degraded`,
+        diagnostic: {
+          failureKind: index === 0 ? 'timeout' as const : index === 3 ? 'http_status' as const : 'unexpected_content_type' as const,
+          reason: `${source} provider failed safely`,
+          attempts: 1 as const,
+          timeoutMs: 12_000,
+          elapsedMs: 25 + index,
+          providerHost: `${source.toLowerCase()}.example`,
+          providerPath: '/feed',
+          upstreamStatus: index === 3 ? 403 : undefined,
+        },
+      }))
+      return {
+        runId: 'manual-all-source-provider-failures',
+        status: 'failed' as const,
+        requestedSources: [...allSources],
+        sources: [...allSources],
+        results,
+        sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
+      }
+    },
+  }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'local-real-parity' }),
+  })
+
+  assert.equal(response.status, 202)
+  assert.equal(runnerCalls, 1)
+  const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
+  assert.equal(json.status, 'failed')
+  assert.deepEqual(json.requestedSources, [...allSources])
+  assert.deepEqual(json.results.map((item) => [item.source, item.status, item.recordsIngested, item.diagnostic?.attempts]), [
+    ['PNA', 'failed', 0, 1],
+    ['INA', 'failed', 0, 1],
+    ['INMET', 'failed', 0, 1],
+    ['SMN', 'failed', 0, 1],
+  ])
+  assert.equal(json.results[0]?.diagnostic?.failureKind, 'timeout')
+  assert.equal(json.results[3]?.diagnostic?.upstreamStatus, 403)
+  assert.deepEqual(json.sourceResults.map((item) => [item.source, item.status]), [['PNA', 'failed'], ['INA', 'failed'], ['INMET', 'failed'], ['SMN', 'failed']])
+  assert.doesNotMatch(JSON.stringify(json), /startup_failure|secret|password|postgres/i)
 })
 
 test('POST /api/hydrology/ingest rejects missing or invalid hydrology bearer before runner execution', async () => withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
@@ -319,6 +373,104 @@ test('default government ingestion runner reports partial with safe diagnostics 
   assert.equal(result.results.find((item) => item.source === 'PNA')?.diagnostic?.attempts, 1)
   assert.equal(result.results.find((item) => item.source === 'SMN')?.status, 'success')
   assert.ok(saved.some((item) => item.source === 'PNA' && item.status === 'failed' && item.records === 0))
+})
+
+test('default government ingestion runner captures thrown provider failures and continues each source once', async () => {
+  const calls: Record<'PNA' | 'INA' | 'INMET' | 'SMN', number> = { PNA: 0, INA: 0, INMET: 0, SMN: 0 }
+  const saved: Array<{ source: string; status: string; records: number; errorMessage?: string }> = []
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: {
+      PNA: { async fetchTelemetry() { calls.PNA += 1; throw new Error('socket secret should stay private') } },
+      INA: { async fetchTelemetry() { calls.INA += 1; throw new TypeError('invalid json payload') } },
+      INMET: { async fetchTelemetry() { calls.INMET += 1; throw new Error('html parser failed') } },
+      SMN: { async fetchTelemetry() { calls.SMN += 1; throw new Error('HTTP 403 Forbidden') } },
+    },
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        saved.push({ source: run.source, status: run.status, records: records.length, errorMessage: run.errorMessage })
+        return { inserted: 0, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({ source: undefined })
+
+  assert.equal(result.status, 'failed')
+  assert.deepEqual(calls, { PNA: 1, INA: 1, INMET: 1, SMN: 1 })
+  assert.deepEqual(result.results.map((item) => [item.source, item.status, item.recordsIngested, item.diagnostic?.failureKind, item.diagnostic?.attempts]), [
+    ['PNA', 'failed', 0, 'network_failure', 1],
+    ['INA', 'failed', 0, 'network_failure', 1],
+    ['INMET', 'failed', 0, 'network_failure', 1],
+    ['SMN', 'failed', 0, 'http_status', 1],
+  ])
+  assert.deepEqual(saved.map((item) => [item.source, item.status, item.records]), [['PNA', 'failed', 0], ['INA', 'failed', 0], ['INMET', 'failed', 0], ['SMN', 'failed', 0]])
+  assert.doesNotMatch(JSON.stringify(result), /secret should stay private|invalid json payload|html parser failed/i)
+})
+
+test('default government ingestion runner keeps provider diagnostics when failed-source persistence rejects', async () => {
+  const calls: Record<'PNA' | 'INA' | 'INMET' | 'SMN', number> = { PNA: 0, INA: 0, INMET: 0, SMN: 0 }
+  const attemptedPersistence: string[] = []
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: {
+      PNA: { async fetchTelemetry() { calls.PNA += 1; return { ok: false as const, error: 'timeout after 10000ms', diagnostic: { failureKind: 'timeout' as const, reason: 'PNA request timed out', attempts: 1, timeoutMs: 10_000, providerHost: 'www.prefecturanaval.gob.ar', providerPath: '/alturas' } } } },
+      INA: { async fetchTelemetry() { calls.INA += 1; return { ok: false as const, error: 'HTML payload', diagnostic: { failureKind: 'unexpected_content_type' as const, reason: 'INA returned unsupported content type', attempts: 1, timeoutMs: 15_000, providerHost: 'www.ina.gob.ar', providerPath: '/alerta/index.php' } } } },
+      INMET: { async fetchTelemetry() { calls.INMET += 1; return { ok: false as const, error: 'HTML payload', diagnostic: { failureKind: 'unexpected_content_type' as const, reason: 'INMET returned unsupported content type', attempts: 1, timeoutMs: 15_000, providerHost: 'portal.inmet.gov.br', providerPath: '/dadoshistoricos' } } } },
+      SMN: { async fetchTelemetry() { calls.SMN += 1; return { ok: false as const, error: 'HTTP 403 Forbidden', diagnostic: { failureKind: 'http_status' as const, reason: 'SMN upstream returned HTTP 403', attempts: 1, timeoutMs: 15_000, providerHost: 'www.smn.gob.ar', providerPath: '/alertas', upstreamStatus: 403 } } } },
+    },
+    repository: {
+      async saveTelemetryDeduped(_records, run) {
+        attemptedPersistence.push(run.source)
+        throw new AggregateError([Object.assign(new Error('connect ETIMEDOUT db.internal secret=hidden'), { code: 'ETIMEDOUT' })], 'All promises were rejected')
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({ source: undefined })
+
+  assert.equal(result.status, 'failed')
+  assert.deepEqual(calls, { PNA: 1, INA: 1, INMET: 1, SMN: 1 })
+  assert.deepEqual(attemptedPersistence, ['PNA', 'INA', 'INMET', 'SMN'])
+  assert.deepEqual(result.results.map((item) => [item.source, item.status, item.diagnostic?.failureKind, item.diagnostic?.attempts]), [
+    ['PNA', 'failed', 'timeout', 1],
+    ['INA', 'failed', 'unexpected_content_type', 1],
+    ['INMET', 'failed', 'unexpected_content_type', 1],
+    ['SMN', 'failed', 'http_status', 1],
+  ])
+  assert.ok(result.results.every((item) => /provider failure recorded; persistence write failed/.test(item.errorMessage ?? '')))
+  assert.doesNotMatch(JSON.stringify(result), /secret=hidden|db\.internal|ETIMEDOUT/)
+})
+
+test('describeHydrologyStartupFailure returns bounded sanitized AggregateError diagnostics', () => {
+  const error = new AggregateError([
+    Object.assign(new Error('connect ETIMEDOUT postgres://user:pass@db.internal:5432/app'), { code: 'ETIMEDOUT' }),
+    Object.assign(new TypeError('password leaked in inner cause'), { code: '28P01' }),
+    new Error('third hidden error'),
+  ], 'All promises were rejected')
+
+  const details = describeHydrologyStartupFailure(error, 'seed_municipalities')
+
+  assert.equal(details.operation, 'seed_municipalities')
+  assert.equal(details.errorName, 'AggregateError')
+  assert.equal(details.message, 'All promises were rejected')
+  assert.deepEqual(details.aggregateErrors?.map((item) => item.name), ['Error', 'TypeError'])
+  assert.deepEqual(details.aggregateErrors?.map((item) => item.code), ['ETIMEDOUT', '28P01'])
+  assert.doesNotMatch(JSON.stringify(details), /postgres:\/\/|user:pass|db\.internal|password leaked|third hidden/)
 })
 
 test('POST /api/hydrology/ingest returns safe structured startup failure response', async () => {
