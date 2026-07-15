@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const FORWARDED_HEADERS = ['accept', 'content-type', 'x-request-id'] as const
 const METHODS_WITH_BODY = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 12_000
 
 type RouteContext = { params: Promise<{ path?: string[] }> }
 
@@ -26,19 +27,25 @@ async function proxyHydrologyRequest(request: NextRequest, context: RouteContext
     upstreamOrigin: upstream.origin,
     upstreamPath: upstream.pathname,
     forwardedHeaders: [...headers.keys()].filter((name) => name !== 'authorization'),
-    hasAuthorizationHeader: headers.has('authorization'),
   })
   let upstreamResponse: Response
+  const controller = new AbortController()
+  const timeoutMs = upstreamTimeoutMs()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     upstreamResponse = await fetch(upstream.url, {
       method: request.method,
       headers,
       body: METHODS_WITH_BODY.has(request.method) ? await request.text() : undefined,
       cache: 'no-store',
+      signal: controller.signal,
     })
   } catch (error) {
-    console.error('[hydrology-bff] upstream fetch failure', { requestId, upstreamOrigin: upstream.origin, errorName: error instanceof Error ? error.name : typeof error, errorMessage: error instanceof Error ? error.message : String(error) })
-    return hydrologyProxyError(502, requestId, 'upstream_fetch', 'Hydrology upstream request failed.')
+    const timedOut = error instanceof Error && error.name === 'AbortError'
+    console.error('[hydrology-bff] upstream fetch failure', { requestId, upstreamOrigin: upstream.origin, upstreamPath: upstream.pathname, errorName: error instanceof Error ? error.name : typeof error, timedOut, timeoutMs })
+    return hydrologyProxyError(timedOut ? 503 : 502, requestId, timedOut ? 'upstream_timeout' : 'upstream_fetch', timedOut ? 'Hydrology upstream request timed out.' : 'Hydrology upstream request failed.', { upstreamOrigin: upstream.origin, upstreamPath: upstream.pathname, timeoutMs })
+  } finally {
+    clearTimeout(timeout)
   }
 
   const responseHeaders = new Headers()
@@ -71,20 +78,23 @@ function buildUpstreamHeaders(request: NextRequest, requestId: string): Headers 
     const value = request.headers.get(name)
     if (value) headers.set(name, value)
   }
-  const bearerToken = (process.env['AGRONAUTAS_BFF_BEARER_TOKEN'] || process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR'])?.trim()
-  if (bearerToken) headers.set('authorization', `Bearer ${bearerToken}`)
   headers.set('x-request-id', requestId)
   return headers
 }
 
-function hydrologyProxyError(status: 502 | 503, requestId: string, phase: 'upstream_configuration' | 'upstream_fetch', message: string) {
+function hydrologyProxyError(status: 502 | 503, requestId: string, phase: 'upstream_configuration' | 'upstream_fetch' | 'upstream_timeout', message: string, details: Record<string, unknown> = {}) {
   return NextResponse.json({
     contractVersion: '1.0.0',
     code: 'HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE',
     message,
     retryable: true,
-    details: { requestId, phase },
+    details: { requestId, phase, ...details },
   }, { status, headers: { 'x-request-id': requestId } })
+}
+
+function upstreamTimeoutMs(): number {
+  const parsed = Number.parseInt(process.env['AGRONAUTAS_BFF_TIMEOUT_MS'] ?? '', 10)
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 60_000 ? parsed : DEFAULT_UPSTREAM_TIMEOUT_MS
 }
 
 function copyResponseHeader(source: Headers, target: Headers, name: string) {

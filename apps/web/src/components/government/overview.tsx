@@ -5,9 +5,10 @@ import React from 'react'
 import { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowUpRight, Clock3, MapPinned, ShieldCheck } from 'lucide-react'
 import { formatOfficialTime, riskLabel, statusLabel } from './format'
+import { municipalityTelemetrySummary, type OverviewTelemetry } from './overview-summary'
 
 type Freshness = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
-type Telemetry = { source: string; metric: string; value: number | null; unit: string; observedAt: string; lastSuccessfulObservedAt: string; alertHeightM?: number; evacuationHeightM?: number }
+type Telemetry = OverviewTelemetry & { alertHeightM?: number; evacuationHeightM?: number }
 type Municipality = {
   id: string
   localityId: string
@@ -68,7 +69,7 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
           <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {(data?.sourceFreshness ?? []).map((source) => (
               <article key={source.source} className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 shadow-xl backdrop-blur">
-                <div className="flex items-center justify-between gap-3"><h2 className="text-lg font-black">{source.source}</h2><span className="rounded-full bg-teal-300/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-teal-100">{statusLabel(source.freshness)}</span></div>
+                <div className="flex items-center justify-between gap-3"><h2 className="text-lg font-black">{source.source}</h2><span className="rounded-full bg-teal-300/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-teal-100">{source.lastSuccessfulObservedAt ? statusLabel(source.freshness) : 'No disponible'}</span></div>
                 <p className="mt-4 text-sm text-slate-300">{source.label || formatOfficialTime(source.lastSuccessfulObservedAt)}</p>
               </article>
             ))}
@@ -96,8 +97,9 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
                   <p className="mt-4 text-slate-300">{summary.warning}</p>
                   <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
                     <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">PNA</dt><dd className="font-black text-white">{summary.pnaHeightM ?? '—'} m</dd></div>
-                    <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">Lluvia</dt><dd className="font-black text-white">{summary.rainMm ?? '—'} mm</dd></div>
+                    <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">INA</dt><dd className="font-black text-white">{summary.inaHeightM ?? '—'} m</dd></div>
                   </dl>
+                  {summary.inaHeightM != null ? <p className="mt-3 text-sm text-slate-300">INA · {formatOfficialTime(summary.inaObservedAt)}{summary.inaSourceUrl ? <> · <a className="underline underline-offset-2" href={summary.inaSourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></> : null}</p> : null}
                   <p className="mt-4 flex items-center gap-2 text-sm text-slate-300"><Clock3 size={16} aria-hidden="true" />{formatOfficialTime(summary.lastSuccessfulObservedAt)}</p>
                   <Link href={`/municipalities/${municipality.id}`} className="mt-5 inline-flex items-center gap-2 rounded-full bg-amber-300 px-4 py-2 font-black text-slate-950 transition-colors duration-200 hover:bg-amber-200 focus-visible:ring-4 focus-visible:ring-amber-100">Abrir tablero de {municipality.name}<ArrowUpRight size={18} aria-hidden="true" /></Link>
                 </article>
@@ -115,15 +117,9 @@ function latestOverviewTime(data: OverviewPayload | null): string | null {
 }
 
 function municipalitySummary(municipality: Municipality) {
-  const pna = latestMetric(municipality.latestTelemetry, 'river_height_m', 'PNA')
-  const rain = latestMetric(municipality.latestTelemetry, 'rain_mm')
-  const lastSuccessfulObservedAt = municipality.latestTelemetry.map((item) => item.lastSuccessfulObservedAt).filter(Boolean).sort().at(-1) ?? null
-  const height = pna?.value ?? null
+  const summary = municipalityTelemetrySummary(municipality.latestTelemetry)
+  const height = summary.pnaHeightM
   const riskLevel = height == null ? 'unknown' : municipality.evacuationHeightM != null && height >= municipality.evacuationHeightM ? 'high' : municipality.alertHeightM != null && height >= municipality.alertHeightM ? 'moderate' : 'low'
   const warning = height == null ? 'Sin datos oficiales recientes' : riskLevel === 'high' ? 'Altura sobre umbral de evacuación informado por PNA.' : riskLevel === 'moderate' ? 'Altura sobre umbral de alerta informado por PNA.' : 'Sin alerta hidrométrica oficial para este municipio.'
-  return { pnaHeightM: height, rainMm: rain?.value ?? null, lastSuccessfulObservedAt, riskLevel, warning }
-}
-
-function latestMetric(telemetry: Telemetry[], metric: string, source?: string) {
-  return telemetry.filter((item) => item.metric === metric && (!source || item.source === source)).sort((a, b) => a.lastSuccessfulObservedAt.localeCompare(b.lastSuccessfulObservedAt)).at(-1)
+  return { ...summary, riskLevel, warning }
 }

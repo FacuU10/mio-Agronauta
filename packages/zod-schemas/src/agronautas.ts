@@ -458,6 +458,7 @@ export const hydrologyGovernmentIngestRequestSchema = z.object({
   contractVersion: contractVersionSchema,
   source: hydrologySourceSchema.optional(),
   reason: z.string().trim().max(240).optional(),
+  proofRunId: z.string().trim().min(1).max(120).optional(),
 })
 
 export const hydrologyGovernmentIngestDiagnosticSchema = z.object({
@@ -472,9 +473,21 @@ export const hydrologyGovernmentIngestDiagnosticSchema = z.object({
   upstreamStatus: z.number().int().min(100).max(599).optional(),
 }).strict()
 
+export const hydrologyGovernmentHttpSummarySchema = z.object({
+  host: z.string().trim().min(1).max(120).regex(/^[a-z0-9.-]+(?::\d{1,5})?$/i),
+  path: z.string().trim().min(1).max(240).regex(/^\/[^?#]*$/),
+  status: z.number().int().min(100).max(599).optional(),
+  elapsedMs: z.number().int().nonnegative().max(60_000),
+  attempts: z.literal(1),
+  timeoutMs: z.number().int().positive().max(60_000),
+  responseBytes: z.number().int().nonnegative().max(10_000_000).optional(),
+  responseChars: z.number().int().nonnegative().max(10_000_000).optional(),
+}).strict()
+
 export const hydrologyGovernmentIngestResponseSchema = z.object({
   contractVersion: z.literal('hydrology-government-ingest-v1'),
   runId: z.string().min(1).max(120).optional(),
+  proofRunId: z.string().min(1).max(120).optional(),
   status: z.enum(['queued', 'started', 'completed', 'partial', 'failed']),
   requestedSources: z.array(hydrologySourceSchema).default([]),
   results: z.array(z.object({
@@ -485,6 +498,7 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
     provenanceUrl: z.string().min(1).max(500).optional(),
     observedFrom: z.string().datetime().optional(),
     observedTo: z.string().datetime().optional(),
+    httpSummary: hydrologyGovernmentHttpSummarySchema.optional(),
     diagnostic: hydrologyGovernmentIngestDiagnosticSchema.optional(),
   })).default([]),
   sources: z.array(hydrologySourceSchema).default([]),
@@ -595,6 +609,7 @@ export type HydrologyDenseContextV1 = z.infer<typeof hydrologyDenseContextV1Sche
 export type HydrologyGovernmentMunicipalitiesResponse = z.infer<typeof hydrologyGovernmentMunicipalitiesResponseSchema>
 export type HydrologyGovernmentDashboardResponse = z.infer<typeof hydrologyGovernmentDashboardResponseSchema>
 export type HydrologyGovernmentIngestDiagnostic = z.infer<typeof hydrologyGovernmentIngestDiagnosticSchema>
+export type HydrologyGovernmentHttpSummary = z.infer<typeof hydrologyGovernmentHttpSummarySchema>
 export type HydrologyGovernmentIngestRequest = z.infer<typeof hydrologyGovernmentIngestRequestSchema>
 export type HydrologyGovernmentIngestResponse = z.infer<typeof hydrologyGovernmentIngestResponseSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import {
   HydrologyIngestionScheduler,
   hydrologyIngestionCadences,
-  shouldScheduleHydrologyRetry,
   type HydrologyIngestionSource,
 } from './hydrology-ingestion-scheduler'
 import { startHydrologySchedulerFromEnv } from '../../server'
@@ -11,8 +10,7 @@ import { startHydrologySchedulerFromEnv } from '../../server'
 test('hydrologyIngestionCadences defines approved official source schedules', () => {
   assert.deepEqual(hydrologyIngestionCadences.PNA, { kind: 'interval', everyMs: 60 * 60 * 1000 })
   assert.deepEqual(hydrologyIngestionCadences.INMET, { kind: 'interval', everyMs: 60 * 60 * 1000 })
-  assert.deepEqual(hydrologyIngestionCadences.SMN_ALERTS, { kind: 'interval', everyMs: 60 * 60 * 1000 })
-  assert.deepEqual(hydrologyIngestionCadences.SMN_RAINFALL, { kind: 'interval', everyMs: 3 * 60 * 60 * 1000 })
+  assert.deepEqual(hydrologyIngestionCadences.SMN, { kind: 'interval', everyMs: 60 * 60 * 1000 })
   assert.deepEqual(hydrologyIngestionCadences.INA, { kind: 'daily-utc', hour: 18, minute: 30 })
 })
 
@@ -30,8 +28,7 @@ test('HydrologyIngestionScheduler schedules interval sources and INA at 18:30 UT
   assert.deepEqual(intervals, [
     { source: 'PNA', ms: 60 * 60 * 1000 },
     { source: 'INMET', ms: 60 * 60 * 1000 },
-    { source: 'SMN_ALERTS', ms: 60 * 60 * 1000 },
-    { source: 'SMN_RAINFALL', ms: 3 * 60 * 60 * 1000 },
+    { source: 'SMN', ms: 60 * 60 * 1000 },
   ])
   assert.deepEqual(timeouts, [{ source: 'INA', ms: 30 * 60 * 1000 }])
 })
@@ -72,10 +69,12 @@ test('startHydrologySchedulerFromEnv starts once when enabled without running in
 
 test('startHydrologySchedulerFromEnv maps scheduler sources to one manual government ingest call', async () => {
   const manualSources: Array<string | undefined> = []
-  let capturedRunner: { run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date }): Promise<{ inserted: number; unchanged: number }> } | undefined
+  const proofRunIds: Array<string | undefined> = []
+  let capturedRunner: { run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date; proofRunId?: string }): Promise<{ inserted: number; unchanged: number }> } | undefined
   startHydrologySchedulerFromEnv({ HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
-    ingestionRunner: async ({ source }) => {
+    ingestionRunner: async ({ source, proofRunId }) => {
       manualSources.push(source)
+      proofRunIds.push(proofRunId)
       return { runId: `manual-${source ?? 'ALL'}`, status: 'completed', sources: source ? [source] : ['PNA', 'INA', 'INMET', 'SMN'] }
     },
     schedulerFactory: (runner) => {
@@ -84,29 +83,37 @@ test('startHydrologySchedulerFromEnv maps scheduler sources to one manual govern
     },
   })
 
-  assert.deepEqual(await capturedRunner?.run('SMN_ALERTS', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
-  assert.deepEqual(await capturedRunner?.run('SMN_RAINFALL', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
+  assert.deepEqual(await capturedRunner?.run('SMN', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z'), proofRunId: 'scheduler-proof-test' }), { inserted: 0, unchanged: 0 })
   assert.deepEqual(await capturedRunner?.run('INA', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
-  assert.deepEqual(manualSources, ['SMN', 'SMN', 'INA'])
+  assert.deepEqual(manualSources, ['SMN', 'INA'])
+  assert.deepEqual(proofRunIds, ['scheduler-proof-test', undefined])
 })
 
 test('HydrologyIngestionScheduler prunes completed daily timeout handles', async () => {
   const callbacks: Array<() => void> = []
+  const clearedTimeouts: NodeJS.Timeout[] = []
   let timeoutId = 0
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.clearTimeout = ((timeout: NodeJS.Timeout) => { clearedTimeouts.push(timeout) }) as typeof globalThis.clearTimeout
   const scheduler = new HydrologyIngestionScheduler({ run: async () => ({ inserted: 1, unchanged: 0 }) }, {
     now: () => new Date('2026-06-23T18:00:00.000Z'),
     setInterval: (callback) => callback as never,
     setTimeout: (callback) => { callbacks.push(callback); timeoutId += 1; return timeoutId as never },
   })
 
-  scheduler.start()
-  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.size, 1)
+  try {
+    scheduler.start()
+    assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.size, 1)
 
-  callbacks[0]?.()
-  await new Promise((resolve) => setImmediate(resolve))
+    callbacks[0]?.()
+    await new Promise((resolve) => setImmediate(resolve))
 
-  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.has(1 as never), false)
-  assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.has(2 as never), true)
+    assert.deepEqual(clearedTimeouts, [1 as never])
+    assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.has(1 as never), false)
+    assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.has(2 as never), true)
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout
+  }
 })
 
 test('HydrologyIngestionScheduler does not resurrect daily tasks after stop and catches background failures', async () => {
@@ -131,43 +138,40 @@ test('HydrologyIngestionScheduler does not resurrect daily tasks after stop and 
   assert.equal((scheduler as unknown as { timeouts: Set<NodeJS.Timeout> }).timeouts.size, 0)
 })
 
-test('shouldScheduleHydrologyRetry returns one delayed PNA retry only for unchanged first attempts', () => {
-  const now = new Date('2026-06-23T12:00:00.000Z')
-  assert.deepEqual(shouldScheduleHydrologyRetry({ source: 'PNA', inserted: 0, unchanged: 4, attempt: 0, now }), {
-    source: 'PNA',
-    runAt: new Date('2026-06-23T12:15:00.000Z'),
-    attempt: 1,
-    status: 'delayed_retry_scheduled',
-    reason: 'unchanged_pna_heights',
-  })
-  assert.equal(shouldScheduleHydrologyRetry({ source: 'PNA', inserted: 0, unchanged: 4, attempt: 1, now }), null)
-  assert.equal(shouldScheduleHydrologyRetry({ source: 'PNA', inserted: 1, unchanged: 4, attempt: 0, now }), null)
-})
-
-test('shouldScheduleHydrologyRetry never retries unchanged INMET and delays INA by two hours once', () => {
-  const now = new Date('2026-06-23T12:00:00.000Z')
-  assert.equal(shouldScheduleHydrologyRetry({ source: 'INMET', inserted: 0, unchanged: 2, attempt: 0, now }), null)
-  assert.deepEqual(shouldScheduleHydrologyRetry({ source: 'INA', inserted: 0, unchanged: 3, attempt: 0, now }), {
-    source: 'INA',
-    runAt: new Date('2026-06-23T14:00:00.000Z'),
-    attempt: 1,
-    status: 'delayed_retry_scheduled',
-    reason: 'unchanged_ina_forecast',
-  })
-  assert.equal(shouldScheduleHydrologyRetry({ source: 'INA', inserted: 0, unchanged: 3, attempt: 1, now }), null)
-})
-
-test('HydrologyIngestionScheduler enqueues retry metadata for unchanged PNA runs', async () => {
-  const retries: Array<{ source: HydrologyIngestionSource; runAt: Date; attempt: number; reason: string }> = []
+test('HydrologyIngestionScheduler never schedules a provider retry after a completed attempt', async () => {
   const scheduler = new HydrologyIngestionScheduler({ run: async () => ({ inserted: 0, unchanged: 2 }) }, {
     now: () => new Date('2026-06-23T12:00:00.000Z'),
-    enqueueDelayedRetry: async (retry) => { retries.push(retry) },
   })
 
   const result = await scheduler.runSource('PNA')
-  const second = await scheduler.runSource('PNA', { attempt: 1 })
 
-  assert.deepEqual(result.retry, { source: 'PNA', runAt: new Date('2026-06-23T12:15:00.000Z'), attempt: 1, status: 'delayed_retry_scheduled', reason: 'unchanged_pna_heights' })
-  assert.equal(second.retry, null)
-  assert.deepEqual(retries, [{ source: 'PNA', runAt: new Date('2026-06-23T12:15:00.000Z'), attempt: 1, reason: 'unchanged_pna_heights' }])
+  assert.equal(result.retry, null)
+})
+
+test('HydrologyIngestionScheduler exposes an overlap-skipped result without starting a second provider call', async () => {
+  let releaseFirstRun: (() => void) | undefined
+  let runs = 0
+  const observed: Array<{ source: HydrologyIngestionSource; skipped: boolean; inserted: number }> = []
+  const scheduler = new HydrologyIngestionScheduler({
+    run: async () => {
+      runs += 1
+      await new Promise<void>((resolve) => { releaseFirstRun = resolve })
+      return { inserted: 2, unchanged: 0 }
+    },
+  }, {
+    onRunResult: ({ source, result }) => observed.push({ source, skipped: result.skipped, inserted: result.inserted }),
+  })
+
+  const first = scheduler.runSource('PNA')
+  await new Promise((resolve) => setImmediate(resolve))
+  const overlapping = await scheduler.runSource('PNA')
+
+  assert.deepEqual(overlapping, { inserted: 0, unchanged: 0, retry: null, skipped: true })
+  assert.equal(runs, 1)
+  releaseFirstRun?.()
+  assert.deepEqual(await first, { inserted: 2, unchanged: 0, retry: null, skipped: false })
+  assert.deepEqual(observed, [
+    { source: 'PNA', skipped: true, inserted: 0 },
+    { source: 'PNA', skipped: false, inserted: 2 },
+  ])
 })

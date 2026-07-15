@@ -23,6 +23,7 @@ export interface NormalizedHydrologyTelemetry {
 
 export interface IngestionRunInput {
   source: HydrologySource
+  proofRunId?: string
   stationId?: string
   status: 'success' | 'partial' | 'failed' | 'excluded'
   startedAt: Date

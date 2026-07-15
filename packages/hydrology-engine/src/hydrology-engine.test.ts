@@ -116,6 +116,37 @@ test('HydrologyRepository normalizes production-shaped municipality rows with nu
   assert.deepEqual(municipalities[1]?.latestTelemetry, [])
 })
 
+test('HydrologyRepository excludes offline fixture telemetry while preserving mapped official INA levels', async () => {
+  const observedAt = new Date('2026-07-14T19:00:00.000Z')
+  const rows = [
+    {
+      municipality_id: 'mun-corrientes', locality_id: 'corrientes', municipality_name: 'Corrientes', province_code: 'AR-W',
+      alert_height_m: '6.5', evacuation_height_m: '7.0', primary_pna_port_id: 'corrientes', secondary_pna_port_ids: [],
+      ina_station_ids: ['6764'], smn_region_ids: [], inmet_station_ids: [], source: 'INA', station_id: 'ina-corrientes',
+      metric: 'river_height_m', value: '4.2', unit: 'm', observed_at: observedAt, ingested_at: observedAt,
+      last_successful_observed_at: observedAt, quality: 'estimated', freshness: 'fresh', tendency: null, forecast_horizon_days: null, confidence: 'normal', source_url: 'offline-fixture://ina/corrientes',
+    },
+    {
+      municipality_id: 'mun-corrientes', locality_id: 'corrientes', municipality_name: 'Corrientes', province_code: 'AR-W',
+      alert_height_m: '6.5', evacuation_height_m: '7.0', primary_pna_port_id: 'corrientes', secondary_pna_port_ids: [],
+      ina_station_ids: ['6764'], smn_region_ids: [], inmet_station_ids: [], source: 'INA', station_id: '6764',
+      metric: 'river_height_m', value: '4.31', unit: 'm', observed_at: observedAt, ingested_at: observedAt,
+      last_successful_observed_at: observedAt, quality: 'estimated', freshness: 'fresh', tendency: null, forecast_horizon_days: null, confidence: 'normal', source_url: 'https://alerta.ina.gob.ar/a5/getObservaciones/6764',
+    },
+  ]
+  const calls: string[] = []
+  const db = { async query(sql: string, _params: unknown[] = []) { calls.push(sql); return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const repo = new HydrologyRepository(db)
+
+  const municipalities = await repo.getMunicipalityTelemetryOverview('AR-W')
+
+  assert.deepEqual(municipalities[0]?.gaugeMappings.inaStationIds, ['6764'])
+  assert.deepEqual(municipalities[0]?.latestTelemetry.map((item) => [item.source, item.stationId, item.value, item.sourceUrl]), [
+    ['INA', '6764', 4.31, 'https://alerta.ina.gob.ar/a5/getObservaciones/6764'],
+  ])
+  assert.match(calls[0] ?? '', /source_url NOT LIKE 'offline-fixture:\/\/%'/)
+})
+
 test('HydrologyRepository can fetch one municipality dashboard and preserve missing telemetry explicitly', async () => {
   const rows = [{
     municipality_id: 'mun-mercedes', locality_id: 'mercedes', municipality_name: 'Mercedes', province_code: 'AR-W',
@@ -178,6 +209,36 @@ test('HydrologyRepository saveTelemetryDeduped inserts changed numeric values an
   assert.deepEqual(summary, { inserted: 1, unchanged: 0 })
   assert.equal(calls.filter((call) => /INSERT INTO hydrology_telemetry/i.test(call.sql)).length, 1)
   assert.equal(calls.find((call) => /SELECT value\s+FROM hydrology_telemetry/i.test(call.sql))?.params[4], 7)
+})
+
+test('HydrologyRepository persists and reads proof-correlated ingestion rows by source', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const observedAt = new Date('2026-06-23T10:00:00.000Z')
+  const db = {
+    async query(sql: string, params: unknown[] = []) {
+      calls.push({ sql, params })
+      if (/SELECT id::text, source, records_ingested, status, started_at, finished_at/i.test(sql)) {
+        return {
+          rows: [{ id: 'run-row-1', source: 'PNA', records_ingested: 2, status: 'success', started_at: observedAt, finished_at: observedAt }],
+          rowCount: 1,
+          command: 'SELECT',
+          oid: 0,
+          fields: [],
+        }
+      }
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] }
+    },
+  }
+  const repo = new HydrologyRepository(db)
+
+  await repo.saveIngestionRun({ source: 'PNA', proofRunId: 'proof-correlated-1', status: 'success', startedAt: observedAt, recordsIngested: 2 })
+  const rows = await repo.getIngestionProofRows('proof-correlated-1', 'PNA')
+
+  assert.equal(calls[0]?.params[1], 'proof-correlated-1')
+  assert.match(calls[0]?.sql ?? '', /proof_run_id/)
+  assert.equal(calls[1]?.params[0], 'proof-correlated-1')
+  assert.equal(calls[1]?.params[1], 'PNA')
+  assert.deepEqual(rows, [{ id: 'run-row-1', source: 'PNA', recordsIngested: 2, status: 'success', startedAt: observedAt.toISOString(), finishedAt: observedAt.toISOString() }])
 })
 
 test('government HTTP clients set user agent and parse successful official payloads', async () => {
@@ -251,8 +312,8 @@ test('government HTTP clients return parsed failures for network, status, and ma
   assert.equal(statusFailure.ok ? 0 : statusFailure.diagnostic.upstreamStatus, 503)
   assert.match(parseFailure.ok ? '' : parseFailure.error, /INA.*payload/i)
   assert.equal(parseFailure.ok ? '' : parseFailure.diagnostic.failureKind, 'parse_failure')
-  assert.match(htmlFailure.ok ? '' : htmlFailure.error, /INMET.*content-type.*JSON/i)
-  assert.equal(htmlFailure.ok ? '' : htmlFailure.diagnostic.failureKind, 'unexpected_content_type')
+  assert.match(htmlFailure.ok ? '' : htmlFailure.error, /INMET.*payload parse/i)
+  assert.equal(htmlFailure.ok ? '' : htmlFailure.diagnostic.failureKind, 'parse_failure')
 })
 
 test('government HTTP clients abort official requests after configured timeout', async () => {

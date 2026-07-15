@@ -9,6 +9,7 @@ import {
   hydrologyGovernmentIngestResponseSchema,
   hydrologyGovernmentMunicipalitiesResponseSchema,
   type HydrologyDenseContextV1,
+  type HydrologyGovernmentHttpSummary,
   type HydrologyGovernmentIngestDiagnostic,
   type HydrologySource,
   type HydrologyTelemetry,
@@ -20,14 +21,14 @@ import { logger } from '../../infrastructure/observability/logger'
 interface HydrologyGovernmentRouterDeps {
   hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
-  ingestionRunner: (input: { source?: HydrologySource; reason?: string }) => Promise<GovernmentIngestionResponse>
+  ingestionRunner: (input: { source?: HydrologySource; reason?: string; proofRunId?: string }) => Promise<GovernmentIngestionResponse>
 }
 
 type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'>
 type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult>; timeoutMs?: number }
-type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; diagnostic?: HydrologyGovernmentIngestDiagnostic }
-type GovernmentIngestionResponse = { runId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
-type CompletedGovernmentIngestionResponse = { runId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; httpSummary?: HydrologyGovernmentHttpSummary; diagnostic?: HydrologyGovernmentIngestDiagnostic }
+type GovernmentIngestionResponse = { runId?: string; proofRunId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+type CompletedGovernmentIngestionResponse = { runId: string; proofRunId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type HydrologyStartupOperation = 'runner_execution' | 'seed_municipalities'
 type SanitizedErrorDetail = { name: string; message: string; code?: string }
 type HydrologyStartupFailureDetails = { operation: HydrologyStartupOperation; errorName: string; message?: string; code?: string; aggregateErrors?: SanitizedErrorDetail[] }
@@ -44,6 +45,8 @@ const ALL_SOURCES: HydrologySource[] = ['PNA', 'INA', 'INMET', 'SMN']
 const DEFAULT_SOURCE_RUNNER_TIMEOUT_MS = 12_000
 const SOURCE_RUNNER_TIMEOUT_CUSHION_MS = 2_000
 const SOURCE_RUNNER_TIMEOUT_CAP_MS = 60_000
+const INGEST_RATE_WINDOW_MS = 60_000
+const INGEST_RATE_LIMIT = 4
 const PROVINCE = { provinceCode: 'AR-W', name: 'Corrientes' }
 type FloodRiskRiver = 'Paraná' | 'Uruguay'
 type PnaFloodRiskPort = {
@@ -74,9 +77,9 @@ export const PNA_FLOOD_RISK_PORTS: PnaFloodRiskPort[] = [
   pnaPort('yahape', 'yahape', 'Yahapé', 'Paraná', 6, 6.5, -57.65, -27.38),
   pnaPort('itati', 'itati', 'Itatí', 'Paraná', 7, 7.5, -58.25, -27.28),
   pnaPort('paso-de-la-patria', 'paso-de-la-patria', 'Paso de la Patria', 'Paraná', 6.5, 7, -58.57, -27.32, { primaryPnaPortId: 'paso_de_la_patria', secondaryPnaPortIds: ['corrientes'] }),
-  pnaPort('corrientes', 'corrientes-capital', 'Corrientes Capital', 'Paraná', 6.5, 7, -58.80, -27.48, { secondaryPnaPortIds: ['paso_de_la_patria'] }),
+  pnaPort('corrientes', 'corrientes-capital', 'Corrientes Capital', 'Paraná', 6.5, 7, -58.80, -27.48, { secondaryPnaPortIds: ['paso_de_la_patria'], inaStationIds: ['6764'] }),
   pnaPort('empedrado', 'empedrado', 'Empedrado', 'Paraná', 6.2, 6.7, -58.78, -27.95),
-  pnaPort('bella-vista', 'bella-vista', 'Bella Vista', 'Paraná', 5.7, 6.1, -58.68, -28.50),
+  pnaPort('bella-vista', 'bella-vista', 'Bella Vista', 'Paraná', 5.7, 6.1, -58.68, -28.50, { inaStationIds: ['38469'] }),
   pnaPort('goya', 'goya-corrientes', 'Goya', 'Paraná', 5.2, 5.7, -59.26, -29.14),
   pnaPort('esquina', 'esquina', 'Esquina', 'Paraná', 5.1, 5.6, -59.53, -30.02),
   pnaPort('garruchos', 'garruchos', 'Garruchos', 'Uruguay', 12, 13, -55.65, -28.18),
@@ -84,9 +87,14 @@ export const PNA_FLOOD_RISK_PORTS: PnaFloodRiskPort[] = [
   pnaPort('alvear', 'alvear', 'Alvear', 'Uruguay', 9, 10, -56.55, -29.10),
   pnaPort('la-cruz', 'la-cruz', 'La Cruz', 'Uruguay', 8, 9, -56.65, -29.18),
   pnaPort('yapeyu', 'yapeyu', 'Yapeyú', 'Uruguay', 7.5, 8.5, -56.82, -29.47),
-  pnaPort('paso-de-los-libres', 'paso-de-los-libres', 'Paso de los Libres', 'Uruguay', 7.5, 8.5, -57.08, -29.72, { primaryPnaPortId: 'paso_de_los_libres' }),
+  pnaPort('paso-de-los-libres', 'paso-de-los-libres', 'Paso de los Libres', 'Uruguay', 7.5, 8.5, -57.08, -29.72, { primaryPnaPortId: 'paso_de_los_libres', inaStationIds: ['33988'] }),
   pnaPort('monte-caseros', 'monte-caseros', 'Monte Caseros', 'Uruguay', 7.5, 8.5, -57.65, -30.25),
 ]
+const INA_SERIES_STATIONS = [
+  { id: '6764', name: 'Corrientes', river: 'Paraná' },
+  { id: '33988', name: 'Paso de los Libres', river: 'Uruguay' },
+  { id: '38469', name: 'Bella Vista', river: 'Paraná' },
+] as const
 const EXCLUDED_TOPIC_RE = /(tiempo\s+de\s+(?:llegada|propagaci[oó]n|onda|lag)|lag\s*time|wave\s+(?:routing|propagation)|propagaci[oó]n\s+de\s+onda|caudal|descarga|turbinad[oa]s?|vertid[oa]s?|spilled|turbined|routing\s+hidr[aá]ulico|muskingum|evacuaci[oó]n|autoridad\s+de\s+evacuaci[oó]n)/i
 const OUT_OF_SCOPE_MESSAGE = 'Entiendo la urgencia, pero esos cálculos están fuera del alcance de la Fase 1 de Iberá-Alerta. No calculo tiempos de propagación, routing de onda, caudales/descargas de represas, flujos turbinados o vertidos, ni decisiones de evacuación. Puedo limitar la respuesta a observaciones y pronósticos oficiales disponibles de PNA, INA, INMET y SMN.'
 
@@ -97,13 +105,17 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     ingestionRunner: deps.ingestionRunner ?? createGovernmentIngestionRunner(),
   }
   const router = Router()
+  const ingestAdmission = createIngestAdmission()
 
   router.get('/municipalities', async (req, res) => {
     const requestId = requestIdFor(req)
     logger.info({ requestId, phase: 'repository_query', provinceCode: PROVINCE.provinceCode }, 'Government hydrology municipalities overview requested')
     let municipalities: MunicipalityTelemetryView[]
     try {
-      municipalities = await resolved.hydrologyRepository.getMunicipalityTelemetryOverview(PROVINCE.provinceCode)
+      municipalities = (await resolved.hydrologyRepository.getMunicipalityTelemetryOverview(PROVINCE.provinceCode)).map((municipality) => ({
+        ...municipality,
+        latestTelemetry: municipality.latestTelemetry.filter((item) => !item.sourceUrl?.startsWith('offline-fixture://')),
+      }))
       logger.info({ requestId, phase: 'repository_query', municipalityCount: municipalities.length, telemetryCount: municipalities.flatMap((item) => item.latestTelemetry).length }, 'Government hydrology municipalities repository query succeeded')
     } catch (error) {
       logHydrologyRouteError(requestId, 'repository_query', error)
@@ -168,14 +180,14 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   router.post('/ingest', async (req, res) => {
-    if (!isHydrologyIngestAuthorized(req.header('authorization'))) return respondContractError(res, 401, 'Bearer token requerido para ingesta hidrológica')
-
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
+    const admission = ingestAdmission.tryAcquire(req.ip || 'unknown')
+    if (!admission.ok) return res.setHeader('Retry-After', String(Math.ceil(admission.retryAfterMs / 1000))).status(429).json({ ...agronautasContractErrorSchema.parse({ contractVersion: '1.0.0', code: 'INVALID_CONTRACT', message: 'La ingesta hidrológica está limitada temporalmente.', retryable: true }), details: { retryAfterMs: admission.retryAfterMs } })
 
     try {
       const result = await resolved.ingestionRunner(parsed.data)
-      return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result }))
+      return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result, proofRunId: parsed.data.proofRunId ?? result.proofRunId }))
     } catch (error) {
       const startupFailure = describeHydrologyStartupFailure(error, 'runner_execution')
       logger.error(startupFailure, 'Government hydrology ingestion could not start')
@@ -185,11 +197,14 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       return res.status(503).json(hydrologyGovernmentIngestResponseSchema.parse({
         contractVersion: 'hydrology-government-ingest-v1',
         status: 'failed',
+        proofRunId: parsed.data.proofRunId,
         requestedSources,
         results,
         sources: requestedSources,
-        sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
-      }))
+         sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
+       }))
+    } finally {
+      admission.release()
     }
   })
 
@@ -222,40 +237,15 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   return router
 }
 
-type HydrologyIngestAuthEnv = Partial<Record<'HYDROLOGY_INGEST_TOKEN' | 'AGRONAUTAS_AUTH_ENABLED' | 'AGRONAUTAS_AUTH_TOKEN_OPERATOR' | 'AGRONAUTAS_AUTH_TOKEN_ADMIN', string | undefined>>
-
-export function isHydrologyIngestAuthorized(authorization: Request['headers']['authorization'], env: HydrologyIngestAuthEnv = process.env): boolean {
-  const configuredTokens = hydrologyIngestAcceptedTokens(env)
-  if (configuredTokens.length === 0) return true
-  const bearer = parseBearerToken(authorization)
-  return bearer !== null && configuredTokens.includes(bearer)
-}
-
-function hydrologyIngestAcceptedTokens(env: HydrologyIngestAuthEnv): string[] {
-  const tokens = compactTokenList([env.HYDROLOGY_INGEST_TOKEN])
-  if (env.AGRONAUTAS_AUTH_ENABLED === 'true') tokens.push(...compactTokenList([env.AGRONAUTAS_AUTH_TOKEN_OPERATOR, env.AGRONAUTAS_AUTH_TOKEN_ADMIN]))
-  return [...new Set(tokens)]
-}
-
-function compactTokenList(values: Array<string | undefined>): string[] {
-  return values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))
-}
-
-function parseBearerToken(authorization: Request['headers']['authorization']): string | null {
-  if (typeof authorization !== 'string') return null
-  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim())
-  return match?.[1]?.trim() || null
-}
-
 function sourceFreshnessFor(telemetry: HydrologyTelemetry[]) {
   return ALL_SOURCES.map((source) => {
-    const rows = telemetry.filter((item) => item.source === source).sort((a, b) => a.lastSuccessfulObservedAt.localeCompare(b.lastSuccessfulObservedAt))
+    const rows = telemetry.filter((item) => item.source === source && !item.sourceUrl?.startsWith('offline-fixture://')).sort((a, b) => a.lastSuccessfulObservedAt.localeCompare(b.lastSuccessfulObservedAt))
     const latest = rows.at(-1)
     return {
       source,
       lastSuccessfulObservedAt: latest?.lastSuccessfulObservedAt ?? null,
       freshness: latest?.freshness ?? 'degraded',
-      label: latest?.lastSuccessfulObservedAt ? `Último dato obtenido: ${formatArgentinaDateTime(latest.lastSuccessfulObservedAt)}` : 'Último dato obtenido: no disponible',
+      label: latest?.lastSuccessfulObservedAt ? `Último dato obtenido: ${formatArgentinaDateTime(latest.lastSuccessfulObservedAt)}` : 'Fuente oficial no disponible',
     }
   })
 }
@@ -275,22 +265,42 @@ function toProvinceAlerts(municipality: MunicipalityTelemetryView) {
 }
 
 function toMunicipalityCopilotContext(municipality: MunicipalityTelemetryDashboard): HydrologyDenseContextV1 {
-  const sources = [...new Set(municipality.latestTelemetry.map((item) => item.source))]
-  const latest = sourceFreshnessFor(municipality.latestTelemetry).map((item) => item.lastSuccessfulObservedAt).filter(Boolean).sort().at(-1) ?? null
+  const zone = MUNICIPAL_COPILOT_ZONES.includes(municipality.municipality.name as MunicipalCopilotZone) ? municipality.municipality.name as MunicipalCopilotZone : null
+  const telemetry = zone ? municipality.latestTelemetry : []
+  const sources = [...new Set(telemetry.map((item) => item.source))]
+  const latest = zone ? sourceFreshnessFor(telemetry).map((item) => item.lastSuccessfulObservedAt).filter(Boolean).sort().at(-1) ?? null : null
   return {
     contractVersion: 'hydrology-dense-context-v1',
     fieldId: municipality.municipality.id,
-    zone: null,
+    zone,
     sources,
     stations: [],
     snapshot: {
       riskLevel: 'unknown',
-      freshness: municipality.latestTelemetry.length > 0 ? 'fresh' : 'degraded',
-      quality: municipality.latestTelemetry.length > 0 ? 'ok' : 'missing',
+      freshness: telemetry.length > 0 ? 'fresh' : 'degraded',
+      quality: telemetry.length > 0 ? 'ok' : 'missing',
       recommendation: 'Usar únicamente observaciones, alertas y pronósticos oficiales disponibles para el municipio.',
       lastSuccessfulObservedAt: latest,
     },
-    telemetry: municipality.latestTelemetry,
+    telemetry,
+  }
+}
+
+const MUNICIPAL_COPILOT_ZONES = ['Mercedes', 'Ituzaingó', 'Virasoro'] as const
+type MunicipalCopilotZone = (typeof MUNICIPAL_COPILOT_ZONES)[number]
+
+function createIngestAdmission() {
+  let inFlight = false
+  const requests = new Map<string, number[]>()
+  return {
+    tryAcquire(key: string): { ok: true; release: () => void } | { ok: false; retryAfterMs: number } {
+      const now = Date.now()
+      const recent = (requests.get(key) ?? []).filter((startedAt) => now - startedAt < INGEST_RATE_WINDOW_MS)
+      if (inFlight || recent.length >= INGEST_RATE_LIMIT) return { ok: false, retryAfterMs: Math.max(1_000, INGEST_RATE_WINDOW_MS - (now - (recent[0] ?? now))) }
+      requests.set(key, [...recent, now])
+      inFlight = true
+      return { ok: true, release: () => { inFlight = false } }
+    },
   }
 }
 
@@ -359,11 +369,17 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
   const now = deps.now ?? (() => new Date())
 
   const allowFixtureFallback = deps.allowFixtureFallback ?? process.env['NODE_ENV'] === 'test'
+  let municipalitySeed: Promise<{ inserted: number; skipped: boolean }> | undefined
+  const ensureMunicipalitiesSeeded = () => municipalitySeed ??= runHydrologyStartupOperation('seed_municipalities', () => seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool)).catch((error) => {
+    municipalitySeed = undefined
+    throw error
+  })
 
-  return async (input: { source?: HydrologySource }): Promise<CompletedGovernmentIngestionResponse> => {
+  return async (input: { source?: HydrologySource; proofRunId?: string }): Promise<CompletedGovernmentIngestionResponse> => {
     const sources = input.source ? [input.source] : ALL_SOURCES
     const runId = `manual-${randomUUID()}`
-    await runHydrologyStartupOperation('seed_municipalities', () => seedGovernmentMunicipalitiesIfEmpty(deps.seedDb ?? pool))
+    const proofRunId = input.proofRunId?.trim() || runId
+    await ensureMunicipalitiesSeeded()
     const results: GovernmentIngestionSourceResult[] = []
 
     for (const source of sources) {
@@ -382,10 +398,11 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
           startedAt,
           finishedAt,
           recordsIngested: 0,
-          errorMessage,
-        }, [], runId, source)
+            proofRunId,
+            errorMessage,
+          }, [], runId, source)
         logger.error({ runId, source, failureKind: diagnostic.failureKind, error: fallbackReason }, 'Government hydrology ingestion failed')
-        results.push({ source, status: result.ok ? 'empty' : 'failed', recordsIngested: 0, errorMessage: persisted ? errorMessage : `${errorMessage}; provider failure recorded; persistence write failed`, diagnostic })
+        results.push({ source, status: result.ok ? 'empty' : 'failed', recordsIngested: 0, errorMessage: persisted ? errorMessage : `${errorMessage}; provider failure recorded; persistence write failed`, httpSummary: result.httpSummary, diagnostic })
         continue
       }
       const records = fallbackReason ? governmentFallbackTelemetry(source, now()) : liveRecords
@@ -401,13 +418,14 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         observedTo,
         lastSuccessfulObservedAt: observedTo,
         recordsIngested: records.length,
+        proofRunId,
         errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined,
         provenanceUrl: records[0]?.sourceUrl,
       }, records, runId, source)
-      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, diagnostic: persisted ? undefined : genericFailureDiagnostic(source, `${source} persistence write failed`, runnerTimeoutMs) })
+      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, httpSummary: result.ok ? result.httpSummary : result.httpSummary, diagnostic: persisted ? undefined : genericFailureDiagnostic(source, `${source} persistence write failed`, runnerTimeoutMs) })
     }
 
-    return { runId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
+    return { runId, proofRunId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
   }
 }
 
@@ -580,6 +598,21 @@ function governmentFallbackTelemetry(source: HydrologySource, observedAt: Date):
 export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>>; rowCount?: number | null }> }): Promise<{ inserted: number; skipped: boolean }> {
   const pnaIds = PNA_FLOOD_RISK_PORTS.map((municipality) => municipality.id)
   const existing = await db.query('SELECT COUNT(*)::int AS count FROM agronautas_municipalities WHERE id = ANY($1)', [pnaIds])
+  for (const station of INA_SERIES_STATIONS) {
+    await db.query(
+      `INSERT INTO hydrology_stations (id, source, station_code, station_name, river_name, zone, source_url, is_active, country_code)
+       VALUES ($1, 'INA', $2, $3, $4, null, $5, true, 'AR')
+       ON CONFLICT (id) DO UPDATE SET
+         station_code = EXCLUDED.station_code,
+         station_name = EXCLUDED.station_name,
+         river_name = EXCLUDED.river_name,
+         source_url = EXCLUDED.source_url,
+         is_active = true,
+         country_code = 'AR',
+         updated_at = now()`,
+      [station.id, station.id, station.name, station.river, `https://alerta.ina.gob.ar/a5/obs/puntual/series/${station.id}`],
+    )
+  }
   if (Number(existing.rows[0]?.['count'] ?? 0) === PNA_FLOOD_RISK_PORTS.length) return { inserted: 0, skipped: true }
 
   for (const municipality of PNA_FLOOD_RISK_PORTS) {
@@ -628,7 +661,7 @@ export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: strin
   return { inserted: PNA_FLOOD_RISK_PORTS.length, skipped: false }
 }
 
-function pnaPort(id: string, localityId: string, name: string, river: FloodRiskRiver, alertHeightM: number, evacuationHeightM: number, lng: number, lat: number, overrides: Partial<Pick<PnaFloodRiskPort, 'primaryPnaPortId' | 'secondaryPnaPortIds'>> = {}): PnaFloodRiskPort {
+function pnaPort(id: string, localityId: string, name: string, river: FloodRiskRiver, alertHeightM: number, evacuationHeightM: number, lng: number, lat: number, overrides: Partial<Pick<PnaFloodRiskPort, 'primaryPnaPortId' | 'secondaryPnaPortIds' | 'inaStationIds' | 'inmetStationIds'>> = {}): PnaFloodRiskPort {
   return {
     id,
     localityId,
@@ -639,9 +672,9 @@ function pnaPort(id: string, localityId: string, name: string, river: FloodRiskR
     evacuationHeightM,
     primaryPnaPortId: overrides.primaryPnaPortId ?? id.replaceAll('-', '_'),
     secondaryPnaPortIds: overrides.secondaryPnaPortIds ?? [],
-    inaStationIds: [`ina-${id}`],
+    inaStationIds: overrides.inaStationIds ?? [`ina-${id}`],
     smnRegionIds: ['smn-corrientes'],
-    inmetStationIds: river === 'Paraná' ? ['inmet-parana'] : ['inmet-uruguay-headwaters'],
+    inmetStationIds: overrides.inmetStationIds ?? (river === 'Paraná' ? ['A830', 'A809'] : ['A846', 'A826']),
     boundaryWkt: squareBoundary(lng, lat),
     sourceMetadata: { source: 'PNA', thresholdUnit: 'm', thresholdReference: 'local_gauge_zero' },
   }

@@ -1,0 +1,24 @@
+{
+  "original_criteria": {
+    "passed": true,
+    "evidence": [
+      "apps/api/src/presentation/routes/hydrology-government.ts",
+      "apps/web/src/app/api/hydrology/[...path]/route.ts",
+      "packages/hydrology-engine/src/repository.ts",
+      "packages/hydrology-engine/src/clients/http-clients.ts",
+      "packages/hydrology-engine/src/adapters/rss-parser.ts",
+      "packages/zod-schemas/src/agronautas.ts"
+    ]
+  },
+  "correction_regression": {
+    "passed": true,
+    "evidence": [
+      "openspec/changes/ibera-alerta-production-proof-recovery/apply-progress.md",
+      "openspec/changes/ibera-alerta-production-proof-recovery/verify-report.md",
+      "artifacts/hydrology-local-real-matrix.json",
+      "artifacts/hydrology-scheduler-local-receipt.json",
+      "artifacts/hydrology-municipalities-local-browser-evidence.json"
+    ]
+  },
+  "follow_ups": []
+}

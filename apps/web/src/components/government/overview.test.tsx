@@ -14,7 +14,7 @@ test('GovernmentOverview renders canonical telemetry and empty latestTelemetry s
     sourceFreshness: [{ source: 'PNA', freshness: 'fresh', label: 'PNA actualizado', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }],
     provinceAlerts: [],
     municipalities: [
-      { id: 'corrientes', localityId: 'corrientes-capital', name: 'Corrientes Capital', provinceCode: 'AR-W', alertHeightM: 6.5, evacuationHeightM: 7, gaugeMappings: { primaryPnaPortId: 'corrientes', secondaryPnaPortIds: [], inaStationIds: [], smnRegionIds: [], inmetStationIds: [] }, latestTelemetry: [{ source: 'PNA', metric: 'river_height_m', value: 3.2, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }, { source: 'SMN', metric: 'rain_mm', value: 18, unit: 'mm', observedAt: '2026-06-23T09:00:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z' }] },
+      { id: 'corrientes', localityId: 'corrientes-capital', name: 'Corrientes Capital', provinceCode: 'AR-W', alertHeightM: 6.5, evacuationHeightM: 7, gaugeMappings: { primaryPnaPortId: 'corrientes', secondaryPnaPortIds: [], inaStationIds: ['6764'], smnRegionIds: [], inmetStationIds: [] }, latestTelemetry: [{ source: 'PNA', metric: 'river_height_m', value: 3.2, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }, { source: 'INA', metric: 'river_height_m', value: 3.11, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', sourceUrl: 'https://alerta.ina.gob.ar/a5/getObservaciones/6764' }, { source: 'SMN', metric: 'rain_mm', value: 18, unit: 'mm', observedAt: '2026-06-23T09:00:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z' }] },
       { id: 'goya', localityId: 'goya-corrientes', name: 'Goya', provinceCode: 'AR-W', gaugeMappings: { primaryPnaPortId: 'goya', secondaryPnaPortIds: [], inaStationIds: [], smnRegionIds: [], inmetStationIds: [] }, latestTelemetry: [] },
     ],
   }
@@ -22,7 +22,9 @@ test('GovernmentOverview renders canonical telemetry and empty latestTelemetry s
     assert.ok(await view.findByText('Corrientes Capital'))
     assert.ok(await view.findByText('Goya'))
     assert.match(view.container.textContent ?? '', /3\.2\s*m/)
-    assert.match(view.container.textContent ?? '', /18\s*mm/)
+    assert.match(view.container.textContent ?? '', /3\.11\s*m/)
+    assert.ok(view.getByRole('link', { name: 'Ver fuente oficial' }))
+    assert.doesNotMatch(view.container.textContent ?? '', /18\s*mm/)
     assert.ok(view.getByText('Sin datos oficiales recientes'))
 })
 

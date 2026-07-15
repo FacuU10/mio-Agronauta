@@ -36,25 +36,34 @@ export class HydrologyRepository {
     let inserted = 0
     let unchanged = 0
     const eligibleRecords = records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)
-    for (const record of eligibleRecords) {
-      const latest = await this.db.query(
-        `SELECT value
-           FROM hydrology_telemetry
-          WHERE station_id = $1
-            AND source = $2
-            AND metric = $3
-            AND unit = $4
-            AND forecast_horizon_days IS NOT DISTINCT FROM $5
-          ORDER BY observed_at DESC, ingested_at DESC
-          LIMIT 1`,
-        [record.stationId, record.source, record.metric, record.unit, record.forecastHorizonDays ?? null],
-      ) as QueryResult<{ value: string | number | null }>
-      if (isTelemetryValueUnchanged(latest.rows[0]?.value, record.value)) {
-        unchanged += 1
-        continue
+    let telemetryError: unknown
+    try {
+      for (const record of eligibleRecords) {
+        const latest = await this.db.query(
+          `SELECT value
+             FROM hydrology_telemetry
+            WHERE station_id = $1
+              AND source = $2
+              AND metric = $3
+              AND unit = $4
+              AND forecast_horizon_days IS NOT DISTINCT FROM $5
+            ORDER BY observed_at DESC, ingested_at DESC
+            LIMIT 1`,
+          [record.stationId, record.source, record.metric, record.unit, record.forecastHorizonDays ?? null],
+        ) as QueryResult<{ value: string | number | null }>
+        if (isTelemetryValueUnchanged(latest.rows[0]?.value, record.value)) {
+          unchanged += 1
+          continue
+        }
+        await this.saveTelemetry([record])
+        inserted += 1
       }
-      await this.saveTelemetry([record])
-      inserted += 1
+    } catch (error) {
+      telemetryError = error
+    }
+    if (telemetryError !== undefined) {
+      await this.saveIngestionRun({ ...run, status: 'failed', finishedAt: run.finishedAt ?? new Date(), recordsIngested: inserted, errorMessage: 'Telemetry persistence failed before ingestion run completed' }).catch(() => undefined)
+      throw telemetryError
     }
     await this.saveIngestionRun(run)
     return { inserted, unchanged }
@@ -62,6 +71,7 @@ export class HydrologyRepository {
 
   async saveTelemetry(records: NormalizedHydrologyTelemetry[]): Promise<void> {
     for (const record of records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)) {
+      if ((record.source === 'INMET' || record.source === 'SMN') && record.metric === 'storm_alert') await this.ensureAlertStation(record)
       await this.db.query(
         `INSERT INTO hydrology_telemetry (station_id, source, metric, observed_at, ingested_at, last_successful_observed_at, value, unit, tendency, forecast_horizon_days, confidence, quality, freshness, source_url, raw)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -80,12 +90,34 @@ export class HydrologyRepository {
     }
   }
 
+  private async ensureAlertStation(record: NormalizedHydrologyTelemetry): Promise<void> {
+    const stationName = typeof record.raw?.['title'] === 'string' ? record.raw['title'].slice(0, 160) : `${record.source} alerta oficial`
+    await this.db.query(
+      `INSERT INTO hydrology_stations (id, source, station_code, station_name, river_name, zone, source_url, is_active, country_code)
+       VALUES ($1,$2,$1,$3,null,null,$4,true,'AR')
+       ON CONFLICT (id) DO UPDATE SET station_name = EXCLUDED.station_name, source_url = EXCLUDED.source_url, is_active = true, updated_at = now()`,
+      [record.stationId, record.source, stationName, record.sourceUrl ?? null],
+    )
+  }
+
   async saveIngestionRun(run: IngestionRunInput): Promise<void> {
     await this.db.query(
-      `INSERT INTO hydrology_ingestion_runs (source, station_id, status, started_at, finished_at, observed_from, observed_to, last_successful_observed_at, records_ingested, excluded_metrics, error_message, provenance_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [run.source, run.stationId ?? null, run.status, run.startedAt, run.finishedAt ?? null, run.observedFrom ?? null, run.observedTo ?? null, run.lastSuccessfulObservedAt ?? null, run.recordsIngested, run.excludedMetrics ?? [], run.errorMessage ?? null, run.provenanceUrl ?? null],
+      `INSERT INTO hydrology_ingestion_runs (source, proof_run_id, station_id, status, started_at, finished_at, observed_from, observed_to, last_successful_observed_at, records_ingested, excluded_metrics, error_message, provenance_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [run.source, run.proofRunId ?? null, run.stationId ?? null, run.status, run.startedAt, run.finishedAt ?? null, run.observedFrom ?? null, run.observedTo ?? null, run.lastSuccessfulObservedAt ?? null, run.recordsIngested, run.excludedMetrics ?? [], run.errorMessage ?? null, run.provenanceUrl ?? null],
     )
+  }
+
+  async getIngestionProofRows(proofRunId: string, source?: string): Promise<Array<{ id: string; source: string; recordsIngested: number; status: string; startedAt: string; finishedAt: string | null }>> {
+    const result = await this.db.query(
+      `SELECT id::text, source, records_ingested, status, started_at, finished_at
+         FROM hydrology_ingestion_runs
+        WHERE proof_run_id = $1
+          AND ($2::text IS NULL OR source = $2)
+        ORDER BY started_at DESC`,
+      [proofRunId, source ?? null],
+    ) as QueryResult<{ id: string; source: string; records_ingested: number; status: string; started_at: Date | string; finished_at: Date | string | null }>
+    return result.rows.map((row) => ({ id: row.id, source: row.source, recordsIngested: Number(row.records_ingested), status: row.status, startedAt: toIsoOrNull(row.started_at) ?? '', finishedAt: toIsoOrNull(row.finished_at) }))
   }
 
   async mapFieldToHydrologyZone(fieldBoundaryWkt: string, fieldId = 'unknown'): Promise<FieldHydrologyMapping> {
@@ -206,7 +238,12 @@ const municipalityTelemetrySql = (where: string) => `SELECT
     m.evacuation_height_m,
     mgm.primary_pna_port_id,
     COALESCE(mgm.secondary_pna_port_ids, ARRAY[]::text[]) AS secondary_pna_port_ids,
-    COALESCE(mgm.ina_station_ids, ARRAY[]::text[]) AS ina_station_ids,
+    COALESCE(mgm.ina_station_ids, ARRAY[]::text[]) || CASE lower(m.locality_id)
+      WHEN 'corrientes-capital' THEN ARRAY['6764']::text[]
+      WHEN 'paso-de-los-libres' THEN ARRAY['33988']::text[]
+      WHEN 'bella-vista' THEN ARRAY['38469']::text[]
+      ELSE ARRAY[]::text[]
+    END AS ina_station_ids,
     COALESCE(mgm.smn_region_ids, ARRAY[]::text[]) AS smn_region_ids,
     COALESCE(mgm.inmet_station_ids, ARRAY[]::text[]) AS inmet_station_ids,
     latest.source,
@@ -246,11 +283,18 @@ const municipalityTelemetrySql = (where: string) => `SELECT
       ARRAY[mgm.primary_pna_port_id]::text[]
         || COALESCE(mgm.secondary_pna_port_ids, ARRAY[]::text[])
         || COALESCE(mgm.ina_station_ids, ARRAY[]::text[])
+        || CASE lower(m.locality_id)
+          WHEN 'corrientes-capital' THEN ARRAY['6764']::text[]
+          WHEN 'paso-de-los-libres' THEN ARRAY['33988']::text[]
+          WHEN 'bella-vista' THEN ARRAY['38469']::text[]
+          ELSE ARRAY[]::text[]
+        END
         || COALESCE(mgm.smn_region_ids, ARRAY[]::text[])
         || COALESCE(mgm.inmet_station_ids, ARRAY[]::text[]),
       NULL
     ))
       AND (ht.forecast_horizon_days IS NULL OR ht.forecast_horizon_days <= 30)
+      AND (ht.source_url IS NULL OR ht.source_url NOT LIKE 'offline-fixture://%')
     ORDER BY ht.source, ht.station_id, ht.metric, ht.unit, ht.forecast_horizon_days, ht.observed_at DESC, ht.ingested_at DESC
   ) latest ON true
   WHERE ${where}
@@ -300,7 +344,7 @@ const toMunicipalityTelemetryViews = (rows: MunicipalityTelemetryRow[]): Municip
     }
     if (!byId.has(row.municipality_id)) byId.set(row.municipality_id, current)
     const telemetry = toTelemetryOrNull(row)
-    if (telemetry) current.latestTelemetry.push(telemetry)
+    if (telemetry && !telemetry.sourceUrl?.startsWith('offline-fixture://')) current.latestTelemetry.push(telemetry)
   }
   return [...byId.values()]
 }

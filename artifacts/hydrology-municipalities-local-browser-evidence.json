@@ -1,0 +1,14 @@
+{
+  "verifier": "hydrology-municipalities-browser-v1",
+  "proofRunId": "proof-20260715T084732Z",
+  "environment": "local",
+  "url": "http://127.0.0.1:3000/municipalities",
+  "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
+  "visibleSources": [
+    "PNA",
+    "INA",
+    "INMET",
+    "SMN"
+  ],
+  "municipalityCount": 18
+}

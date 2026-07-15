@@ -2,11 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, describeHydrologyStartupFailure, isHydrologyIngestAuthorized, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, describeHydrologyStartupFailure, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
   hydrologyGovernmentMunicipalitiesResponseSchema,
+  hydrologyDenseContextV1Schema,
 } from '@repo/zod-schemas'
 
 test('GET /api/hydrology/municipalities devuelve resumen provincial y municipios con provenance', async () => {
@@ -56,6 +57,26 @@ test('GET /api/hydrology/municipalities strips bad telemetry when contract valid
   assert.deepEqual(json.municipalities[0]?.latestTelemetry, [])
 })
 
+test('GET /api/hydrology/municipalities never returns offline fixture telemetry or fixture-derived alerts', async () => {
+  const fixtureMunicipality = municipalityView()
+  fixtureMunicipality.latestTelemetry = [{
+    ...fixtureMunicipality.latestTelemetry[3]!,
+    sourceUrl: 'offline-fixture://smn/corrientes-alert',
+  }]
+  const response = await request(createTestApp({
+    hydrologyRepository: {
+      async getMunicipalityTelemetryOverview() { return [fixtureMunicipality] },
+      async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    },
+  }), '/api/hydrology/municipalities')
+
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentMunicipalitiesResponseSchema.parse(await response.json())
+  assert.deepEqual(json.municipalities[0]?.latestTelemetry, [])
+  assert.deepEqual(json.provinceAlerts, [])
+  assert.doesNotMatch(JSON.stringify(json), /offline-fixture:\/\//)
+})
+
 test('GET /api/hydrology/municipalities/debug exposes non-sensitive diagnostics', async () => {
   const response = await request(createTestApp(), '/api/hydrology/municipalities/debug', { headers: { 'x-request-id': 'route-debug' } })
 
@@ -93,6 +114,41 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
   assert.equal(json.status, 'completed')
   assert.deepEqual(json.requestedSources, ['PNA'])
+})
+
+test('POST /api/hydrology/ingest echoes the requested proofRunId when the runner omits it', async () => {
+  let receivedProofRunId: string | undefined
+  const response = await request(createTestApp({ ingestionRunner: async (input) => {
+    receivedProofRunId = input.proofRunId
+    return { runId: 'manual-proof', status: 'completed', requestedSources: ['PNA'], sources: ['PNA'], results: [{ source: 'PNA', status: 'success', recordsIngested: 1 }], sourceResults: [{ source: 'PNA', status: 'success', recordsIngested: 1 }] }
+  } }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA', proofRunId: 'proof-route-contract-1' }),
+  })
+
+  assert.equal(response.status, 202)
+  assert.equal(receivedProofRunId, 'proof-route-contract-1')
+  assert.equal((await response.json() as { proofRunId?: string }).proofRunId, 'proof-route-contract-1')
+})
+
+test('POST /api/hydrology/ingest does not allow a runner proofRunId to replace the request correlation ID', async () => {
+  const response = await request(createTestApp({ ingestionRunner: async () => ({
+    runId: 'manual-proof-mismatch',
+    proofRunId: 'runner-proof-mismatch',
+    status: 'completed',
+    requestedSources: ['PNA'],
+    sources: ['PNA'],
+    results: [{ source: 'PNA', status: 'success', recordsIngested: 1 }],
+    sourceResults: [{ source: 'PNA', status: 'success', recordsIngested: 1 }],
+  }) }), '/api/hydrology/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA', proofRunId: 'proof-route-contract-2' }),
+  })
+
+  assert.equal(response.status, 202)
+  assert.equal((await response.json() as { proofRunId?: string }).proofRunId, 'proof-route-contract-2')
 })
 
 test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when all providers fail after execution starts', async () => {
@@ -149,45 +205,32 @@ test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when al
   assert.doesNotMatch(JSON.stringify(json), /startup_failure|secret|password|postgres/i)
 })
 
-test('POST /api/hydrology/ingest rejects missing or invalid hydrology bearer before runner execution', async () => withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
-  let runnerCalls = 0
-  const app = createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-forbidden', status: 'queued', sources: ['PNA'] } } })
-
-  const missing = await request(app, '/api/hydrology/ingest', {
+test('POST /api/hydrology/ingest accepts a direct request without credentials', async () => {
+  const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-direct', status: 'queued', sources: ['PNA'] }) }), '/api/hydrology/ingest', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
+    body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
   })
-  const invalid = await request(app, '/api/hydrology/ingest', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer wrong-secret' },
-    body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
-  })
+  assert.equal(response.status, 202)
+})
 
-  assert.equal(missing.status, 401)
-  assert.equal(invalid.status, 401)
-  assert.equal(runnerCalls, 0)
-}))
+test('POST /api/hydrology/ingest rejects overlapping work while retaining the first bounded run', async () => {
+  let signalRunnerStarted: () => void = () => undefined
+  let releaseRunner: () => void = () => undefined
+  const runnerStarted = new Promise<void>((resolve) => { signalRunnerStarted = resolve })
+  const runnerRelease = new Promise<void>((resolve) => { releaseRunner = resolve })
+  const app = createTestApp({ ingestionRunner: async () => {
+    signalRunnerStarted()
+    await runnerRelease
+    return { runId: 'manual-overlap', status: 'queued', sources: ['PNA'] }
+  } })
 
-test('POST /api/hydrology/ingest accepts hydrology bearer token and local safe unauthenticated mode', async () => {
-  await withEnv({ HYDROLOGY_INGEST_TOKEN: 'cron-secret', AGRONAUTAS_AUTH_ENABLED: undefined }, async () => {
-    const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-auth', status: 'queued', sources: ['PNA', 'INA', 'INMET', 'SMN'] }) }), '/api/hydrology/ingest', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer cron-secret' },
-      body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
-    })
-    assert.equal(response.status, 202)
-    assert.deepEqual(hydrologyGovernmentIngestResponseSchema.parse(await response.json()).sources, ['PNA', 'INA', 'INMET', 'SMN'])
-  })
-
-  await withEnv({ HYDROLOGY_INGEST_TOKEN: undefined, AGRONAUTAS_AUTH_ENABLED: undefined, AGRONAUTAS_AUTH_TOKEN_OPERATOR: undefined, AGRONAUTAS_AUTH_TOKEN_ADMIN: undefined }, async () => {
-    const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-local', status: 'queued', sources: ['PNA'] }) }), '/api/hydrology/ingest', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
-    })
-    assert.equal(response.status, 202)
-  })
+  const first = request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }) })
+  await runnerStarted
+  const second = await request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }) })
+  assert.equal(second.status, 429)
+  releaseRunner()
+  assert.equal((await first).status, 202)
 })
 
 test('POST /api/hydrology/ingest returns a safe contract error when ingest startup fails', async () => {
@@ -204,13 +247,6 @@ test('POST /api/hydrology/ingest returns a safe contract error when ingest start
   assert.deepEqual(json.requestedSources, ['PNA', 'INA', 'INMET', 'SMN'])
   assert.equal(json.results[0]?.diagnostic?.failureKind, 'startup_failure')
   assert.doesNotMatch(JSON.stringify(json), /postgres|password|secret|pass@example/i)
-})
-
-test('isHydrologyIngestAuthorized accepts operator/admin fallback when auth is enabled and preserves local safe mode', () => {
-  assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
-  assert.equal(isHydrologyIngestAuthorized('Bearer admin-secret', { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_ADMIN: 'admin-secret' }), true)
-  assert.equal(isHydrologyIngestAuthorized('Bearer operator-secret', { AGRONAUTAS_AUTH_ENABLED: 'false', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), true)
-  assert.equal(isHydrologyIngestAuthorized(undefined, { AGRONAUTAS_AUTH_ENABLED: 'true', AGRONAUTAS_AUTH_TOKEN_OPERATOR: 'operator-secret' }), false)
 })
 
 test('default government ingestion runner saves all source fixtures when live clients fail or return empty', async () => {
@@ -658,7 +694,7 @@ test('POST /api/hydrology/municipalities/:id/copilot/chat streamea rechazo espa�
 })
 
 test('POST /api/hydrology/municipalities/:id/copilot/chat streamea eventos del copiloto con contexto municipal', async () => {
-  const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat(input) { yield { type: 'metadata' as const, data: { municipalityId: input.context.fieldId } }; yield { type: 'token' as const, data: 'Respuesta basada en SMN.' }; yield { type: 'done' as const, data: { model: 'test' } } } } }), '/api/hydrology/municipalities/mercedes/copilot/chat', {
+  const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat(input) { const context = hydrologyDenseContextV1Schema.parse(input.context); assert.equal(context.zone, 'Mercedes'); yield { type: 'metadata' as const, data: { municipalityId: input.context.fieldId } }; yield { type: 'token' as const, data: 'Respuesta basada en SMN.' }; yield { type: 'done' as const, data: { model: 'test' } } } } }), '/api/hydrology/municipalities/mercedes/copilot/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', message: '¿Qué alertas oficiales hay?' }),

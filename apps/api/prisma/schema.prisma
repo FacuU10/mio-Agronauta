@@ -208,6 +208,7 @@ model HydrologyStation {
 model HydrologyIngestionRun {
   id                       String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   source                   String            @db.Text
+  proofRunId               String?           @map("proof_run_id") @db.Text
   stationId                String?           @map("station_id") @db.Text
   status                   String            @db.Text
   startedAt                DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
@@ -222,6 +223,7 @@ model HydrologyIngestionRun {
   station                  HydrologyStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
 
   @@index([source, startedAt(sort: Desc)], map: "hydrology_ingestion_runs_source_started_idx")
+  @@index([proofRunId, source, startedAt(sort: Desc)], map: "hydrology_ingestion_runs_proof_source_started_idx")
   @@index([stationId, startedAt(sort: Desc)], map: "hydrology_ingestion_runs_station_idx")
   @@map("hydrology_ingestion_runs")
 }

@@ -1,0 +1,47 @@
+{
+  "schema": "hydrology-slice2-runtime-evidence/v2",
+  "capturedAt": "2026-07-14T19:27:52Z",
+  "proofRunId": "proof-20260714T192622Z",
+  "configuredRemoteDb": {
+    "correlation": "read-only proofRunId rows",
+    "PNA": { "status": "success", "recordsIngested": 9, "rowId": "59eb36ab-ab03-49e0-9cbf-b1b88f55bd2b" },
+    "INA": { "status": "success", "recordsIngested": 16, "rowId": "1081cb16-5f7a-4cdc-9faa-e81ef3e3db29" },
+    "INMET": { "status": "partial", "recordsIngested": 0, "rowId": "d275b655-c4ac-49f4-ab82-3e1d4576feb7" },
+    "SMN": { "status": "failed", "recordsIngested": 0, "rowId": "605565b7-9fc4-49c9-841c-87ab1f11475b" }
+  },
+  "providerProof": {
+    "PNA": { "status": "pass", "httpStatus": 200, "attempts": 1, "recordsIngested": 9 },
+    "INA": { "status": "pass", "httpStatus": 200, "attempts": 1, "recordsIngested": 16 },
+    "INMET": { "status": "unavailable", "httpStatus": 204, "attempts": 1, "recordsIngested": 0 },
+    "SMN": { "status": "blocked", "httpStatus": 403, "attempts": 1, "recordsIngested": 0 }
+  },
+  "municipalitiesApi": {
+    "url": "http://127.0.0.1:3001/api/hydrology/municipalities",
+    "fixtureUrls": 0,
+    "pnaRecords": 19,
+    "ina": {
+      "records": 1,
+      "stationId": "6764",
+      "valueM": 3.11,
+      "sourceUrl": "https://alerta.ina.gob.ar/a5/getObservaciones?tipo=puntual&series_id=6764&timestart=2026-07-14T00:00:00&timeend=2026-07-14T23:59:59&format=csv"
+    }
+  },
+  "browser": {
+    "url": "http://127.0.0.1:3000/municipalities",
+    "playwright": "apps/web/tests/e2e/hydrology-government.spec.js: 1 passed",
+    "proofRunId": "proof-20260714T192622Z",
+    "visible": "Corrientes renders INA 3.11 m with official source URL and timestamp; PNA and all four source cards render",
+    "fixtureUrls": 0,
+    "evidence": "artifacts/hydrology-municipalities-local-browser-evidence.json"
+  },
+  "cron": {
+    "inProcess": "disabled in the captured local process; scheduler has per-source overlap/run-result logs and no retries or polling",
+    "renderExternalCron": "documented invocation contract only; no production cron execution is claimed or captured"
+  },
+  "blockers": [
+    "INMET official station-day responses remain empty (HTTP 204); unavailable state is preserved.",
+    "SMN official alert request remains HTTP 403; unavailable state is preserved.",
+    "No scheduler-triggered local provider invocation was captured.",
+    "No production deployment, production API/browser smoke, Render cron receipt, or post-deployment proof exists."
+  ]
+}

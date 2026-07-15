@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {"location":"apps/api/src/presentation/routes/hydrology-government.ts:180","severity":"CRITICAL","claim":"The POST /api/hydrology/ingest endpoint is publicly accessible without authorization, allowing unauthenticated external fetches and database writes.","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["apps/api/src/presentation/routes/hydrology-government.ts:180-207","apps/api/src/server.ts:48"]},
+    {"location":"apps/web/src/app/api/hydrology/[...path]/route.ts:76","severity":"CRITICAL","claim":"The Next.js proxy appends an internal backend bearer token to forwarded requests without validating caller permissions.","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["apps/web/src/app/api/hydrology/[...path]/route.ts:76-86"]},
+    {"location":"apps/api/src/presentation/routes/hydrology-government.ts:355","severity":"CRITICAL","claim":"Every ingest call can trigger inline raw-SQL municipality seeding before scrapers run, amplifying unauthenticated write load.","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["apps/api/src/presentation/routes/hydrology-government.ts:355","apps/api/src/presentation/routes/hydrology-government.ts:571-635"]},
+    {"location":"packages/hydrology-engine/src/repository.ts:39","severity":"WARNING","claim":"Telemetry persistence performs sequential per-record queries and can create an N+1 performance bottleneck.","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["packages/hydrology-engine/src/repository.ts:39-61"]}
+  ],
+  "evidence": ["apps/api/src/presentation/routes/hydrology-government.ts","apps/web/src/app/api/hydrology/[...path]/route.ts","packages/hydrology-engine/src/repository.ts"]
+}

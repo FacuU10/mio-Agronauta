@@ -13,6 +13,8 @@
     "seed:corrientes-demo:offline": "tsx src/scripts/seed-corrientes-rice-demo.ts --offline-fixtures",
     "seed:corrientes-demo:cleanup": "tsx src/scripts/seed-corrientes-rice-demo.ts --cleanup",
     "seed:government-hydrology": "tsx src/scripts/seed-government-hydrology.ts",
+    "verify-local": "tsx src/scripts/verify-hydrology-local-real.ts --all-sources --allow-empty",
+    "scheduler:once": "tsx src/scripts/run-hydrology-scheduler-once.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""

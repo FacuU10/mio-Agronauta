@@ -1,4 +1,4 @@
-export type HydrologyIngestionSource = 'PNA' | 'INMET' | 'SMN_ALERTS' | 'SMN_RAINFALL' | 'INA'
+export type HydrologyIngestionSource = 'PNA' | 'INMET' | 'SMN' | 'INA'
 
 type IntervalCadence = { kind: 'interval'; everyMs: number }
 type DailyUtcCadence = { kind: 'daily-utc'; hour: number; minute: number }
@@ -7,8 +7,7 @@ type HydrologyIngestionCadence = IntervalCadence | DailyUtcCadence
 export const hydrologyIngestionCadences: Record<HydrologyIngestionSource, HydrologyIngestionCadence> = {
   PNA: { kind: 'interval', everyMs: 60 * 60 * 1000 },
   INMET: { kind: 'interval', everyMs: 60 * 60 * 1000 },
-  SMN_ALERTS: { kind: 'interval', everyMs: 60 * 60 * 1000 },
-  SMN_RAINFALL: { kind: 'interval', everyMs: 3 * 60 * 60 * 1000 },
+  SMN: { kind: 'interval', everyMs: 60 * 60 * 1000 },
   INA: { kind: 'daily-utc', hour: 18, minute: 30 },
 }
 
@@ -18,23 +17,7 @@ export interface HydrologyIngestionRunResult {
 }
 
 export interface HydrologyIngestionRunner {
-  run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date }): Promise<HydrologyIngestionRunResult>
-}
-
-export interface HydrologyRetryDecision {
-  source: 'PNA' | 'INA'
-  runAt: Date
-  attempt: 1
-  status: 'delayed_retry_scheduled'
-  reason: 'unchanged_pna_heights' | 'unchanged_ina_forecast'
-}
-
-export interface HydrologyRetryInput {
-  source: HydrologyIngestionSource
-  inserted: number
-  unchanged: number
-  attempt: number
-  now: Date
+  run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date; proofRunId?: string }): Promise<HydrologyIngestionRunResult>
 }
 
 type TimerCallback = (() => void) & { source: HydrologyIngestionSource }
@@ -43,40 +26,16 @@ interface HydrologyIngestionSchedulerOptions {
   now?: () => Date
   setInterval?: (callback: TimerCallback, ms: number) => NodeJS.Timeout
   setTimeout?: (callback: TimerCallback, ms: number) => NodeJS.Timeout
-  enqueueDelayedRetry?: (retry: Omit<HydrologyRetryDecision, 'status'>) => Promise<void> | void
   onBackgroundError?: (error: unknown, metadata: { source: HydrologyIngestionSource; attempt: number }) => void
+  onRunResult?: (metadata: { source: HydrologyIngestionSource; attempt: number; scheduledFor: Date; result: HydrologyIngestionRunResult & { retry: null; skipped: boolean } }) => void
 }
 
-const minuteMs = 60 * 1000
-const hourMs = 60 * minuteMs
-const dayMs = 24 * hourMs
-
-export const shouldScheduleHydrologyRetry = (input: HydrologyRetryInput): HydrologyRetryDecision | null => {
-  if (input.inserted > 0 || input.unchanged === 0 || input.attempt >= 1) return null
-  if (input.source === 'PNA') {
-    return {
-      source: 'PNA',
-      runAt: new Date(input.now.getTime() + 15 * minuteMs),
-      attempt: 1,
-      status: 'delayed_retry_scheduled',
-      reason: 'unchanged_pna_heights',
-    }
-  }
-  if (input.source === 'INA') {
-    return {
-      source: 'INA',
-      runAt: new Date(input.now.getTime() + 2 * hourMs),
-      attempt: 1,
-      status: 'delayed_retry_scheduled',
-      reason: 'unchanged_ina_forecast',
-    }
-  }
-  return null
-}
+const dayMs = 24 * 60 * 60 * 1000
 
 export class HydrologyIngestionScheduler {
   private readonly intervals: NodeJS.Timeout[] = []
   private readonly timeouts = new Set<NodeJS.Timeout>()
+  private readonly runningSources = new Set<HydrologyIngestionSource>()
   private active = false
 
   constructor(private readonly runner: HydrologyIngestionRunner, private readonly options: HydrologyIngestionSchedulerOptions = {}) {}
@@ -102,13 +61,23 @@ export class HydrologyIngestionScheduler {
     this.timeouts.clear()
   }
 
-  async runSource(source: HydrologyIngestionSource, metadata: { attempt?: number; scheduledFor?: Date } = {}): Promise<HydrologyIngestionRunResult & { retry: HydrologyRetryDecision | null }> {
+  async runSource(source: HydrologyIngestionSource, metadata: { attempt?: number; scheduledFor?: Date; proofRunId?: string } = {}): Promise<HydrologyIngestionRunResult & { retry: null; skipped: boolean }> {
+    if (this.runningSources.has(source)) {
+      const result = { inserted: 0, unchanged: 0, retry: null, skipped: true }
+      this.options.onRunResult?.({ source, attempt: metadata.attempt ?? 0, scheduledFor: metadata.scheduledFor ?? this.now(), result })
+      return result
+    }
     const attempt = metadata.attempt ?? 0
     const scheduledFor = metadata.scheduledFor ?? this.now()
-    const result = await this.runner.run(source, { attempt, scheduledFor })
-    const retry = shouldScheduleHydrologyRetry({ source, inserted: result.inserted, unchanged: result.unchanged, attempt, now: this.now() })
-    if (retry) await this.options.enqueueDelayedRetry?.({ source: retry.source, runAt: retry.runAt, attempt: retry.attempt, reason: retry.reason })
-    return { ...result, retry }
+    this.runningSources.add(source)
+    try {
+      const result = await this.runner.run(source, { attempt, scheduledFor, proofRunId: metadata.proofRunId })
+      const observedResult = { ...result, retry: null, skipped: false }
+      this.options.onRunResult?.({ source, attempt, scheduledFor, result: observedResult })
+      return observedResult
+    } finally {
+      this.runningSources.delete(source)
+    }
   }
 
   msUntilNextUtcTime(hour: number, minute: number): number {
@@ -130,6 +99,7 @@ export class HydrologyIngestionScheduler {
           this.reportBackgroundError(error, source, 0)
         } finally {
           this.timeouts.delete(timeout)
+          clearTimeout(timeout)
           if (this.active) this.scheduleDaily(source, cadence, dayMs)
         }
       })()

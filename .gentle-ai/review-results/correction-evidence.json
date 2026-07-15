@@ -1,0 +1,64 @@
+{
+  "schema": "gentle-ai.review-correction-evidence/v1",
+  "lineage_id": "review-ibera-alerta-main-candidate-20260715",
+  "correction": "one-line RSS self-closing-tag exclusion plus one-line scheduler timeout cleanup",
+  "scope": "focused local evidence only",
+  "source_edits_by_executor": false,
+  "secrets_exposed": false,
+  "commands": [
+    {
+      "command": "pnpm --dir packages/hydrology-engine exec node --import tsx --test src/adapters/rss-parser.test.ts src/clients/http-clients.test.ts src/hydrology-engine.test.ts",
+      "exit_code": 0,
+      "result": "PASS",
+      "tests": "24/24"
+    },
+    {
+      "command": "pnpm test",
+      "exit_code": 0,
+      "result": "PASS",
+      "workspace_tasks": "6/6",
+      "tests": {
+        "zod_schemas": "27/27",
+        "hydrology_engine": "36/36",
+        "api": "143/143",
+        "web": "31/31"
+      }
+    },
+    {
+      "command": "pnpm build",
+      "attempt": 1,
+      "exit_code": null,
+      "result": "TIMEOUT after 120000ms; retried with bounded 300000ms limit"
+    },
+    {
+      "command": "pnpm build",
+      "attempt": 2,
+      "exit_code": 0,
+      "result": "PASS",
+      "workspace_tasks": "4/4"
+    },
+    {
+      "command": "pnpm --filter api exec node --import tsx --test src/infrastructure/jobs/hydrology-ingestion-scheduler.test.ts",
+      "exit_code": 0,
+      "result": "PASS",
+      "tests": "9/9"
+    }
+  ],
+  "latest_proof_run_ids": [
+    "proof-20260715T084732Z",
+    "scheduler-proof-20260715T085011Z"
+  ],
+  "local_artifacts": [
+    "artifacts/hydrology-local-real-matrix.json",
+    "artifacts/hydrology-scheduler-local-receipt.json",
+    "artifacts/hydrology-municipalities-local-browser-evidence.json",
+    "artifacts/hydrology-municipalities-local.png"
+  ],
+  "production_status": {
+    "proof_run": "not_run",
+    "production_api": "not_run",
+    "production_database": "not_run",
+    "production_browser": "not_run",
+    "explicit_statement": "Production proof was not run; no production readiness, deployment, or live-status claim is made."
+  }
+}

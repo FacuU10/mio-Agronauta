@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {"location":"apps/api/src/presentation/routes/hydrology-government.ts:271","severity":"CRITICAL","claim":"Municipal Copilot context sets zone to null while hydrology context validation requires a zone when sources or telemetry are present, breaking the feature with a ZodError.","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["apps/api/src/presentation/routes/hydrology-government.ts:271","packages/zod-schemas/src/agronautas.ts"]},
+    {"location":"apps/api/src/infrastructure/jobs/hydrology-ingestion-scheduler.ts:106","severity":"WARNING","claim":"Daily scheduler timeout handle cleanup is unsafe under synchronous/mock timers.","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["apps/api/src/infrastructure/jobs/hydrology-ingestion-scheduler.ts:106-107"]},
+    {"location":"apps/api/src/presentation/routes/hydrology-government.ts:449","severity":"WARNING","claim":"Deadline racing does not abort the underlying scraper operation after timeout.","evidence_class":"inferential","causal_disposition":"introduced","proof_refs":["apps/api/src/presentation/routes/hydrology-government.ts:449"]}
+  ],
+  "evidence": ["apps/api/src/presentation/routes/hydrology-government.ts","apps/api/src/infrastructure/jobs/hydrology-ingestion-scheduler.ts","packages/zod-schemas/src/agronautas.ts"]
+}

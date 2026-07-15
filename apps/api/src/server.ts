@@ -22,7 +22,7 @@ dotenv.config()
 const PORT = process.env['API_PORT'] || 3001
 
 interface HydrologySchedulerStartupDeps {
-  ingestionRunner?: (input: { source?: HydrologySource; reason?: string }) => Promise<{ runId: string; status: 'queued' | 'started' | 'completed'; sources: HydrologySource[] }>
+  ingestionRunner?: (input: { source?: HydrologySource; reason?: string; proofRunId?: string }) => Promise<{ runId: string; proofRunId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; sources: HydrologySource[]; results?: Array<{ source: HydrologySource; recordsIngested: number }> }>
   schedulerFactory?: (runner: HydrologyIngestionRunner) => Pick<HydrologyIngestionScheduler, 'start'>
 }
 
@@ -104,12 +104,14 @@ export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: Hyd
   const ingestionRunner = deps.ingestionRunner ?? createGovernmentIngestionRunner()
   const schedulerRunner: HydrologyIngestionRunner = {
     async run(source, metadata) {
-      await ingestionRunner({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}` })
-      return { inserted: 0, unchanged: 0 }
+      const result = await ingestionRunner({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}`, proofRunId: metadata.proofRunId })
+      const sourceResult = result.results?.find((item) => item.source === source)
+      return { inserted: sourceResult?.recordsIngested ?? 0, unchanged: 0 }
     },
   }
   const scheduler = deps.schedulerFactory?.(schedulerRunner) ?? new HydrologyIngestionScheduler(schedulerRunner, {
     onBackgroundError: (error, metadata) => logger.error({ error, ...metadata }, 'Hydrology scheduler background ingestion failed'),
+    onRunResult: ({ source, attempt, scheduledFor, result }) => logger.info({ source, attempt, scheduledFor, ...result }, 'Hydrology scheduler ingestion result'),
   })
   scheduler.start()
   logger.info({ enabled: true }, 'Hydrology ingestion scheduler started')
@@ -117,6 +119,5 @@ export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: Hyd
 }
 
 function toGovernmentHydrologySource(source: HydrologyIngestionSource): HydrologySource {
-  if (source === 'SMN_ALERTS' || source === 'SMN_RAINFALL') return 'SMN'
   return source
 }

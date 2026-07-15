@@ -69,6 +69,36 @@ test('hydrology government ingest schema accepts public bounded diagnostics', ()
   assert.equal(parsed.results[0]?.diagnostic?.providerPath, '/alturas')
 })
 
+test('hydrology government ingest schema carries proof run id and safe http summary', () => {
+  const parsed = hydrologyGovernmentIngestResponseSchema.parse({
+    contractVersion: 'hydrology-government-ingest-v1',
+    runId: 'manual-run-1',
+    proofRunId: 'proof-20260714T000000Z',
+    status: 'partial',
+    requestedSources: ['INA'],
+    results: [{
+      source: 'INA',
+      status: 'failed',
+      recordsIngested: 0,
+      httpSummary: {
+        host: 'www.ina.gob.ar',
+        path: '/alerta/index.php',
+        status: 200,
+        elapsedMs: 321,
+        attempts: 1,
+        timeoutMs: 15_000,
+        responseBytes: 2048,
+        responseChars: 1024,
+      },
+      diagnostic: { failureKind: 'parse_failure', reason: 'INA payload parse failed', attempts: 1 },
+    }],
+  })
+
+  assert.equal(parsed.proofRunId, 'proof-20260714T000000Z')
+  assert.equal(parsed.results[0]?.httpSummary?.host, 'www.ina.gob.ar')
+  assert.equal(parsed.results[0]?.httpSummary?.attempts, 1)
+})
+
 test('hydrology ingest diagnostic schema rejects unsafe or unbounded public fields', () => {
   const withSecretField = hydrologyGovernmentIngestDiagnosticSchema.safeParse({
     failureKind: 'network_failure',

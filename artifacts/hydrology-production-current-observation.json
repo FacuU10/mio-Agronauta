@@ -1,0 +1,38 @@
+{
+  "verifier": "hydrology-production-current-observation-v1",
+  "environment": "production-current-before-approved-deploy",
+  "baseUrl": "https://www.agronauta.com.ar",
+  "proofRunId": null,
+  "acceptance": "blocked",
+  "api": {
+    "path": "/api/hydrology/municipalities",
+    "observations": [
+      {
+        "observedAt": "2026-07-14T07:40:51Z",
+        "httpStatus": 503,
+        "detail": "Direct browser navigation returned HTTP 503."
+      },
+      {
+        "observedAt": "2026-07-14T07:43:49Z",
+        "httpStatus": 200,
+        "contractVersion": "hydrology-government-municipalities-v1",
+        "bodyCharsObserved": 34420,
+        "detail": "A later direct browser navigation returned the expected contract, but this was not a bounded one-shot proof for the current change."
+      }
+    ]
+  },
+  "browser": {
+    "path": "/municipalities",
+    "observedAt": "2026-07-14T07:44:01Z",
+    "httpStatus": 200,
+    "heading": "Centro de Monitoreo Hídrico Provincial",
+    "visibleSources": ["PNA", "INA", "INMET", "SMN"],
+    "municipalityCards": 18,
+    "screenshotPath": "artifacts/hydrology-municipalities-production-current.png"
+  },
+  "blockers": [
+    "No deployment access was configured, so the current production revision is not correlated to this apply slice.",
+    "No proofRunId was available in the production API/UI observation.",
+    "Production evidence used two direct API observations after an initial 503 and therefore is not accepted as the required bounded one-shot gate."
+  ]
+}

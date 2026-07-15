@@ -1,0 +1,111 @@
+schema: spec-driven
+project: monorepo-js-baseline
+persistence: hybrid
+initialized: 2026-07-13
+
+context: |
+  pnpm 9 / Turborepo monorepo with workspaces apps/* and packages/*.
+  Web: Next.js 15, React 19, Tailwind CSS 4, React Query 5, Zustand 5, Playwright.
+  API: Express 4, Prisma 5, PostgreSQL/PostGIS, Redis, optional MongoDB, Pino, Helmet/rate limiting.
+  Worker: Python 3.12 LangGraph/LangChain runtime with pytest, ruff, and mypy dev tooling.
+  Shared TS packages provide zod schemas, JSON contracts, config, observability, workflows, asset pipelines, and hydrology engine.
+  Local infra uses Docker Compose for postgres/postgis, redis, api, worker, and optional mongo profile.
+
+strict_tdd: true
+strict_tdd_source: "prior Engram init sdd-init-fullgpt/monorepo-js-baseline plus detected test runners; no disabling marker found"
+
+testing:
+  strict_tdd: true
+  runner:
+    command: "pnpm test"
+    framework: "Turborepo over Node.js built-in test runner via tsx; pytest available for Python worker; Playwright for web E2E"
+  layers:
+    unit:
+      available: true
+      tool: "node --import tsx --test; pytest"
+    integration:
+      available: true
+      tool: "Node test suites, Prisma/API scripts, contract validation, pytest worker tests"
+    e2e:
+      available: true
+      tool: "Playwright"
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter:
+      available: true
+      command: "pnpm lint; pnpm lint:security"
+    type_checker:
+      available: true
+      command: "pnpm build; python mypy via worker dev extras"
+    formatter:
+      available: true
+      command: "pnpm format"
+  commands:
+    install: "pnpm install; pnpm worker:install"
+    dev: "pnpm dev"
+    build: "pnpm build"
+    test: "pnpm test"
+    web_unit: "pnpm --dir apps/web test"
+    web_e2e: "pnpm --dir apps/web test:e2e"
+    api_test: "pnpm --dir apps/api test"
+    hydrology_test: "pnpm --dir packages/hydrology-engine test"
+    contracts: "pnpm --dir packages/contracts test:agronautas-contracts; pnpm --dir packages/contracts validate:schemas; pnpm --dir packages/contracts validate:agronautas-schema"
+    worker_test: "pytest apps/workflow-runtime-python"
+
+rules:
+  proposal:
+    - Preserve existing architecture and avoid rewrites unless explicitly approved.
+    - State user value, out-of-scope items, rollback path, and risk controls.
+    - Capture strict TDD implications before implementation planning.
+  specs:
+    - Use RFC 2119 keywords and Given/When/Then scenarios.
+    - Include observable behavior, failure modes, and contract boundaries.
+  design:
+    - Prefer explicit ports/adapters and keep UI dumb; domain and durable decisions live outside UI components.
+    - Document observability, idempotency, rollback, and migration impacts.
+  tasks:
+    - Group work into reviewable, one-session slices with verification commands per slice.
+    - Include RED-GREEN-REFACTOR evidence requirements for strict TDD.
+  apply:
+    tdd: true
+    test_command: "pnpm test"
+    rules:
+      - Do not modify application code without an approved SDD phase artifact.
+      - Keep changes incremental and preserve existing package boundaries.
+  verify:
+    test_command: "pnpm test"
+    build_command: "pnpm build"
+    coverage_threshold: 0
+    rules:
+      - Verify declared specs, design decisions, task completion, and TDD evidence.
+  archive:
+    rules:
+      - Preserve archived change folders as audit trail; do not delete archived artifacts.
+
+skill_resolution:
+  loaded:
+    - "C:\\Users\\mmmau\\.config\\opencode\\skills\\sdd-init\\SKILL.md"
+    - "C:\\Users\\mmmau\\.config\\opencode\\skills\\_shared\\global-mindset.md"
+  registry: ".atl/skill-registry.md"
+  applicable:
+    - sdd-explore
+    - sdd-propose
+    - sdd-spec
+    - sdd-design
+    - sdd-tasks
+    - sdd-apply
+    - sdd-verify
+    - sdd-archive
+    - iron-po
+    - iron-qa
+    - iron-arch
+    - iron-tasks
+    - nextjs-15
+    - react-19
+    - tailwind-4
+    - playwright
+    - typescript
+    - zustand-5
+    - pytest

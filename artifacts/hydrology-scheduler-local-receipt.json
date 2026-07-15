@@ -1,0 +1,56 @@
+{
+  "verifier": "hydrology-scheduler-local-receipt-v1",
+  "proofRunId": "scheduler-proof-20260715T085011Z",
+  "scheduledFor": "2026-07-15T08:50:11.211Z",
+  "oneShotPerSource": true,
+  "retries": 0,
+  "sources": [
+    "PNA",
+    "INA",
+    "INMET",
+    "SMN"
+  ],
+  "events": [
+    {
+      "source": "PNA",
+      "scheduledFor": "2026-07-15T08:50:11.211Z",
+      "attempt": 0,
+      "inserted": 9,
+      "unchanged": 0,
+      "retry": null,
+      "skipped": false
+    },
+    {
+      "source": "INA",
+      "scheduledFor": "2026-07-15T08:50:11.211Z",
+      "attempt": 0,
+      "inserted": 22,
+      "unchanged": 0,
+      "retry": null,
+      "skipped": false
+    },
+    {
+      "source": "INMET",
+      "scheduledFor": "2026-07-15T08:50:11.211Z",
+      "attempt": 0,
+      "inserted": 93,
+      "unchanged": 0,
+      "retry": null,
+      "skipped": false
+    },
+    {
+      "source": "SMN",
+      "scheduledFor": "2026-07-15T08:50:11.211Z",
+      "attempt": 0,
+      "inserted": 94,
+      "unchanged": 0,
+      "retry": null,
+      "skipped": false
+    }
+  ],
+  "passed": true,
+  "environment": {
+    "nodeEnv": "unset",
+    "hasDatabaseUrl": true
+  }
+}

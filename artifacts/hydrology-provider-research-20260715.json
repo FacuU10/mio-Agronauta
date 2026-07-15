@@ -1,0 +1,57 @@
+{
+  "verifier": "hydrology-provider-research-v1",
+  "observedDate": "2026-07-15",
+  "oneShotPerEndpoint": true,
+  "secretsPrinted": false,
+  "findings": [
+    {
+      "source": "INMET",
+      "endpoint": "https://apitempo.inmet.gov.br/estacao/dados/2026-07-15/A830",
+      "status": 204,
+      "contentType": null,
+      "shape": "empty",
+      "decision": "rejected_as_empty"
+    },
+    {
+      "source": "INMET",
+      "endpoint": "https://apiprevmet3.inmet.gov.br/avisos/rss",
+      "status": 200,
+      "contentType": "application/rss+xml",
+      "shape": "RSS item feed; 93 records persisted in proof run",
+      "decision": "selected_current_official_feed"
+    },
+    {
+      "source": "SMN",
+      "endpoint": "https://www.smn.gob.ar/alertas",
+      "status": 403,
+      "contentType": null,
+      "shape": "blocked",
+      "decision": "rejected_without_bypass"
+    },
+    {
+      "source": "SMN",
+      "endpoint": "https://ws.smn.gob.ar/map_items/weather",
+      "status": 200,
+      "contentType": "application/json; charset=utf-8",
+      "shape": "218 station rows; selected Corrientes/Misiones updated through 2022-07-26",
+      "decision": "rejected_as_stale"
+    },
+    {
+      "source": "SMN",
+      "endpoint": "https://smn-ar-wrf.s3.us-west-2.amazonaws.com/?list-type=2&max-keys=20",
+      "status": 200,
+      "contentType": "application/xml",
+      "shape": "official open-data WRF object listing limited to 2022 objects",
+      "decision": "rejected_as_stale"
+    },
+    {
+      "source": "SMN",
+      "endpoint": "https://ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo_2026.xml",
+      "status": 200,
+      "contentType": "application/rss+xml",
+      "shape": "current CAP RSS; lastBuildDate 2026-07-15T06:00:01Z; 94 records persisted in proof run",
+      "decision": "selected_current_official_feed"
+    }
+  ],
+  "proofRunId": "proof-20260715T070558Z"
+}
