@@ -10,6 +10,7 @@ Convert readiness proof into a typed, source-scoped evidence path. Keep UI dumb:
 |---|---|---|---|
 | Proof correlation | Add `proofRunId` request/response field and persist it on `hydrology_ingestion_runs` via Prisma/SQL migration. | Infer by timestamp only. | Current table has no run ID column; source+time is useful fallback but not strict correlation. |
 | Timeout recovery | Evidence script calls `POST /api/hydrology/ingest` once per source with no retries/polling. | Single all-source POST; background job polling. | One source cannot consume the whole platform timeout, and each provider remains independently classified. |
+| Async completion observation | The bounded POST returns a relative `statusPath`; the verifier performs one GET with a server-side wait capped at 60 seconds and accepts only a terminal, proof-correlated response. | Treat the immediate `202 queued` body as provider evidence; client polling. | Background work must be observable without extending the POST timeout or introducing polling/retries. |
 | Provider diagnostics | Extend hydrology clients to return safe success/failure HTTP summaries: host, path, status, elapsed, timeout, attempts=1, response bytes/chars where bounded. | Raw body capture; mocks/fixtures. | Specs require real upstream proof without secrets or credential leakage. |
 | DB proof | Add a read-only evidence query module/script that accepts DB URL from env, redacts target, and returns row IDs/counts per `proofRunId`+source. | Print connection strings; mutate DB for proof. | Remote production DB evidence must be safe, current, and non-destructive. |
 
@@ -18,6 +19,7 @@ Convert readiness proof into a typed, source-scoped evidence path. Keep UI dumb:
 ```text
 verify script ── proofRunId ──→ BFF/API POST /api/hydrology/ingest {source}
   └─ per source once             └─ client fetch official feed once
+  verify script ── one bounded GET /api/hydrology/ingest/{runId}?waitMs=60000 ──→ terminal result
                                   └─ repository saves telemetry + ingestion_run(proofRunId)
                                   └─ 202 result with safe diagnostics
 verify script ── read-only SQL ──→ hydrology_ingestion_runs / hydrology_telemetry
@@ -41,7 +43,7 @@ verify script ── browser ───────→ /municipalities and /munic
 
 ## Interfaces / Contracts
 
-`POST /api/hydrology/ingest` accepts `{ contractVersion: "1.0.0", source: HydrologySource, reason, proofRunId }`. Response `hydrology-government-ingest-v1` returns `runId`, `proofRunId`, `results[].httpSummary`, `results[].diagnostic`, and timestamps. Evidence JSON shape: `{ proofRunId, sourceMatrix: [{ source, localApi, localDb, prodApi, prodDb, browser, status }] }`.
+`POST /api/hydrology/ingest` accepts `{ contractVersion: "1.0.0", source: HydrologySource, reason, proofRunId }`. The queued `hydrology-government-ingest-v1` response returns `runId`, `proofRunId`, and a relative `statusPath`; one bounded GET on that path returns the terminal `results[].httpSummary`, `results[].diagnostic`, and timestamps. A queued response is never provider evidence. Evidence JSON shape: `{ proofRunId, sourceMatrix: [{ source, localApi, localDb, prodApi, prodDb, browser, status }] }`.
 
 ## Testing Strategy
 

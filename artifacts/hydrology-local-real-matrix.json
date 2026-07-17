@@ -1,6 +1,6 @@
 {
   "verifier": "hydrology-local-real-matrix-v1",
-  "proofRunId": "proof-20260715T084732Z",
+  "proofRunId": "proof-20260715T170010Z",
   "oneShotPerSource": true,
   "retries": 0,
   "sources": [
@@ -20,39 +20,22 @@
       "SMN": false
     }
   },
-  "startedAt": "2026-07-15T08:47:36.595Z",
-  "finishedAt": "2026-07-15T08:48:47.129Z",
+  "startedAt": "2026-07-15T17:00:15.588Z",
+  "finishedAt": "2026-07-15T17:00:17.801Z",
   "sourceMatrix": [
     {
       "source": "PNA",
       "localApi": {
         "status": "pass",
-        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T084732Z"
+        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T170010Z"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "contenidosweb.prefecturanaval.gob.ar/alturas/ status=200 elapsedMs=1056",
-        "evidence": {
-          "host": "contenidosweb.prefecturanaval.gob.ar",
-          "path": "/alturas/",
-          "status": 200,
-          "elapsedMs": 1056,
-          "attempts": 1,
-          "timeoutMs": 25000,
-          "responseBytes": 111756,
-          "responseChars": 111564
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "PNA DB row correlated to proofRunId=proof-20260715T084732Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 9,
-          "rowIds": [
-            "24d5f009-ac6e-420b-ba08-e1c3eef8e329"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for PNA"
       },
       "prodApi": {
         "status": "not_run",
@@ -64,7 +47,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T084732Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -76,38 +59,21 @@
           ]
         }
       },
-      "status": "pass"
+      "status": "blocked"
     },
     {
       "source": "INA",
       "localApi": {
         "status": "pass",
-        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T084732Z"
+        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T170010Z"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "alerta.ina.gob.ar/a5/obs/puntual/series/38469 status=200 elapsedMs=394",
-        "evidence": {
-          "host": "alerta.ina.gob.ar",
-          "path": "/a5/obs/puntual/series/38469",
-          "status": 200,
-          "elapsedMs": 394,
-          "attempts": 1,
-          "timeoutMs": 15000,
-          "responseBytes": 186,
-          "responseChars": 186
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "INA DB row correlated to proofRunId=proof-20260715T084732Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 22,
-          "rowIds": [
-            "2f3eb211-4dc4-4ec8-890f-b1e914bc5135"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for INA"
       },
       "prodApi": {
         "status": "not_run",
@@ -119,7 +85,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T084732Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -131,38 +97,21 @@
           ]
         }
       },
-      "status": "pass"
+      "status": "blocked"
     },
     {
       "source": "INMET",
       "localApi": {
         "status": "pass",
-        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T084732Z"
+        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T170010Z"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "apiprevmet3.inmet.gov.br/avisos/rss status=200 elapsedMs=3584",
-        "evidence": {
-          "host": "apiprevmet3.inmet.gov.br",
-          "path": "/avisos/rss",
-          "status": 200,
-          "elapsedMs": 3584,
-          "attempts": 1,
-          "timeoutMs": 15000,
-          "responseBytes": 140767,
-          "responseChars": 139532
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "INMET DB row correlated to proofRunId=proof-20260715T084732Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 93,
-          "rowIds": [
-            "50e9346f-c2ed-4840-98f6-8f3d0a34213a"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for INMET"
       },
       "prodApi": {
         "status": "not_run",
@@ -174,7 +123,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T084732Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -186,38 +135,21 @@
           ]
         }
       },
-      "status": "pass"
+      "status": "blocked"
     },
     {
       "source": "SMN",
       "localApi": {
         "status": "pass",
-        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T084732Z"
+        "detail": "HTTP 202; contract=true; proofRunId=proof-20260715T170010Z"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo_2026.xml status=200 elapsedMs=205",
-        "evidence": {
-          "host": "ssl.smn.gob.ar",
-          "path": "/feeds/CAP/rss_alertaCAP_nuevo_2026.xml",
-          "status": 200,
-          "elapsedMs": 205,
-          "attempts": 1,
-          "timeoutMs": 15000,
-          "responseBytes": 58339,
-          "responseChars": 57858
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "SMN DB row correlated to proofRunId=proof-20260715T084732Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 94,
-          "rowIds": [
-            "1d77b40c-d436-4c5f-ad4a-7a5242a43791"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for SMN"
       },
       "prodApi": {
         "status": "not_run",
@@ -229,7 +161,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T084732Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -241,8 +173,8 @@
           ]
         }
       },
-      "status": "pass"
+      "status": "blocked"
     }
   ],
-  "passed": true
+  "passed": false
 }

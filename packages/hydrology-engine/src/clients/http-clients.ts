@@ -59,10 +59,13 @@ abstract class OfficialHttpClient {
     this.maxResponseChars = options.maxResponseChars
   }
 
-  protected async fetchText(expectedContent: 'any' | 'json' = 'any', url = this.url): Promise<FetchTextResult> {
+  protected async fetchText(expectedContent: 'any' | 'json' = 'any', url = this.url, externalSignal?: AbortSignal): Promise<FetchTextResult> {
     const controller = new AbortController()
     const startedAt = Date.now()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
+    const abortExternal = () => controller.abort()
+    if (externalSignal?.aborted) controller.abort()
+    else externalSignal?.addEventListener('abort', abortExternal, { once: true })
     try {
       const response = await this.fetchImpl(url, { headers: { ...DEFAULT_HEADERS, 'user-agent': this.userAgent }, signal: controller.signal })
       if (!response.ok) {
@@ -81,6 +84,7 @@ abstract class OfficialHttpClient {
       return { ok: false, error: `${this.source} network failure`, diagnostic: this.diagnostic('network_failure', `${this.source} network request failed`, startedAt, {}, url), httpSummary: this.httpSummary(startedAt, undefined, undefined, undefined, url) }
     } finally {
       clearTimeout(timeout)
+      externalSignal?.removeEventListener('abort', abortExternal)
     }
   }
 
@@ -141,16 +145,16 @@ export class PnaHttpClient extends OfficialHttpClient {
   constructor(options: ClientOptions = {}) {
     super('PNA', options.url ?? process.env['HYDROLOGY_PNA_URL'] ?? FAST_PNA_URL, { ...options, userAgent: options.userAgent ?? process.env['HYDROLOGY_PNA_USER_AGENT'], timeoutMs: options.timeoutMs ?? parsePositiveInt(process.env['HYDROLOGY_PNA_TIMEOUT_MS'], DEFAULT_PNA_REQUEST_TIMEOUT_MS), maxResponseBytes: options.maxResponseBytes ?? DEFAULT_PNA_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_PNA_MAX_RESPONSE_CHARS })
   }
-  async fetchTelemetry(): Promise<ScraperResult> {
-    const fetched = await this.fetchText()
+  async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
+    const fetched = await this.fetchText('any', this.url, signal)
     return fetched.ok ? this.parseSafely(fetched.body, fetched.httpSummary, (body) => new PnaAdapter().parse(body)) : fetched
   }
 }
 
 export class SmnHttpClient extends OfficialHttpClient {
   constructor(options: ClientOptions = {}) { super('SMN', options.url ?? process.env['HYDROLOGY_SMN_URL'] ?? SMN_ALERTS_URL, { ...options, maxResponseBytes: options.maxResponseBytes ?? DEFAULT_SMN_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_SMN_MAX_RESPONSE_CHARS }) }
-  async fetchTelemetry(): Promise<ScraperResult> {
-    const fetched = await this.fetchText()
+  async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
+    const fetched = await this.fetchText('any', this.url, signal)
     return fetched.ok ? this.parseSafely(fetched.body, fetched.httpSummary, (body) => new SmnAdapter(this.url).parse(body)) : fetched
   }
 }
@@ -160,8 +164,8 @@ export class InmetHttpClient extends OfficialHttpClient {
     const url = options.url ?? process.env['HYDROLOGY_INMET_URL'] ?? INMET_ALERTS_URL
     super('INMET', url, { ...options, maxResponseBytes: options.maxResponseBytes ?? DEFAULT_INMET_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_INMET_MAX_RESPONSE_CHARS })
   }
-  async fetchTelemetry(): Promise<ScraperResult> {
-    const fetched = await this.fetchText()
+  async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
+    const fetched = await this.fetchText('any', this.url, signal)
     return fetched.ok ? this.parseSafely(fetched.body, fetched.httpSummary, (body) => new InmetAdapter(this.url).parse(body)) : fetched
   }
 }
@@ -173,12 +177,13 @@ export class InaHttpClient extends OfficialHttpClient {
     super('INA', url, { ...options, maxResponseBytes: options.maxResponseBytes ?? DEFAULT_INA_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_INA_MAX_RESPONSE_CHARS })
     this.urls = options.url || process.env['HYDROLOGY_INA_URL'] ? [url] : inaSeriesUrls()
   }
-  async fetchTelemetry(): Promise<ScraperResult> {
+  async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
     const records: NormalizedHydrologyTelemetry[] = []
     let latestSummary: HydrologyGovernmentHttpSummary | undefined
     let firstFailure: ScraperResult | undefined
-    for (const url of this.urls) {
-      const fetched = await this.fetchText('any', url)
+    const fetchedResults = await Promise.all(this.urls.map((url) => this.fetchText('any', url, signal)))
+    for (const [index, fetched] of fetchedResults.entries()) {
+      const url = this.urls[index]
       if (!fetched.ok) {
         firstFailure ??= fetched
         continue

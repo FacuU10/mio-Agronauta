@@ -2,13 +2,16 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, describeHydrologyStartupFailure, seedGovernmentMunicipalitiesIfEmpty } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
   hydrologyGovernmentMunicipalitiesResponseSchema,
   hydrologyDenseContextV1Schema,
 } from '@repo/zod-schemas'
+
+const TEST_INGEST_TOKEN = 'test-ingest-token'
+process.env['HYDROLOGY_INGEST_TOKEN'] ??= TEST_INGEST_TOKEN
 
 test('GET /api/hydrology/municipalities devuelve resumen provincial y municipios con provenance', async () => {
   const response = await request(createTestApp(), '/api/hydrology/municipalities')
@@ -112,7 +115,9 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
 
   assert.equal(response.status, 202)
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
-  assert.equal(json.status, 'completed')
+  assert.equal(json.status, 'queued')
+  assert.match(json.runId ?? '', /^manual-/)
+  assert.equal(json.proofRunId, json.runId)
   assert.deepEqual(json.requestedSources, ['PNA'])
 })
 
@@ -128,8 +133,11 @@ test('POST /api/hydrology/ingest echoes the requested proofRunId when the runner
   })
 
   assert.equal(response.status, 202)
+  const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
+  assert.equal(json.status, 'queued')
+  assert.equal(json.proofRunId, 'proof-route-contract-1')
+  await new Promise<void>((resolve) => setImmediate(resolve))
   assert.equal(receivedProofRunId, 'proof-route-contract-1')
-  assert.equal((await response.json() as { proofRunId?: string }).proofRunId, 'proof-route-contract-1')
 })
 
 test('POST /api/hydrology/ingest does not allow a runner proofRunId to replace the request correlation ID', async () => {
@@ -148,12 +156,19 @@ test('POST /api/hydrology/ingest does not allow a runner proofRunId to replace t
   })
 
   assert.equal(response.status, 202)
-  assert.equal((await response.json() as { proofRunId?: string }).proofRunId, 'proof-route-contract-2')
+  const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
+  assert.equal(json.status, 'queued')
+  assert.equal(json.proofRunId, 'proof-route-contract-2')
 })
 
 test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when all providers fail after execution starts', async () => {
   let runnerCalls = 0
   const allSources = ['PNA', 'INA', 'INMET', 'SMN'] as const
+  type ObservedFailureResult = {
+    results: Array<{ source: (typeof allSources)[number]; status: 'failed'; recordsIngested: number; diagnostic?: { failureKind?: string; attempts: 1; upstreamStatus?: number } }>
+    sourceResults: Array<{ source: (typeof allSources)[number]; status: 'failed'; recordsIngested: number; errorMessage?: string }>
+  }
+  let observedResult: ObservedFailureResult | undefined
   const response = await request(createTestApp({
     ingestionRunner: async () => {
       runnerCalls += 1
@@ -173,7 +188,7 @@ test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when al
           upstreamStatus: index === 3 ? 403 : undefined,
         },
       }))
-      return {
+      const result = {
         runId: 'manual-all-source-provider-failures',
         status: 'failed' as const,
         requestedSources: [...allSources],
@@ -181,6 +196,8 @@ test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when al
         results,
         sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
       }
+      observedResult = result
+      return result
     },
   }), '/api/hydrology/ingest', {
     method: 'POST',
@@ -189,32 +206,98 @@ test('POST /api/hydrology/ingest returns 202 with per-source diagnostics when al
   })
 
   assert.equal(response.status, 202)
-  assert.equal(runnerCalls, 1)
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
-  assert.equal(json.status, 'failed')
+  assert.equal(json.status, 'queued')
   assert.deepEqual(json.requestedSources, [...allSources])
-  assert.deepEqual(json.results.map((item) => [item.source, item.status, item.recordsIngested, item.diagnostic?.attempts]), [
+  assert.deepEqual(json.results, [])
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(runnerCalls, 1)
+  assert.deepEqual(observedResult?.results?.map((item) => [item.source, item.status, item.recordsIngested, item.diagnostic?.attempts]), [
     ['PNA', 'failed', 0, 1],
     ['INA', 'failed', 0, 1],
     ['INMET', 'failed', 0, 1],
     ['SMN', 'failed', 0, 1],
   ])
-  assert.equal(json.results[0]?.diagnostic?.failureKind, 'timeout')
-  assert.equal(json.results[3]?.diagnostic?.upstreamStatus, 403)
-  assert.deepEqual(json.sourceResults.map((item) => [item.source, item.status]), [['PNA', 'failed'], ['INA', 'failed'], ['INMET', 'failed'], ['SMN', 'failed']])
-  assert.doesNotMatch(JSON.stringify(json), /startup_failure|secret|password|postgres/i)
+  assert.equal(observedResult?.results?.[0]?.diagnostic?.failureKind, 'timeout')
+  assert.equal(observedResult?.results?.[3]?.diagnostic?.upstreamStatus, 403)
+  assert.deepEqual(observedResult?.sourceResults?.map((item) => [item.source, item.status]), [['PNA', 'failed'], ['INA', 'failed'], ['INMET', 'failed'], ['SMN', 'failed']])
+  assert.doesNotMatch(JSON.stringify(observedResult), /startup_failure|secret|password|postgres/i)
 })
 
-test('POST /api/hydrology/ingest accepts a direct request without credentials', async () => {
-  const response = await request(createTestApp({ ingestionRunner: async () => ({ runId: 'manual-direct', status: 'queued', sources: ['PNA'] }) }), '/api/hydrology/ingest', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+test('POST /api/hydrology/ingest rejects a missing token before runner admission in every environment', async () => {
+  for (const nodeEnv of ['development', 'test', 'production']) {
+    let runnerCalls = 0
+    await withEnv({ NODE_ENV: nodeEnv, HYDROLOGY_INGEST_TOKEN: TEST_INGEST_TOKEN }, async () => {
+      const response = await request(createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-direct', status: 'queued', sources: ['PNA'] } } }), '/api/hydrology/ingest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+      }, { authenticateIngest: false })
+      assert.equal(response.status, 401)
+      assert.equal(runnerCalls, 0)
+      assert.equal((await response.json() as { code?: string }).code, 'HYDROLOGY_INGEST_UNAUTHORIZED')
+    })
+  }
+})
+
+test('POST /api/hydrology/ingest rejects an invalid token before runner admission in every environment', async () => {
+  for (const nodeEnv of ['development', 'test', 'production']) {
+    let runnerCalls = 0
+    await withEnv({ NODE_ENV: nodeEnv, HYDROLOGY_INGEST_TOKEN: TEST_INGEST_TOKEN }, async () => {
+      const response = await request(createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-invalid', status: 'queued', sources: ['PNA'] } } }), '/api/hydrology/ingest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-hydrology-ingest-token': 'invalid-token' },
+        body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+      }, { authenticateIngest: false })
+      assert.equal(response.status, 401)
+      assert.equal(runnerCalls, 0)
+    })
+  }
+})
+
+test('POST /api/hydrology/ingest rejects a supplied token when the server token is unset', async () => {
+  for (const nodeEnv of ['development', 'test', 'production']) {
+    let runnerCalls = 0
+    await withEnv({ NODE_ENV: nodeEnv, HYDROLOGY_INGEST_TOKEN: undefined }, async () => {
+      const response = await request(createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-unset', status: 'queued', sources: ['PNA'] } } }), '/api/hydrology/ingest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-hydrology-ingest-token': TEST_INGEST_TOKEN },
+        body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+      }, { authenticateIngest: false })
+      assert.equal(response.status, 401)
+      assert.equal(runnerCalls, 0)
+    })
+  }
+})
+
+test('POST /api/hydrology/ingest admits a valid token and invokes the runner', async () => {
+  for (const nodeEnv of ['development', 'test', 'production']) {
+    let runnerCalls = 0
+    await withEnv({ NODE_ENV: nodeEnv, HYDROLOGY_INGEST_TOKEN: TEST_INGEST_TOKEN }, async () => {
+      const response = await request(createTestApp({ ingestionRunner: async () => { runnerCalls += 1; return { runId: 'manual-valid', status: 'queued', sources: ['PNA'] } } }), '/api/hydrology/ingest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-hydrology-ingest-token': TEST_INGEST_TOKEN },
+        body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
+      }, { authenticateIngest: false })
+      assert.equal(response.status, 202)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.equal(runnerCalls, 1)
+    })
+  }
+})
+
+test('POST /api/hydrology/ingest requires the configured production trigger token', async () => {
+  await withEnv({ NODE_ENV: 'production', HYDROLOGY_INGEST_TOKEN: 'test-ingest-token' }, async () => {
+    const app = createTestApp({ ingestionRunner: async () => ({ runId: 'manual-authorized', status: 'queued', sources: ['PNA'] }) })
+    const payload = { contractVersion: '1.0.0', source: 'PNA' }
+    const unauthorized = await request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }, { authenticateIngest: false })
+    assert.equal(unauthorized.status, 401)
+    const authorized = await request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json', 'x-hydrology-ingest-token': 'test-ingest-token' }, body: JSON.stringify(payload) })
+    assert.equal(authorized.status, 202)
   })
-  assert.equal(response.status, 202)
 })
 
-test('POST /api/hydrology/ingest rejects overlapping work while retaining the first bounded run', async () => {
+test('POST /api/hydrology/ingest acknowledges before completion and retains the in-flight admission', async () => {
   let signalRunnerStarted: () => void = () => undefined
   let releaseRunner: () => void = () => undefined
   const runnerStarted = new Promise<void>((resolve) => { signalRunnerStarted = resolve })
@@ -222,15 +305,112 @@ test('POST /api/hydrology/ingest rejects overlapping work while retaining the fi
   const app = createTestApp({ ingestionRunner: async () => {
     signalRunnerStarted()
     await runnerRelease
-    return { runId: 'manual-overlap', status: 'queued', sources: ['PNA'] }
+    return { runId: 'manual-overlap', status: 'completed', sources: ['PNA'] }
   } })
 
   const first = request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }) })
   await runnerStarted
+  const firstResponse = await first
+  assert.equal(firstResponse.status, 202)
+  const firstJson = await firstResponse.json() as { status?: string; runId?: string }
+  assert.equal(firstJson.status, 'queued')
   const second = await request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }) })
-  assert.equal(second.status, 429)
+  assert.equal(second.status, 202)
+  assert.equal((await second.json() as { runId?: string }).runId, firstJson.runId)
   releaseRunner()
-  assert.equal((await first).status, 202)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const third = await request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }) })
+  assert.equal(third.status, 202)
+})
+
+test('ingestion coordinator admits different sources independently while one source is active', async () => {
+  let releasePna: () => void = () => undefined
+  const pnaRelease = new Promise<void>((resolve) => { releasePna = resolve })
+  const calls: string[] = []
+  const coordinator = createHydrologyIngestionCoordinator(async (input) => {
+    calls.push(input.source ?? 'ALL')
+    if (input.source === 'PNA') await pnaRelease
+    const source = input.source ?? 'PNA'
+    return { runId: input.runId, proofRunId: input.proofRunId, status: 'completed', requestedSources: [source], sources: [source], results: [{ source, status: 'success', recordsIngested: 1 }], sourceResults: [{ source, status: 'success', recordsIngested: 1 }] }
+  })
+
+  const pna = coordinator.start({ source: 'PNA', runId: 'run-pna', proofRunId: 'proof-pna' }, 'scheduler')
+  if (!pna.ok) throw new Error('PNA admission unexpectedly rejected')
+  const ina = coordinator.start({ source: 'INA', runId: 'run-ina', proofRunId: 'proof-ina' }, 'scheduler')
+  if (!ina.ok) throw new Error('INA admission unexpectedly rejected')
+
+  assert.notEqual(ina.runId, pna.runId)
+  releasePna()
+  await Promise.all([pna.promise, ina.promise])
+  assert.deepEqual(calls, ['PNA', 'INA'])
+})
+
+test('rejected observation promises settle before the observation timeout', async () => {
+  const startedAt = Date.now()
+
+  await waitForObservation(Promise.reject(new Error('provider failed')), 1_000)
+
+  assert.ok(Date.now() - startedAt < 500)
+})
+
+test('POST /api/hydrology/ingest exposes one bounded completion observation path', async () => {
+  let signalRunnerStarted: () => void = () => undefined
+  let releaseRunner: () => void = () => undefined
+  const runnerStarted = new Promise<void>((resolve) => { signalRunnerStarted = resolve })
+  const runnerRelease = new Promise<void>((resolve) => { releaseRunner = resolve })
+  const app = createTestApp({ ingestionRunner: async (input) => {
+    signalRunnerStarted()
+    await runnerRelease
+    return { runId: input.runId!, proofRunId: input.proofRunId, status: 'completed', requestedSources: ['PNA'], sources: ['PNA'], results: [{ source: 'PNA', status: 'success', recordsIngested: 2 }], sourceResults: [{ source: 'PNA', status: 'success', recordsIngested: 2 }] }
+  } })
+
+  const post = request(app, '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA', proofRunId: 'proof-observation' }) })
+  await runnerStarted
+  const postResponse = await post
+  const queued = await postResponse.json() as { runId?: string; status?: string; statusPath?: string }
+  assert.equal(postResponse.status, 202)
+  assert.equal(queued.status, 'queued')
+  assert.equal(queued.statusPath, `/api/hydrology/ingest/${queued.runId}`)
+
+  const bounded = await request(app, `${queued.statusPath}?waitMs=5`)
+  const boundedJson = hydrologyGovernmentIngestResponseSchema.parse(await bounded.json())
+  assert.equal(bounded.status, 200)
+  assert.equal(boundedJson.status, 'queued')
+
+  releaseRunner()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const completed = await request(app, queued.statusPath!)
+  const completedJson = hydrologyGovernmentIngestResponseSchema.parse(await completed.json())
+  assert.equal(completed.status, 200)
+  assert.equal(completedJson.status, 'completed')
+  assert.equal(completedJson.proofRunId, 'proof-observation')
+  assert.deepEqual(completedJson.results?.map((item) => [item.source, item.recordsIngested]), [['PNA', 2]])
+})
+
+test('GET /api/hydrology/ingest/:runId does not expose unknown job state', async () => {
+  const response = await request(createTestApp(), '/api/hydrology/ingest/unknown-run')
+
+  assert.equal(response.status, 404)
+  const json = await response.json() as { code?: string; details?: { requestId?: string } }
+  assert.equal(json.code, 'HYDROLOGY_INGEST_NOT_FOUND')
+  assert.match(json.details?.requestId ?? '', /^[0-9a-f-]{36}$/)
+  assert.doesNotMatch(JSON.stringify(json), /DATABASE_URL|password|secret|postgres/i)
+})
+
+test('POST /api/hydrology/ingest persists background runner failures to proof records', async () => {
+  const savedRuns: Array<{ source: string; proofRunId?: string; status: string; recordsIngested: number }> = []
+  const response = await request(createTestApp({
+    hydrologyRepository: {
+      async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+      async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+      async saveIngestionRun(run) { savedRuns.push({ source: run.source, proofRunId: run.proofRunId, status: run.status, recordsIngested: run.recordsIngested }) },
+    },
+    ingestionRunner: async () => { throw new Error('provider startup failed') },
+  }), '/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA', proofRunId: 'proof-background-failure' }) })
+
+  assert.equal(response.status, 202)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(savedRuns, [{ source: 'PNA', proofRunId: 'proof-background-failure', status: 'failed', recordsIngested: 0 }])
 })
 
 test('POST /api/hydrology/ingest returns a safe contract error when ingest startup fails', async () => {
@@ -240,13 +420,12 @@ test('POST /api/hydrology/ingest returns a safe contract error when ingest start
     body: JSON.stringify({ contractVersion: '1.0.0', reason: 'cron' }),
   })
 
-  assert.equal(response.status, 503)
+  assert.equal(response.status, 202)
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
   assert.equal(json.contractVersion, 'hydrology-government-ingest-v1')
-  assert.equal(json.status, 'failed')
+  assert.equal(json.status, 'queued')
   assert.deepEqual(json.requestedSources, ['PNA', 'INA', 'INMET', 'SMN'])
-  assert.equal(json.results[0]?.diagnostic?.failureKind, 'startup_failure')
-  assert.doesNotMatch(JSON.stringify(json), /postgres|password|secret|pass@example/i)
+  await new Promise<void>((resolve) => setImmediate(resolve))
 })
 
 test('default government ingestion runner saves all source fixtures when live clients fail or return empty', async () => {
@@ -548,19 +727,19 @@ test('describeHydrologyStartupFailure returns bounded sanitized AggregateError d
   assert.doesNotMatch(JSON.stringify(details), /postgres:\/\/|user:pass|db\.internal|password leaked|third hidden/)
 })
 
-test('POST /api/hydrology/ingest returns safe structured startup failure response', async () => {
+test('POST /api/hydrology/ingest acknowledges before a background startup failure', async () => {
   const response = await request(createTestApp({ ingestionRunner: async () => { throw new Error('database password secret') } }), '/api/hydrology/ingest', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' }),
   })
 
-  assert.equal(response.status, 503)
+  assert.equal(response.status, 202)
   const json = hydrologyGovernmentIngestResponseSchema.parse(await response.json())
-  assert.equal(json.status, 'failed')
-  assert.equal(json.results[0]?.diagnostic?.failureKind, 'startup_failure')
-  assert.equal(json.results[0]?.diagnostic?.attempts, 1)
+  assert.equal(json.status, 'queued')
+  assert.equal(json.results.length, 0)
   assert.doesNotMatch(JSON.stringify(json), /password secret/)
+  await new Promise<void>((resolve) => setImmediate(resolve))
 })
 
 test('default government ingestion runner continues when one source fails and persists degraded run', async () => {
@@ -619,6 +798,22 @@ test('government municipality seeding inserts Corrientes PNA municipalities only
   assert.deepEqual(insertMunicipalities.params?.slice(0, 4), ['ituzaingo', 'ituzaingo-corrientes', 'Ituzaingó', 'AR-W'])
   assert.equal(insertMunicipalities.params?.[5], 4.5)
   assert.equal(insertMunicipalities.params?.[6], 5)
+})
+
+test('government municipality seeding skips every write when all municipalities already exist', async () => {
+  const writes: string[] = []
+  const db = {
+    async query(sql: string) {
+      if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+      writes.push(sql)
+      return { rows: [], rowCount: 1 }
+    },
+  }
+
+  const result = await seedGovernmentMunicipalitiesIfEmpty(db)
+
+  assert.deepEqual(result, { inserted: 0, skipped: true })
+  assert.deepEqual(writes, [])
 })
 
 test('PNA flood-risk dictionary contains the 17 monitored Corrientes ports with official thresholds', () => {
@@ -708,6 +903,20 @@ test('POST /api/hydrology/municipalities/:id/copilot/chat streamea eventos del c
   assert.match(body, /event: done/)
 })
 
+test('unsupported municipality Copilot context is schema-valid and contains no substituted data', () => {
+  const municipality = municipalityDashboard()
+  municipality.municipality.name = 'Goya'
+
+  const context = hydrologyDenseContextV1Schema.parse(buildMunicipalCopilotContext(municipality))
+
+  assert.equal(context.zone, null)
+  assert.deepEqual(context.sources, [])
+  assert.deepEqual(context.stations, [])
+  assert.deepEqual(context.telemetry, [])
+  assert.equal(context.snapshot.lastSuccessfulObservedAt, null)
+  assert.equal(context.snapshot.recommendation, 'Usar únicamente observaciones, alertas y pronósticos oficiales disponibles para el municipio.')
+})
+
 function createTestApp(overrides: Partial<Parameters<typeof createHydrologyGovernmentRouter>[0]> = {}) {
   const app = express()
   app.use(express.json())
@@ -762,13 +971,15 @@ function telemetryRecord(source: 'INA' | 'INMET' | 'SMN') {
   }
 }
 
-async function request(app: express.Express, path: string, init?: RequestInit) {
+async function request(app: express.Express, path: string, init: RequestInit = {}, options: { authenticateIngest?: boolean } = {}) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('address not available')
   try {
-    return await fetch(`http://127.0.0.1:${address.port}${path}`, init)
+    const headers = new Headers(init.headers)
+    if (options.authenticateIngest !== false && path === '/api/hydrology/ingest' && init.method === 'POST') headers.set('x-hydrology-ingest-token', TEST_INGEST_TOKEN)
+    return await fetch(`http://127.0.0.1:${address.port}${path}`, { ...init, headers })
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   }

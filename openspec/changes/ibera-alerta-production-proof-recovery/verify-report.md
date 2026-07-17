@@ -18,7 +18,7 @@ persistence: hybrid
 
 # Verification Report — Iberá-Alerta Production Proof Recovery
 
-**Verified:** 2026-07-15, fresh independent local runtime evidence only.  
+**Verified:** 2026-07-15, fresh independent local runtime evidence plus bounded post-deploy production smoke.
 **Scope:** Current apply-progress/spec/task boundary. Auth remained untouched.
 
 ## Verdict
@@ -50,7 +50,16 @@ Fresh one-shot official RSS observations (`sha256:47cfd4bef3393ce5276f935702b408
 
 ## Production gate
 
-All four matrix `prodApi` and `prodDb` cells are `not_run`. There is no post-deploy production `proofRunId`, provider request/response set, production DB insertion correlation, production API payload, or browser proof for this revision. A direct production GET made during verification timed out and produced no acceptance evidence. This absence is a blocker, not a pass.
+The bounded post-deploy smoke is recorded in `artifacts/hydrology-production-post-deploy-20260715.json` and remains **BLOCKED**:
+
+- Production responded after a 15-second wait, but no response header exposed a commit; the live revision is not correlated to `4c5f4e4`.
+- `GET /api/hydrology/municipalities` returned HTTP `200`, 18 municipalities, 20 telemetry rows, no fixture URLs, fresh PNA/INA, and degraded INMET/SMN with zero telemetry rows.
+- Exactly one unauthenticated `POST /api/hydrology/ingest` was sent with `proofRunId=proof-20260715T141011Z`. It returned HTTP `503 HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE` because `https://agronauta.onrender.com/api/hydrology/ingest` exceeded the 12,000 ms timeout. The response did not echo the proofRunId.
+- A read-only remote DB query correlated one row per source to that proofRunId, with only counts and IDs recorded. This does not override the failed HTTP ingest gate.
+- Real browser evidence passed at `/municipalities` (HTTP `200`, 18 cards); PNA/INA rendered `ACTUALIZADA`, while INMET/SMN rendered `NO DISPONIBLE` / `Fuente oficial no disponible`. Screenshot: `artifacts/hydrology-municipalities-production-post-deploy.png`.
+- No production cron receipt or log existed; the existing local scheduler receipt was not counted as production evidence.
+
+Production proof therefore exists as failure evidence, not acceptance evidence. This is a blocker, not a pass.
 
 ## Supplemental checks
 
@@ -88,7 +97,7 @@ All four matrix `prodApi` and `prodDb` cells are `not_run`. There is no post-dep
     { "criterion": "Fresh local PNA/INA/INMET/SMN provider, API, configured-remote-DB, and browser proof", "result": "pass", "evidence": "proof-20260715T072127Z; artifacts/hydrology-local-real-matrix.json" },
     { "criterion": "Bounded unauthenticated ingest and serialized no-retry scheduler", "result": "pass", "evidence": "focused API 38/38; scheduler-proof-20260715T080420Z; artifacts/hydrology-scheduler-local-receipt.json" },
     { "criterion": "INMET/SMN alert semantics are not represented as municipality rainfall", "result": "pass", "evidence": "fresh RSS observation plus metric=storm_alert/value=null and no municipality INMET/SMN telemetry" },
-    { "criterion": "Post-deploy production proof exists", "result": "fail", "evidence": "all prodApi/prodDb matrix cells are not_run; no production proofRunId" },
+    { "criterion": "Post-deploy production proof exists", "result": "fail", "evidence": "proof-20260715T141011Z correlated in DB, but production ingest returned 503 upstream timeout and INMET/SMN rendered unavailable; artifact: artifacts/hydrology-production-post-deploy-20260715.json" },
     { "criterion": "Readiness/archive prohibition", "result": "pass", "evidence": "BLOCKED verdict; production tasks remain incomplete" }
   ],
   "next": "fixes-required"

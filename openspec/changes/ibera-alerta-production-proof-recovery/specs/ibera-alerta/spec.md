@@ -31,6 +31,14 @@ Production ingest and the local BFF MUST expose enough safe behavior to prove re
 - THEN the HTTP response MUST include per-source status, elapsed/timeout diagnostics, upstream HTTP result when available, and run ID
 - AND any timed-out or missing source remains a `BLOCKER` until passing proof exists
 
+#### Scenario: Queued ingest has bounded completion observation
+
+- GIVEN a bounded ingest POST returns `202` with `status: queued`, a `runId`, and a relative status path
+- WHEN the verifier performs one status GET with a server-side wait bounded to 60 seconds
+- THEN the response MUST be terminal (`completed`, `partial`, or `failed`) when provider work finishes within the bound
+- AND only the terminal response may supply provider HTTP diagnostics, source results, or DB-correlation evidence
+- AND a queued or missing status response remains a `BLOCKER` without retries or polling
+
 #### Scenario: Local BFF 503 is repaired by real runtime proof
 
 - GIVEN the local web BFF previously returned `503` for hydrology routes

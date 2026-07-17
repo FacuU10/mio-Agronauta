@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 const FORWARDED_HEADERS = ['accept', 'content-type', 'x-request-id'] as const
 const METHODS_WITH_BODY = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 12_000
+const HYDROLOGY_INGEST_TOKEN_HEADER = 'x-hydrology-ingest-token'
 
 type RouteContext = { params: Promise<{ path?: string[] }> }
 
@@ -15,18 +16,24 @@ export async function DELETE(request: NextRequest, context: RouteContext) { retu
 async function proxyHydrologyRequest(request: NextRequest, context: RouteContext) {
   const { path = [] } = await context.params
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID()
+  const isCanonicalIngest = isCanonicalIngestRequest(request.method, path)
+  const ingestToken = request.headers.get(HYDROLOGY_INGEST_TOKEN_HEADER)
+  if (isCanonicalIngest && !ingestToken?.trim()) {
+    return hydrologyIngestTokenRequired(requestId)
+  }
+
   const upstream = buildUpstreamUrl(path, request.nextUrl.search)
   if (!upstream.ok) {
     console.error('[hydrology-bff] upstream configuration failure', { requestId, reason: upstream.reason, nodeEnv: process.env['NODE_ENV'] ?? 'unset' })
     return hydrologyProxyError(503, requestId, 'upstream_configuration', 'Hydrology upstream is not configured for production.')
   }
-  const headers = buildUpstreamHeaders(request, requestId)
+  const headers = buildUpstreamHeaders(request, requestId, isCanonicalIngest)
   console.info('[hydrology-bff] forwarding hydrology request', {
     requestId,
     method: request.method,
     upstreamOrigin: upstream.origin,
     upstreamPath: upstream.pathname,
-    forwardedHeaders: [...headers.keys()].filter((name) => name !== 'authorization'),
+    forwardedHeaders: [...headers.keys()].filter((name) => name !== 'authorization' && name !== HYDROLOGY_INGEST_TOKEN_HEADER),
   })
   let upstreamResponse: Response
   const controller = new AbortController()
@@ -72,14 +79,32 @@ function buildUpstreamUrl(path: string[], search: string): { ok: true; url: stri
   return { ok: true, url: `${baseUrl}${pathname}${search}`, origin: parsed.origin, pathname }
 }
 
-function buildUpstreamHeaders(request: NextRequest, requestId: string): Headers {
+function isCanonicalIngestRequest(method: string, path: string[]): boolean {
+  return method === 'POST' && path.length === 1 && path[0] === 'ingest'
+}
+
+function buildUpstreamHeaders(request: NextRequest, requestId: string, isCanonicalIngest: boolean): Headers {
   const headers = new Headers()
   for (const name of FORWARDED_HEADERS) {
     const value = request.headers.get(name)
     if (value) headers.set(name, value)
   }
   headers.set('x-request-id', requestId)
+  if (isCanonicalIngest) {
+    const ingestToken = request.headers.get(HYDROLOGY_INGEST_TOKEN_HEADER)
+    if (ingestToken) headers.set(HYDROLOGY_INGEST_TOKEN_HEADER, ingestToken)
+  }
   return headers
+}
+
+function hydrologyIngestTokenRequired(requestId: string) {
+  return NextResponse.json({
+    contractVersion: '1.0.0',
+    code: 'HYDROLOGY_BFF_INGEST_TOKEN_REQUIRED',
+    message: 'Hydrology ingest authorization is required.',
+    retryable: false,
+    details: { requestId, phase: 'request_validation' },
+  }, { status: 401, headers: { 'x-request-id': requestId } })
 }
 
 function hydrologyProxyError(status: 502 | 503, requestId: string, phase: 'upstream_configuration' | 'upstream_fetch' | 'upstream_timeout', message: string, details: Record<string, unknown> = {}) {

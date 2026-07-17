@@ -8,7 +8,7 @@ import { createRateLimitMiddleware } from './presentation/middleware/rate-limit'
 import { corsMiddleware } from './presentation/middleware/cors'
 import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
-import { createGovernmentIngestionRunner, createHydrologyGovernmentRouter } from './presentation/routes/hydrology-government'
+import { createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, type GovernmentIngestionResponse, type HydrologyIngestionCoordinator, type HydrologyIngestionInput } from './presentation/routes/hydrology-government'
 import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
 import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type SourceWindow } from './infrastructure/jobs/agronautas-scheduler'
 import { PostgresSignalIngestionRepository } from './infrastructure/database/postgres/agronautas-signal-ingestion-repository'
@@ -22,13 +22,15 @@ dotenv.config()
 const PORT = process.env['API_PORT'] || 3001
 
 interface HydrologySchedulerStartupDeps {
-  ingestionRunner?: (input: { source?: HydrologySource; reason?: string; proofRunId?: string }) => Promise<{ runId: string; proofRunId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; sources: HydrologySource[]; results?: Array<{ source: HydrologySource; recordsIngested: number }> }>
+  ingestionRunner?: (input: HydrologyIngestionInput) => Promise<GovernmentIngestionResponse>
+  ingestionCoordinator?: HydrologyIngestionCoordinator
   schedulerFactory?: (runner: HydrologyIngestionRunner) => Pick<HydrologyIngestionScheduler, 'start'>
 }
 
-export function createApp(): Application {
+export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyIngestionCoordinator } = {}): Application {
   const app = express()
   const runtimeConfig = getAgronautasRuntimeConfig()
+  const hydrologyIngestionCoordinator = deps.hydrologyIngestionCoordinator ?? createHydrologyIngestionCoordinator()
 
   app.set('trust proxy', runtimeConfig.trustProxy)
 
@@ -45,7 +47,7 @@ export function createApp(): Application {
 
   // Routes
   app.use(healthRouter)
-  app.use('/api/hydrology', createHydrologyGovernmentRouter())
+  app.use('/api/hydrology', createHydrologyGovernmentRouter({ ingestionCoordinator: hydrologyIngestionCoordinator }))
   app.use(runtimeConfig.routePrefix, healthRouter)
   app.use(runtimeConfig.routePrefix, createAgronautasRouter())
   app.use(`${runtimeConfig.routePrefix}/v1`, createAgronautasRouter({ isVersionedNamespace: true }))
@@ -57,14 +59,15 @@ export function createApp(): Application {
 }
 
 export function startServer(): void {
-  const app = createApp()
+  const hydrologyIngestionCoordinator = createHydrologyIngestionCoordinator()
+  const app = createApp({ hydrologyIngestionCoordinator })
 
   app.listen(PORT, () => {
     logger.info({ port: PORT }, 'API server listening')
   })
 
   startAgronautasSchedulerFromEnv()
-  startHydrologySchedulerFromEnv(process.env)
+  startHydrologySchedulerFromEnv(process.env, { ingestionCoordinator: hydrologyIngestionCoordinator })
 }
 
 interface AgronautasSchedulerStartupDependencies {
@@ -101,10 +104,10 @@ export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: Hyd
     return null
   }
 
-  const ingestionRunner = deps.ingestionRunner ?? createGovernmentIngestionRunner()
+  const ingestionCoordinator = deps.ingestionCoordinator ?? createHydrologyIngestionCoordinator(deps.ingestionRunner ?? createGovernmentIngestionRunner())
   const schedulerRunner: HydrologyIngestionRunner = {
     async run(source, metadata) {
-      const result = await ingestionRunner({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}`, proofRunId: metadata.proofRunId })
+      const result = await ingestionCoordinator.run({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}`, proofRunId: metadata.proofRunId }, `scheduler:${source}`)
       const sourceResult = result.results?.find((item) => item.source === source)
       return { inserted: sourceResult?.recordsIngested ?? 0, unchanged: 0 }
     },

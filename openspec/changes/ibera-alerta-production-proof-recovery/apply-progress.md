@@ -1,6 +1,6 @@
 # Apply Progress: Iberá-Alerta Production Proof Recovery
 
-**Updated:** 2026-07-15T07:09Z
+**Updated:** 2026-07-15T17:39Z
 **Mode:** Strict TDD continuation
 **Delivery:** stacked-to-main; current batch covers the PR 2/PR 3 implementation boundary
 **Auth:** untouched and explicitly out of scope
@@ -25,8 +25,9 @@
 - [x] 3.4 Local browser evidence capture and matrix update
 - [x] 4.1 Local verification passes all proof items — current PNA, INA, INMET, SMN provider/API/DB/browser proof passed locally
 - [ ] 4.2 Submit/approve PRs — BLOCKED: no deployment/approval access was configured
-- [ ] 4.3 Deploy and run production smoke — BLOCKED: no deployment access; current production is not correlated to this change
-- [ ] 4.4 Rollback — not applicable; no deployment was made
+- [ ] 4.3 Deploy and run production smoke — BLOCKED after bounded smoke: production responded, but ingest returned 503 upstream timeout and the live revision is not commit-correlated
+- [x] 4.4 Rollback — not applicable; no deployment was made, so no rollback mutation was required
+- [x] 4.5 Bounded async ingest acknowledgement — public POST returns `202 queued` with generated `runId`/`proofRunId`; the same one-shot runner remains in flight until all source persistence completes.
 
 ## TDD Cycle Evidence
 
@@ -55,6 +56,37 @@
 - Local screenshot: `artifacts/hydrology-municipalities-local.png`
 - Production current observation (not acceptance): `artifacts/hydrology-production-current-observation.json`
 - Production screenshot: `artifacts/hydrology-municipalities-production-current.png`
+- Post-deploy production smoke: `artifacts/hydrology-production-post-deploy-20260715.json`
+- Post-deploy production screenshot: `artifacts/hydrology-municipalities-production-post-deploy.png`
+
+## Bounded Async Acknowledgement Correction — 2026-07-15T14:35Z
+
+- `apps/api/src/presentation/routes/hydrology-government.ts` now generates the job/run correlation IDs before scheduling exactly one background runner promise. The route acknowledges with HTTP `202`, `status: queued`, `runId`, `proofRunId`, requested sources, and empty result arrays; it never fabricates completion.
+- Admission remains held until the background promise settles, so the existing rate/concurrency guard still rejects overlapping work with HTTP `429`. No token, retry, polling, or auth path was added.
+- The default runner accepts the route-generated `runId`, persists the final per-source result rows under the shared `proofRunId`, and emits only sanitized completion/failure logs. `/municipalities` remains unchanged and retains fixture filtering.
+- Focused API route tests: `29/29` passed. API typecheck: `pnpm exec tsc --noEmit --pretty false` passed. Web suite: `31/31` passed.
+- Direct local route proof against the remote DB: `proof-async-route-20260715T143155Z` returned HTTP `202`/`queued` in `1234ms`, then completed with PNA `9`, INA `22`, INMET `100`, SMN `117`; read-only DB correlation found one successful row per source. Sanitized artifact: `artifacts/hydrology-async-ingest-local-proof-20260715.json`.
+- Scheduler real-runtime cross-check: `scheduler-proof-20260715T142611Z`, one invocation per source, retries `0`, passed with inserted `9/22/100/117`. Artifact: `artifacts/hydrology-scheduler-async-fix-local-receipt.json`.
+- The existing `pnpm verify-local` matrix was run once as requested but remains blocked by its one-POST-per-source loop: after the first `202 queued`, the retained in-flight guard correctly returned `429` for the next three requests (`proof-20260715T142419Z`). Its generated failure artifact is not accepted as production readiness evidence.
+- Production is not redeployed or re-smoked in this task. Existing production blocker remains: `proof-20260715T141011Z` had BFF HTTP `503` after the old 12-second timeout and the live revision was not commit-correlated.
+
+### Corrective Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused tests | API hydrology route `29/29`; API `tsc --noEmit --pretty false`; web suite `31/31`. |
+| Runtime harness | Local Express route, one unauthenticated all-source POST, HTTP `202` in `1234ms`; background completed and remote DB rows correlated under `proof-async-route-20260715T143155Z`. Scheduler proof `scheduler-proof-20260715T142611Z` also passed. |
+| Rollback boundary | Revert the async acknowledgement/run-ID plumbing, route tests, and the two new sanitized evidence artifacts; leave auth, BFF error classification, provider adapters, migrations, and existing dirty production evidence untouched. |
+
+## Bounded Production Smoke — 2026-07-15T14:13Z
+
+- Waited 15 seconds after the requested commit observation. Production HTTP was live, but no response header exposed a commit; the live revision is not correlated to `4c5f4e4`.
+- `GET /api/hydrology/municipalities` returned HTTP `200`, 18 municipalities, 20 telemetry rows, no `offline-fixture://` URLs, fresh PNA/INA, and degraded INMET/SMN with zero telemetry rows.
+- Exactly one unauthenticated `POST /api/hydrology/ingest` was sent with `proofRunId=proof-20260715T141011Z`; the BFF returned HTTP `503 HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE` after the 12-second Render upstream timeout and did not echo the proofRunId.
+- A read-only remote DB query nevertheless found one correlated row per source for that proofRunId; only source counts and row IDs were recorded. This does not override the failed HTTP ingest gate.
+- A real browser opened `/municipalities` and rendered 18 cards: PNA/INA `ACTUALIZADA`; INMET/SMN `NO DISPONIBLE`. Screenshot: `artifacts/hydrology-municipalities-production-post-deploy.png`.
+- No production cron receipt/log existed; the local scheduler receipt was not used as production evidence.
+- Verdict remains `BLOCKED`; task 4.3 stays unchecked and no production-ready/archive claim is made. Full sanitized evidence: `artifacts/hydrology-production-post-deploy-20260715.json`.
 
 The additive migration `20260714120000_hydrology_proof_run_id` was applied once with `pnpm exec prisma migrate deploy --schema prisma/schema.prisma` against the explicitly configured remote PostgreSQL target; a subsequent `prisma migrate status` reported the schema up to date. No secrets were printed.
 
@@ -63,7 +95,7 @@ The additive migration `20260714120000_hydrology_proof_run_id` was applied once 
 1. INA currently returns HTTP 200 `text/html; charset=UTF-8`; the adapter remains honestly blocked because there is no actual machine-readable payload evidence to justify a parser change.
 2. INMET currently returns HTTP 404 for the configured daily endpoint.
 3. SMN currently returns HTTP 403 for the configured alert endpoint.
-4. No deployment access or post-deployment production proof authority is configured. Current production observations are not proof for this source revision and cannot close the production API/UI gate.
+4. The live production revision is not commit-correlated to `4c5f4e4`; the bounded smoke returned production evidence but cannot close the gate because ingest timed out with HTTP 503 and INMET/SMN remain unavailable.
 5. Strict-TDD RED evidence for 1.3, 2.1, and 3.3 was not observable because those behaviors were already present in the inherited partial slice; this is recorded rather than fabricated.
 
 ## Current Provider Recovery — 2026-07-15T07:09Z
@@ -149,3 +181,52 @@ The additive migration `20260714120000_hydrology_proof_run_id` was applied once 
 | Focused tests | Hydrology engine `16/16`; API route `30/30`; web summary `2/2`; Playwright local `/municipalities` `1/1` passed. |
 | Runtime harness | `pnpm verify-local` → `proof-20260714T192622Z`, exactly one call/source, retries `0`, configured remote DB; exited `1` only because INMET/SMN remain blocked. Local query returned 0 fixture URLs, PNA 19 and INA station `6764` value `3.11`. |
 | Rollback boundary | Revert repository/route filtering and INA read mappings, UI summary/card, focused tests, E2E evidence check, and runbook wording. Existing fixture DB rows and auth remain untouched. |
+
+## Current Apply Correction — 2026-07-15T17:10Z
+
+- Strict-TDD correction: INA's three fixed official series requests now execute concurrently with one bounded attempt per series. This preserves fixed source scope, no retry/polling, and continues to collect successful series when one fails.
+- RED: the new client test observed `maxActive=1` before implementation; GREEN: the same test and the hydrology-engine focused suite pass after the change. Focused client suite: 8/8; hydrology-engine client + engine suite: 24/24.
+- Official INA behavior was re-confirmed from the public INA API page: `getObservaciones` CSV and `obs/puntual/series/{id}` Mnemos endpoints are documented. The prior sequential implementation exceeded the 17-second runner deadline when one series stalled.
+- Fresh configured-remote-DB scheduler proof `scheduler-proof-20260715T170855Z` invoked PNA, INA, INMET, and SMN once, with retries `0`; inserted counts were `9/21/100/117`. A separate read-only query correlated one successful ingestion row per source to that proofRunId. Evidence: `artifacts/hydrology-scheduler-apply-proof-20260715-ina-parallel.json`.
+- Local `/municipalities` browser proof remains `1/1` with 18 municipalities, all four source labels, and no fixture URLs. The existing one-POST-per-source verifier remains blocked because the public route now acknowledges asynchronously with empty `results`; it cannot honestly claim provider HTTP/DB completion from a queued response. Evidence: `artifacts/hydrology-local-real-matrix.json` and `artifacts/hydrology-municipalities-local-browser-evidence.json`.
+- Production baseline was attempted against the requested `https://www.agronautas.com.ar` and `/`, `/municipalities`, `/api/hydrology/municipalities`, and `/api/hydrology/ingest`; all failed DNS resolution. No production mutation was attempted. Existing production evidence for the separate resolved `agronauta.com.ar` hostname remains blocked and is not accepted as proof for this requested hostname.
+- Operational tasks remain blocked and intentionally unchanged: 0.1/0.2/4.2 require authorized access or backup delivery; 4.3 requires deployment and post-deploy proof; 4.4 is not applicable because no deployment occurred. No commit, push, auth change, or deployment was made.
+
+### Correction TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety Net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 2.2 correction | `packages/hydrology-engine/src/clients/http-clients.test.ts` | Unit | 24/24 hydrology-engine suite before correction | ✅ New max-concurrency assertion failed (`1 !== 3`) | ✅ Client 8/8 and engine/client 24/24 passed | ✅ Existing success, failure, and bounded-attempt cases retained | ✅ Fixed-series `Promise.all` only; no retry/polling |
+
+### Correction Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test command | `pnpm exec node --import tsx --test src/clients/http-clients.test.ts src/hydrology-engine.test.ts` from `packages/hydrology-engine` → 24/24 passed. |
+| Runtime harness | `pnpm --dir apps/api scheduler:once --out ../../artifacts/hydrology-scheduler-apply-proof-20260715-ina-parallel.json` → exit 0; one invocation/source, retries 0; PNA/INA/INMET/SMN inserted 9/21/100/117. Read-only DB correlation returned 4 successful rows for the proofRunId. |
+| Final checks | `pnpm test` → 6/6 workspace tasks successful, API 145/145; sequential `pnpm build` → 4/4 successful; API hydrology focused suite → 42/42; Playwright `/municipalities` → 1/1. A concurrent build/test attempt had a transient generated-dist race and was rerun sequentially successfully. |
+| Rollback boundary | Revert only the INA request scheduling change, its focused regression test, and the scheduler/read-only evidence artifacts; preserve prior provider endpoints, auth, migrations, route behavior, and unrelated dirty files. |
+
+## Corrective Re-run — 2026-07-15T17:39Z
+
+- **Queued-ingest limitation resolved locally:** the public `202 queued` response now includes a relative `statusPath`. A single GET to that path may wait server-side for at most 60 seconds and returns the terminal, sanitized provider result. The verifier performs exactly one POST and one bounded status GET per source; it does not poll or retry. Unknown/expired run IDs return a safe 404 without secrets.
+- **Strict TDD:** RED added the completion-path and unknown-run route tests plus terminal-observation verifier tests. The initial route/verifier run failed 2/32 (missing status path/endpoint) and the verifier test failed 1/3 (missing terminal gate). GREEN/refactor then passed the focused route + verifier suite at **35/35**.
+- **Fresh local runtime proof:** `pnpm verify-local -- --all-sources --out ../../artifacts/hydrology-async-observation-local-proof-20260715-rerun.json` used proofRunId `proof-20260715T173713Z`, remote configured DB, one POST/source, one bounded status GET/source, retries `0`, and completed PNA/INA/INMET/SMN with HTTP `200`, DB-correlated rows, and counts `9/23/100/117`. The command exited `0` and `passed=true`.
+- **Final supplemental checks:** sequential `pnpm test` passed **6/6 workspace tasks** (API **148/148**, web **31/31**); sequential `pnpm build` passed **4/4** tasks. The earlier generated-dist race was not reproduced in the final sequential run.
+- **Authoritative URL reconciliation:** the requested plural `https://www.agronautas.com.ar` currently returns DNS `NXDOMAIN` and was not used for further probing. The verified canonical web deployment is `https://www.agronauta.com.ar` (singular): current DNS `104.21.42.115,172.67.161.168`, root HTTP `200`, hydrology municipalities HTTP `200`. The configured Render API service is `https://agronauta.onrender.com`: current DNS includes `216.24.57.8,216.24.57.9`, root HTTP `404` with `X-Render-Origin-Server: Render`, and municipalities HTTP `200`. These are safe GET observations only; no production POST/mutation was made.
+- **Task reconciliation:** `4.4` is now checked as not applicable because no deployment occurred. `0.1` remains unchecked because its exact wording requires authorized deployment access and post-deployment read-only production proof authority; `0.2` remains unchecked because its exact wording requires a commit/push to `pre-cambios`, explicitly prohibited by this rerun; `4.2` remains unchecked because PR submission/approval cannot occur without the prohibited commit/push and approval authority; `4.3` remains unchecked because deployment and post-deploy proof are required and were not authorized. Apply remains blocked and must not advance to verify/archive.
+
+### Corrective TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety Net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| Queued completion observation | `apps/api/src/presentation/routes/hydrology-government.test.ts` | Integration | 30/30 route tests | ✅ 2 failures before implementation | ✅ 32/32 route tests after implementation | ✅ terminal completion plus unknown/queued states | ✅ bounded wait clears its timer |
+| Verifier terminal gate | `apps/api/src/scripts/verify-hydrology-local-real.test.ts` | Unit | 2/2 verifier tests | ✅ 1 missing-export failure before implementation | ✅ 3/3 verifier tests | ✅ completed, queued, and mismatched proof IDs | ✅ pure terminal gate |
+
+### Corrective Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test command | From `apps/api`: `pnpm exec node --import tsx --test src/presentation/routes/hydrology-government.test.ts src/scripts/verify-hydrology-local-real.test.ts` → **35/35 passed**. |
+| Runtime harness | `pnpm verify-local -- --all-sources --out ../../artifacts/hydrology-async-observation-local-proof-20260715-rerun.json` → **exit 0**, terminal status observed for each source after one bounded GET, remote DB rows correlated, `passed=true`; production cells intentionally `not_run`. |
+| Rollback boundary | Revert only `packages/zod-schemas/src/agronautas.ts`, `apps/api/src/presentation/routes/hydrology-government.ts`, `apps/api/src/presentation/routes/hydrology-government.test.ts`, `apps/api/src/scripts/verify-hydrology-local-real.ts`, `apps/api/src/scripts/verify-hydrology-local-real.test.ts`, and the corrective design/spec/evidence additions. Preserve auth, provider adapters, migration, scheduler semantics, and unrelated dirty files. |

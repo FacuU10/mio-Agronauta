@@ -66,6 +66,22 @@ test('INA fetches each configured official CSV series once and persists observed
   assert.ok(ina.ok && ina.records.every((record) => record.sourceUrl?.startsWith('https://alerta.ina.gob.ar/') === true))
 })
 
+test('INA fetches its fixed official series concurrently within one bounded attempt', async () => {
+  let active = 0
+  let maxActive = 0
+  const ina = await new InaHttpClient({ fetch: async () => {
+    active += 1
+    maxActive = Math.max(maxActive, active)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    active -= 1
+    return new Response('series_id,timestart,valor\n6764,2026-07-14T12:00:00Z,3.13', { status: 200, headers: { 'content-type': 'text/plain' } })
+  } }).fetchTelemetry()
+
+  assert.equal(maxActive, 3)
+  assert.equal(ina.ok, true)
+  assert.equal(ina.ok ? ina.records.length : 0, 3)
+})
+
 test('SMN reports an honest degraded diagnostic for unsupported official HTML instead of fake success', async () => {
   const smn = await new SmnHttpClient({ url: 'https://www.smn.gob.ar/alertas', fetch: async () => new Response('<html>challenge</html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }) }).fetchTelemetry()
 

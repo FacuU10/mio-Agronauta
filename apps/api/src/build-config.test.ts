@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -16,6 +17,10 @@ interface TurboJson {
   tasks?: Record<string, { cache?: boolean; dependsOn?: string[]; outputs?: string[] }>
 }
 
+const ENV_IGNORE_PATTERNS = ['.env', '.env.*', '*.env', '*.env.*', '!*.env.example'] as const
+const IGNORED_ENV_PATHS = ['.env', '.env.production', 'service.env', 'service.env.local', 'nested/service.env.local'] as const
+const TRACKABLE_ENV_PATHS = ['.env.example', 'service.env.example', 'nested/service.env.example'] as const
+
 async function readPackageJson(pathFromRoot: string): Promise<PackageJson> {
   const root = join(__dirname, '..', '..', '..')
   return JSON.parse(await readFile(join(root, pathFromRoot), 'utf8')) as PackageJson
@@ -29,6 +34,17 @@ async function readTurboJson(): Promise<TurboJson> {
 async function readRootTextFile(pathFromRoot: string): Promise<string> {
   const root = join(__dirname, '..', '..', '..')
   return readFile(join(root, pathFromRoot), 'utf8')
+}
+
+function isIgnoredByGit(pathFromRoot: string): boolean {
+  const root = join(__dirname, '..', '..', '..')
+  const result = spawnSync('git', ['check-ignore', '--no-index', '--quiet', '--', pathFromRoot], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+
+  assert.equal(result.error, undefined, `git check-ignore failed for ${pathFromRoot}`)
+  return result.status === 0
 }
 
 test('api production build keeps TypeScript declaration packages installable', async () => {
@@ -110,4 +126,30 @@ test('release provenance ignores generated cache and test-output artifacts', asy
   ]) {
     assert.match(gitignore, new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))
   }
+})
+
+test('environment policy ignores secret variants while preserving safe examples', async () => {
+  const gitignore = await readRootTextFile('.gitignore')
+
+  for (const pattern of ENV_IGNORE_PATTERNS) {
+    assert.match(
+      gitignore,
+      new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      `${pattern} must be explicit in the root ignore policy`,
+    )
+  }
+
+  for (const path of IGNORED_ENV_PATHS) {
+    assert.equal(isIgnoredByGit(path), true, `${path} must be ignored`)
+  }
+
+  for (const path of TRACKABLE_ENV_PATHS) {
+    assert.equal(isIgnoredByGit(path), false, `${path} must remain trackable`)
+  }
+})
+
+test('api environment template uses a secret-manager placeholder for ingest', async () => {
+  const envExample = await readRootTextFile('apps/api/.env.example')
+
+  assert.match(envExample, /^HYDROLOGY_INGEST_TOKEN=replace-with-secret-manager-reference$/m)
 })

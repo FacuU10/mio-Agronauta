@@ -2,7 +2,9 @@ import type { QueryResult } from 'pg'
 import type { HydrologyDenseContextV1, HydrologyStationReference, HydrologyTelemetry } from '@repo/zod-schemas'
 import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
 
-interface Db { query(sql: string, params?: unknown[]): Promise<QueryResult> }
+interface DbExecutor { query(sql: string, params?: unknown[]): Promise<QueryResult> }
+interface Db extends DbExecutor { connect?: () => Promise<DbClient> }
+interface DbClient extends DbExecutor { release(): void }
 
 export interface MunicipalityGaugeMappings {
   primaryPnaPortId: string | null
@@ -37,9 +39,12 @@ export class HydrologyRepository {
     let unchanged = 0
     const eligibleRecords = records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)
     let telemetryError: unknown
+    const client = this.db.connect ? await this.db.connect() : undefined
+    const transactionDb = client ?? this.db
     try {
+      await transactionDb.query('BEGIN')
       for (const record of eligibleRecords) {
-        const latest = await this.db.query(
+        const latest = await transactionDb.query(
           `SELECT value
              FROM hydrology_telemetry
             WHERE station_id = $1
@@ -55,11 +60,15 @@ export class HydrologyRepository {
           unchanged += 1
           continue
         }
-        await this.saveTelemetry([record])
+        await this.saveTelemetry([record], transactionDb)
         inserted += 1
       }
+      await transactionDb.query('COMMIT')
     } catch (error) {
+      await transactionDb.query('ROLLBACK').catch(() => undefined)
       telemetryError = error
+    } finally {
+      client?.release()
     }
     if (telemetryError !== undefined) {
       await this.saveIngestionRun({ ...run, status: 'failed', finishedAt: run.finishedAt ?? new Date(), recordsIngested: inserted, errorMessage: 'Telemetry persistence failed before ingestion run completed' }).catch(() => undefined)
@@ -69,10 +78,10 @@ export class HydrologyRepository {
     return { inserted, unchanged }
   }
 
-  async saveTelemetry(records: NormalizedHydrologyTelemetry[]): Promise<void> {
+  async saveTelemetry(records: NormalizedHydrologyTelemetry[], db: DbExecutor = this.db): Promise<void> {
     for (const record of records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)) {
-      if ((record.source === 'INMET' || record.source === 'SMN') && record.metric === 'storm_alert') await this.ensureAlertStation(record)
-      await this.db.query(
+      if ((record.source === 'INMET' || record.source === 'SMN') && record.metric === 'storm_alert') await this.ensureAlertStation(record, db)
+      await db.query(
         `INSERT INTO hydrology_telemetry (station_id, source, metric, observed_at, ingested_at, last_successful_observed_at, value, unit, tendency, forecast_horizon_days, confidence, quality, freshness, source_url, raw)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (station_id, source, metric, observed_at, forecast_horizon_days) DO UPDATE SET
@@ -85,14 +94,14 @@ export class HydrologyRepository {
            freshness = EXCLUDED.freshness,
            source_url = EXCLUDED.source_url,
            raw = EXCLUDED.raw`,
-        [record.stationId, record.source, record.metric, record.observedAt, record.ingestedAt ?? new Date(), record.lastSuccessfulObservedAt, record.value, record.unit, record.tendency ?? null, record.forecastHorizonDays ?? null, record.confidence ?? forecastConfidenceForHorizon(record.forecastHorizonDays) ?? null, record.quality, record.freshness, record.sourceUrl ?? null, record.raw ?? {}],
+        [record.stationId, record.source, record.metric, record.observedAt, record.ingestedAt ?? new Date(), record.lastSuccessfulObservedAt, record.metric === 'storm_alert' ? null : record.value, record.unit, record.tendency ?? null, record.forecastHorizonDays ?? null, record.confidence ?? forecastConfidenceForHorizon(record.forecastHorizonDays) ?? null, record.quality, record.freshness, record.sourceUrl ?? null, record.raw ?? {}],
       )
     }
   }
 
-  private async ensureAlertStation(record: NormalizedHydrologyTelemetry): Promise<void> {
+  private async ensureAlertStation(record: NormalizedHydrologyTelemetry, db: DbExecutor = this.db): Promise<void> {
     const stationName = typeof record.raw?.['title'] === 'string' ? record.raw['title'].slice(0, 160) : `${record.source} alerta oficial`
-    await this.db.query(
+    await db.query(
       `INSERT INTO hydrology_stations (id, source, station_code, station_name, river_name, zone, source_url, is_active, country_code)
        VALUES ($1,$2,$1,$3,null,null,$4,true,'AR')
        ON CONFLICT (id) DO UPDATE SET station_name = EXCLUDED.station_name, source_url = EXCLUDED.source_url, is_active = true, updated_at = now()`,

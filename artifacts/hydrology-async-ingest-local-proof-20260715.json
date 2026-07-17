@@ -1,0 +1,32 @@
+{
+  "verifier": "hydrology-async-ingest-local-proof-v1",
+  "proofRunId": "proof-async-route-20260715T143155Z",
+  "route": {
+    "method": "POST",
+    "path": "/api/hydrology/ingest",
+    "authorizationSent": false,
+    "status": 202,
+    "elapsedMs": 1234,
+    "responseStatus": "queued",
+    "requestedSources": ["PNA", "INA", "INMET", "SMN"],
+    "runId": "manual-1d839656-8a23-458c-b4dd-7af636894293"
+  },
+  "backgroundRun": {
+    "status": "completed",
+    "oneShotPerSource": true,
+    "retries": 0,
+    "recordsIngested": { "PNA": 9, "INA": 22, "INMET": 100, "SMN": 117 }
+  },
+  "database": {
+    "mode": "read-only-correlation",
+    "target": "remote",
+    "rowCount": 4,
+    "rows": {
+      "PNA": { "id": "67cdaceb-f6af-40b5-8ff6-098470d6ffba", "status": "success", "recordsIngested": 9 },
+      "INA": { "id": "2b8b4311-508f-430c-850c-17b05e9ce2e1", "status": "success", "recordsIngested": 22 },
+      "INMET": { "id": "2ec83edb-8492-4465-8a4f-d0821044a613", "status": "success", "recordsIngested": 100 },
+      "SMN": { "id": "e7c814ab-ded8-4823-bca3-0ce94d480c8e", "status": "success", "recordsIngested": 117 }
+    }
+  },
+  "passed": true
+}

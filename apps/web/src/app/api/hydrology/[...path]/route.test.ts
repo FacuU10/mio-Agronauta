@@ -7,13 +7,14 @@ test('hydrology BFF proxies GET preserving status and content-type', async () =>
   const previousFetch = globalThis.fetch
   const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
   const calls: Array<{ url: string; init?: RequestInit }> = []
+  const ingestToken = crypto.randomUUID()
   process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'https://api.internal'
   globalThis.fetch = (async (url, init) => {
     calls.push({ url: String(url), init })
     return new Response(JSON.stringify({ contractVersion: 'hydrology-government-municipalities-v1', municipalities: [] }), { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
   try {
-    const request = new NextRequest('http://web.local/api/hydrology/municipalities?province=AR-W', { headers: { accept: 'application/json', 'x-request-id': 'req-1' } })
+    const request = new NextRequest('http://web.local/api/hydrology/municipalities?province=AR-W', { headers: { accept: 'application/json', 'x-request-id': 'req-1', 'x-hydrology-ingest-token': ingestToken } })
     const response = await GET(request, { params: Promise.resolve({ path: ['municipalities'] }) })
 
     assert.equal(response.status, 200)
@@ -21,6 +22,7 @@ test('hydrology BFF proxies GET preserving status and content-type', async () =>
     assert.equal(calls[0]?.url, 'https://api.internal/api/hydrology/municipalities?province=AR-W')
     assert.equal(calls[0]?.init?.method, 'GET')
     assert.equal((calls[0]?.init?.headers as Headers).get('x-request-id'), 'req-1')
+    assert.equal((calls[0]?.init?.headers as Headers).get('x-hydrology-ingest-token'), null)
     assert.deepEqual(await response.json(), { contractVersion: 'hydrology-government-municipalities-v1', municipalities: [] })
   } finally {
     globalThis.fetch = previousFetch
@@ -32,15 +34,19 @@ test('hydrology BFF proxies GET preserving status and content-type', async () =>
 test('hydrology BFF proxies POST ingest preserving body, status and content-type', async () => {
   const previousFetch = globalThis.fetch
   const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  const previousInfo = console.info
   const calls: Array<{ url: string; init?: RequestInit }> = []
+  const logs: string[] = []
+  const ingestToken = crypto.randomUUID()
   process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'https://api.internal/'
+  console.info = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
   globalThis.fetch = (async (url, init) => {
     calls.push({ url: String(url), init })
     return new Response(JSON.stringify({ contractVersion: 'hydrology-government-ingest-v1', status: 'partial', requestedSources: ['PNA', 'SMN'], results: [] }), { status: 202, headers: { 'content-type': 'application/json; charset=utf-8' } })
   }) as typeof fetch
   try {
     const body = JSON.stringify({ contractVersion: '1.0.0', source: 'PNA' })
-    const request = new NextRequest('http://web.local/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+    const request = new NextRequest('http://web.local/api/hydrology/ingest', { method: 'POST', headers: { 'content-type': 'application/json', 'x-hydrology-ingest-token': ingestToken }, body })
     const response = await POST(request, { params: Promise.resolve({ path: ['ingest'] }) })
 
     assert.equal(response.status, 202)
@@ -49,6 +55,57 @@ test('hydrology BFF proxies POST ingest preserving body, status and content-type
     assert.equal(calls[0]?.init?.method, 'POST')
     assert.equal(calls[0]?.init?.body, body)
     assert.equal((calls[0]?.init?.headers as Headers).get('content-type'), 'application/json')
+    assert.equal((calls[0]?.init?.headers as Headers).get('x-hydrology-ingest-token'), ingestToken)
+    assert.equal(logs.some((entry) => entry.includes(ingestToken)), false)
+    assert.equal(logs.some((entry) => entry.includes('x-hydrology-ingest-token')), false)
+  } finally {
+    globalThis.fetch = previousFetch
+    console.info = previousInfo
+    if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+    else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
+  }
+})
+
+test('hydrology BFF rejects canonical ingest without a token before fetch', async () => {
+  const previousFetch = globalThis.fetch
+  const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  let fetchCalled = false
+  process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'https://api.internal'
+  globalThis.fetch = (async () => { fetchCalled = true; throw new Error('should not fetch') }) as typeof fetch
+  try {
+    const request = new NextRequest('http://web.local/api/hydrology/ingest', { method: 'POST', headers: { 'x-request-id': 'missing-ingest-token' } })
+    const response = await POST(request, { params: Promise.resolve({ path: ['ingest'] }) })
+
+    assert.equal(response.status, 401)
+    assert.equal(fetchCalled, false)
+    assert.equal(response.headers.get('x-request-id'), 'missing-ingest-token')
+    const json = await response.json()
+    assert.equal(json.code, 'HYDROLOGY_BFF_INGEST_TOKEN_REQUIRED')
+    assert.equal(json.details.phase, 'request_validation')
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+    else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
+  }
+})
+
+test('hydrology BFF does not forward the ingest token to a noncanonical path', async () => {
+  const previousFetch = globalThis.fetch
+  const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  const ingestToken = crypto.randomUUID()
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'https://api.internal'
+  globalThis.fetch = (async (url, init) => {
+    calls.push({ url: String(url), init })
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const request = new NextRequest('http://web.local/api/hydrology/municipalities', { method: 'POST', headers: { 'content-type': 'application/json', 'x-hydrology-ingest-token': ingestToken }, body: '{}' })
+    const response = await POST(request, { params: Promise.resolve({ path: ['municipalities'] }) })
+
+    assert.equal(response.status, 200)
+    assert.equal(calls.length, 1)
+    assert.equal((calls[0]?.init?.headers as Headers).get('x-hydrology-ingest-token'), null)
   } finally {
     globalThis.fetch = previousFetch
     if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']

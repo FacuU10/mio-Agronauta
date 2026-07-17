@@ -211,6 +211,42 @@ test('HydrologyRepository saveTelemetryDeduped inserts changed numeric values an
   assert.equal(calls.find((call) => /SELECT value\s+FROM hydrology_telemetry/i.test(call.sql))?.params[4], 7)
 })
 
+test('HydrologyRepository preserves alert semantics by storing storm alerts with a null value', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const db = { async query(sql: string, params: unknown[] = []) {
+    calls.push({ sql, params })
+    return { rows: [], rowCount: 1, command: '', oid: 0, fields: [] }
+  } }
+  const repo = new HydrologyRepository(db)
+  const observedAt = new Date('2026-06-23T10:00:00.000Z')
+
+  await repo.saveTelemetry([{ source: 'SMN', stationId: 'smn-corrientes', metric: 'storm_alert', unit: 'alerta', value: 7, observedAt, lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh' }])
+
+  const telemetryInsert = calls.find((call) => /INSERT INTO hydrology_telemetry/i.test(call.sql))
+  assert.equal(telemetryInsert?.params[2], 'storm_alert')
+  assert.equal(telemetryInsert?.params[6], null)
+})
+
+test('HydrologyRepository rolls back telemetry writes while preserving a failed ingestion run', async () => {
+  const calls: string[] = []
+  const db = {
+    async query(sql: string, _params: unknown[] = []) {
+      calls.push(sql)
+      if (/INSERT INTO hydrology_telemetry/i.test(sql)) throw new Error('telemetry write failed')
+      if (/SELECT value\s+FROM hydrology_telemetry/i.test(sql)) return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] }
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] }
+    },
+  }
+  const repo = new HydrologyRepository(db)
+  const observedAt = new Date('2026-06-23T10:00:00.000Z')
+
+  await assert.rejects(repo.saveTelemetryDeduped([{ source: 'PNA', stationId: 'corrientes', metric: 'river_height_m', unit: 'm', value: 3.42, observedAt, lastSuccessfulObservedAt: observedAt, quality: 'ok', freshness: 'fresh' }], { source: 'PNA', status: 'success', startedAt: observedAt, recordsIngested: 1 }))
+
+  assert.match(calls[0] ?? '', /^BEGIN$/)
+  assert.ok(calls.some((sql) => /^ROLLBACK$/.test(sql)))
+  assert.equal(calls.filter((sql) => /INSERT INTO hydrology_ingestion_runs/i.test(sql)).length, 1)
+})
+
 test('HydrologyRepository persists and reads proof-correlated ingestion rows by source', async () => {
   const calls: Array<{ sql: string; params: unknown[] }> = []
   const observedAt = new Date('2026-06-23T10:00:00.000Z')

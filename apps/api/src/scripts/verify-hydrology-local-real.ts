@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import dotenv from 'dotenv'
 import { Pool } from 'pg'
-import { hydrologyGovernmentIngestResponseSchema, type HydrologySource } from '@repo/zod-schemas'
+import { hydrologyGovernmentIngestResponseSchema, type HydrologyGovernmentHttpSummary, type HydrologySource } from '@repo/zod-schemas'
 
 interface VerifyOptions { out: string; allowEmpty: boolean }
 interface SourceMatrixRow {
@@ -28,6 +28,8 @@ export interface ProofDbRow {
 }
 
 interface SourceResultForDbProof { status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number }
+interface CompletionObservationResult { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; httpSummary?: HydrologyGovernmentHttpSummary }
+interface CompletionObservation { proofRunId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; results?: CompletionObservationResult[] }
 interface ProofDbClient {
   query(sql: string, params: unknown[]): Promise<{ rows: unknown[] }>
   end(): Promise<void>
@@ -35,6 +37,7 @@ interface ProofDbClient {
 
 const SOURCES: HydrologySource[] = ['PNA', 'INA', 'INMET', 'SMN']
 const DEFAULT_OUT = '../../artifacts/hydrology-local-real-matrix.json'
+const COMPLETION_OBSERVATION_WAIT_MS = 60_000
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
@@ -80,19 +83,39 @@ async function main() {
 async function verifySource(baseUrl: string, proofRunId: string, source: HydrologySource, allowEmpty: boolean, proofDb: ProofDbClient | undefined): Promise<SourceMatrixRow> {
   const response = await fetch(`${baseUrl}/api/hydrology/ingest`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: getHydrologyIngestHeaders(),
     body: JSON.stringify({ contractVersion: '1.0.0', source, reason: 'local-real-one-shot-source', proofRunId }),
   })
   const body = await response.json() as unknown
   const parsed = hydrologyGovernmentIngestResponseSchema.safeParse(body)
-  const result = parsed.success ? parsed.data.results.find((item) => item.source === source) : undefined
-  const localApi = cell(response.status === 202 && parsed.success && parsed.data.proofRunId === proofRunId, `HTTP ${response.status}; contract=${parsed.success}; proofRunId=${parsed.success ? parsed.data.proofRunId : 'invalid'}`)
+  const observation = parsed.success ? await observeCompletion(baseUrl, parsed.data.statusPath, proofRunId) : undefined
+  const result = observation?.results?.find((item) => item.source === source)
+  const localApi = cell(response.status === 202 && parsed.success && parsed.data.proofRunId === proofRunId && completionObservationPassesGate(observation, proofRunId, source), `ackHTTP=${response.status}; ackContract=${parsed.success}; completionStatus=${observation?.status ?? 'not_observed'}; proofRunId=${observation?.proofRunId ?? 'invalid'}`)
   const providerHttp = cell(Boolean(result?.httpSummary), result?.httpSummary ? `${result.httpSummary.host}${result.httpSummary.path} status=${result.httpSummary.status ?? 'n/a'} elapsedMs=${result.httpSummary.elapsedMs}` : 'missing provider http summary', result?.httpSummary)
   const localDb = await readDatabaseEvidence(proofDb, proofRunId, source, result, allowEmpty)
   const prodApi = notRun('Run after deployment with production base URL; local apply cannot mutate production without credentials')
   const prodDb = notRun('Requires read-only production DATABASE_URL; no secret is guessed or printed')
   const browser = notRun('Use Playwright/local browser step against /municipalities after local API has rows')
   return { source, localApi, providerHttp, localDb, prodApi, prodDb, browser, status: [localApi, providerHttp, localDb].every((item) => item.status === 'pass') && sourceResultPassesGate(result, allowEmpty) ? 'pass' : 'blocked' }
+}
+
+export function getHydrologyIngestHeaders(): Record<string, string> {
+  const token = process.env['HYDROLOGY_INGEST_TOKEN']?.trim()
+  if (!token) throw new Error('HYDROLOGY_INGEST_TOKEN is required for local hydrology verification')
+  return { 'content-type': 'application/json', 'x-hydrology-ingest-token': token }
+}
+
+export function completionObservationPassesGate(response: CompletionObservation | undefined, proofRunId: string, source: HydrologySource): boolean {
+  return response?.proofRunId === proofRunId && response.status !== 'queued' && Boolean(response.results?.some((item) => item.source === source))
+}
+
+async function observeCompletion(baseUrl: string, statusPath: string | undefined, proofRunId: string): Promise<CompletionObservation | undefined> {
+  if (!statusPath) return undefined
+  const response = await fetch(`${baseUrl}${statusPath}?waitMs=${COMPLETION_OBSERVATION_WAIT_MS}`, { headers: { accept: 'application/json' } })
+  const body = await response.json() as unknown
+  const parsed = hydrologyGovernmentIngestResponseSchema.safeParse(body)
+  if (!response.ok || !parsed.success || parsed.data.proofRunId !== proofRunId) return undefined
+  return parsed.data
 }
 
 async function readDatabaseEvidence(proofDb: ProofDbClient | undefined, proofRunId: string, source: HydrologySource, result: SourceResultForDbProof | undefined, allowEmpty: boolean): Promise<EvidenceCell> {

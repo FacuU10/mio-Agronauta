@@ -2,10 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   HydrologyIngestionScheduler,
+  type HydrologyIngestionRunner,
   hydrologyIngestionCadences,
   type HydrologyIngestionSource,
 } from './hydrology-ingestion-scheduler'
 import { startHydrologySchedulerFromEnv } from '../../server'
+import { createHydrologyIngestionCoordinator } from '../../presentation/routes/hydrology-government'
 
 test('hydrologyIngestionCadences defines approved official source schedules', () => {
   assert.deepEqual(hydrologyIngestionCadences.PNA, { kind: 'interval', everyMs: 60 * 60 * 1000 })
@@ -35,7 +37,7 @@ test('HydrologyIngestionScheduler schedules interval sources and INA at 18:30 UT
 
 test('startHydrologySchedulerFromEnv is disabled by default and does not create timers', () => {
   let factoryCalls = 0
-  const scheduler = startHydrologySchedulerFromEnv({}, {
+  const scheduler = startHydrologySchedulerFromEnv({ HYDROLOGY_SCHEDULER_ENABLED: 'false' }, {
     schedulerFactory: () => {
       factoryCalls += 1
       return { start() { throw new Error('must not start') } }
@@ -87,6 +89,28 @@ test('startHydrologySchedulerFromEnv maps scheduler sources to one manual govern
   assert.deepEqual(await capturedRunner?.run('INA', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
   assert.deepEqual(manualSources, ['SMN', 'INA'])
   assert.deepEqual(proofRunIds, ['scheduler-proof-test', undefined])
+})
+
+test('hydrology scheduler shares the in-process admission coordinator with manual ingest', async () => {
+  const releases: Array<() => void> = []
+  let calls = 0
+  const coordinator = createHydrologyIngestionCoordinator(async (input) => {
+    calls += 1
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    return { runId: input.runId!, proofRunId: input.proofRunId, status: 'completed', sources: input.source ? [input.source] : ['PNA'] }
+  })
+  let capturedRunner: HydrologyIngestionRunner | undefined
+  startHydrologySchedulerFromEnv({ HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
+    ingestionCoordinator: coordinator,
+    schedulerFactory: (runner) => { capturedRunner = runner; return { start() {} } },
+  })
+
+  const manual = coordinator.start({ source: 'PNA', proofRunId: 'shared-proof' }, 'client')
+  const scheduled = capturedRunner?.run('INMET', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(calls, 2)
+  releases.forEach((release) => release())
+  await Promise.all([manual.ok ? manual.promise : Promise.resolve(), scheduled])
 })
 
 test('HydrologyIngestionScheduler prunes completed daily timeout handles', async () => {

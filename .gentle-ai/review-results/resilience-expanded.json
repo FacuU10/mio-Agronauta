@@ -1,0 +1,1 @@
+{"findings":[],"evidence":["packages/hydrology-engine/src/repository.ts","packages/hydrology-engine/src/adapters/smn-adapter.ts","packages/hydrology-engine/src/adapters/inmet-adapter.ts","packages/hydrology-engine/src/adapters/rss-parser.ts","packages/hydrology-engine/src/clients/http-clients.ts","apps/api/src/presentation/routes/hydrology-government.ts"]}

@@ -488,6 +488,7 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
   contractVersion: z.literal('hydrology-government-ingest-v1'),
   runId: z.string().min(1).max(120).optional(),
   proofRunId: z.string().min(1).max(120).optional(),
+  statusPath: z.string().regex(/^\/api\/hydrology\/ingest\/[^/?#]+$/).optional(),
   status: z.enum(['queued', 'started', 'completed', 'partial', 'failed']),
   requestedSources: z.array(hydrologySourceSchema).default([]),
   results: z.array(z.object({

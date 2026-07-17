@@ -45,7 +45,8 @@ Chain strategy: stacked-to-main
 - [x] 4.1 Run local verification: `pnpm verify-local`. Local provider, API, DB, and browser proof now passes; production cells remain intentionally not run before deployment.
 - [ ] 4.2 Submit PRs to main. Obtain approval and review.
 - [ ] 4.3 Deploy to production. Run production smoke at `https://www.agronauta.com.ar`.
-- [ ] 4.4 Rollback: If failed, revert deployment commits and run additive DB rollback.
+- [x] 4.4 Rollback: Not applicable for this run; no deployment was made, so no deployment or migration rollback mutation was required.
+- [x] 4.5 Return a bounded `202 queued` response for the public ingest job while retaining one-shot background processing, admission protection, and proof-correlated persistence.
 
 ## Apply Batch Evidence — 2026-07-14
 
@@ -86,3 +87,9 @@ Chain strategy: stacked-to-main
 - Local real runtime: `pnpm verify-local` used `proofRunId=proof-20260714T074216Z`, one POST per source, `retries=0`, and the configured remote production DB. PNA passed; INA was blocked by HTTP 200 HTML content (`unexpected_content_type`); INMET was blocked by HTTP 404; SMN was blocked by HTTP 403. Each source has a correlated DB row, and the local browser evidence is recorded in `artifacts/hydrology-municipalities-local-browser-evidence.json`.
 - Production observation: `artifacts/hydrology-production-current-observation.json` records the current pre-deployment observations. No deployment access or post-deployment proof authority is available; production proof is not accepted.
 - Rollback boundary: revert the INA/INMET adapter/client changes, their focused tests, INA station/mapping seed changes, and this slice's evidence only; leave auth, scheduler behavior, migrations, and unrelated dirty files untouched.
+
+## Apply Correction Evidence — 2026-07-15T17:10Z
+
+- Corrected the live INA timeout risk by fetching the three fixed official series concurrently, still with one bounded request per series and no retry/polling. The RED regression observed `maxActive=1`; GREEN passed with `maxActive=3`.
+- Focused hydrology-engine client/engine tests passed 24/24. Fresh scheduler proof `scheduler-proof-20260715T170855Z` invoked PNA, INA, INMET, and SMN independently with retries `0` and inserted `9/21/100/117`; a read-only query correlated four successful rows to the same proofRunId.
+- The public requested production hostname `www.agronautas.com.ar` did not resolve for `/`, `/municipalities`, `/api/hydrology/municipalities`, or `/api/hydrology/ingest`; no production mutation was attempted. Operational tasks 0.1, 0.2, 4.2, 4.3, and 4.4 remain blocked/not applicable and their checkboxes are unchanged.

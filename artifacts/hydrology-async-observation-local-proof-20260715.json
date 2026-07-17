@@ -1,0 +1,140 @@
+{
+  "verifier": "hydrology-local-real-matrix-v1",
+  "proofRunId": "proof-20260715T173519Z",
+  "oneShotPerSource": true,
+  "retries": 0,
+  "sources": [
+    "PNA",
+    "INA",
+    "INMET",
+    "SMN"
+  ],
+  "environment": {
+    "nodeEnv": "unset",
+    "hasDatabaseUrl": true,
+    "databaseTarget": "remote",
+    "providerOverrides": {
+      "PNA": false,
+      "INA": false,
+      "INMET": false,
+      "SMN": false
+    }
+  },
+  "startedAt": "2026-07-15T17:35:25.041Z",
+  "finishedAt": "2026-07-15T17:36:01.703Z",
+  "sourceMatrix": [
+    {
+      "source": "PNA",
+      "localApi": {
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=queued; proofRunId=proof-20260715T173519Z"
+      },
+      "providerHttp": {
+        "status": "blocked",
+        "detail": "missing provider http summary"
+      },
+      "localDb": {
+        "status": "blocked",
+        "detail": "local API did not return a result for PNA"
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "blocked"
+    },
+    {
+      "source": "INA",
+      "localApi": {
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260715T173519Z"
+      },
+      "providerHttp": {
+        "status": "blocked",
+        "detail": "missing provider http summary"
+      },
+      "localDb": {
+        "status": "blocked",
+        "detail": "local API did not return a result for INA"
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "blocked"
+    },
+    {
+      "source": "INMET",
+      "localApi": {
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=queued; proofRunId=proof-20260715T173519Z"
+      },
+      "providerHttp": {
+        "status": "blocked",
+        "detail": "missing provider http summary"
+      },
+      "localDb": {
+        "status": "blocked",
+        "detail": "local API did not return a result for INMET"
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "blocked"
+    },
+    {
+      "source": "SMN",
+      "localApi": {
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=queued; proofRunId=proof-20260715T173519Z"
+      },
+      "providerHttp": {
+        "status": "blocked",
+        "detail": "missing provider http summary"
+      },
+      "localDb": {
+        "status": "blocked",
+        "detail": "local API did not return a result for SMN"
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "blocked"
+    }
+  ],
+  "passed": false
+}

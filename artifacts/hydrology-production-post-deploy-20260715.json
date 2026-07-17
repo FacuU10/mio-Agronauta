@@ -1,0 +1,115 @@
+{
+  "verifier": "hydrology-production-post-deploy-smoke-v1",
+  "observedAt": "2026-07-15T14:13:02.295Z",
+  "overallStatus": "BLOCKED",
+  "baseUrl": "https://www.agronauta.com.ar",
+  "commitObservation": {
+    "localHead": "4c5f4e4aed7444379cdd2a02630c6a521a23245c",
+    "localBranch": "main",
+    "originMain": "4c5f4e4aed7444379cdd2a02630c6a521a23245c",
+    "productionCommitHeader": null,
+    "correlatedToRequestedCommit": false
+  },
+  "deploymentObservation": {
+    "waitedSeconds": 15,
+    "liveHttpObserved": true,
+    "edge": "cloudflare/vercel",
+    "vercelId": "gru1::iad1::krvk4-1784124612333-1d252ef4b0d5",
+    "note": "Production responded after the wait, but the response does not expose a commit and cannot correlate the live revision to 4c5f4e4."
+  },
+  "http": {
+    "method": "GET",
+    "path": "/api/hydrology/municipalities",
+    "status": 200,
+    "observedAt": "2026-07-15T14:09:44.794Z",
+    "elapsedMs": 6358,
+    "bodyBytes": 14057,
+    "headers": {
+      "cache-control": "public, max-age=0, must-revalidate",
+      "cf-cache-status": "DYNAMIC",
+      "content-type": "application/json; charset=utf-8",
+      "server": "cloudflare",
+      "x-matched-path": "/api/hydrology/[...path]",
+      "x-request-id": "5298761c-eafd-42bd-be62-490a2d7cc8d8",
+      "x-vercel-cache": "MISS",
+      "x-vercel-id": "gru1::iad1::krvk4-1784124612333-1d252ef4b0d5"
+    },
+    "payloadSummary": {
+      "contractVersion": "hydrology-government-municipalities-v1",
+      "province": { "provinceCode": "AR-W", "name": "Corrientes" },
+      "municipalityCount": 18,
+      "telemetryCount": 20,
+      "telemetryBySource": { "PNA": 19, "INA": 1, "INMET": 0, "SMN": 0 },
+      "sourceFreshness": {
+        "PNA": { "freshness": "fresh", "lastSuccessfulObservedAt": "2026-07-15T08:47:42.648Z" },
+        "INA": { "freshness": "fresh", "lastSuccessfulObservedAt": "2026-07-15T03:00:00.000Z" },
+        "INMET": { "freshness": "degraded", "lastSuccessfulObservedAt": null },
+        "SMN": { "freshness": "degraded", "lastSuccessfulObservedAt": null }
+      },
+      "fixtureUrls": []
+    }
+  },
+  "ingest": {
+    "method": "POST",
+    "path": "/api/hydrology/ingest",
+    "attempts": 1,
+    "authorizationSent": false,
+    "requestedProofRunId": "proof-20260715T141011Z",
+    "responseProofRunId": null,
+    "status": 503,
+    "observedAt": "2026-07-15T14:10:13.010Z",
+    "elapsedMs": 12729,
+    "body": {
+      "contractVersion": "1.0.0",
+      "code": "HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE",
+      "message": "Hydrology upstream request timed out.",
+      "retryable": true,
+      "details": {
+        "requestId": "c21d6e58-834e-4c56-8e5d-a924567d733d",
+        "phase": "upstream_timeout",
+        "upstreamOrigin": "https://agronauta.onrender.com",
+        "upstreamPath": "/api/hydrology/ingest",
+        "timeoutMs": 12000
+      }
+    }
+  },
+  "database": {
+    "mode": "read-only",
+    "target": "remote",
+    "proofRunId": "proof-20260715T141011Z",
+    "correlationStatus": "pass",
+    "rowCount": 4,
+    "sourceCountsAndIds": {
+      "PNA": { "count": 1, "ids": ["df4d538b-7e78-446f-85f5-a543dab9cd16"] },
+      "INA": { "count": 1, "ids": ["7b43bd08-65d5-4fdf-a1e2-127b9d33197b"] },
+      "INMET": { "count": 1, "ids": ["062329d0-2e43-4fe0-bd7d-0e1fea4b5d89"] },
+      "SMN": { "count": 1, "ids": ["2991ae5b-0e2c-4401-b389-73cb566a8051"] }
+    }
+  },
+  "browser": {
+    "status": "pass",
+    "url": "https://www.agronauta.com.ar/municipalities",
+    "httpStatus": 200,
+    "municipalityCards": 18,
+    "headingVisible": true,
+    "renderedSources": {
+      "PNA": { "count": 1, "state": "ACTUALIZADA", "detail": "Último dato obtenido: 15/07/2026 08:47" },
+      "INA": { "count": 1, "state": "ACTUALIZADA", "detail": "Último dato obtenido: 15/07/2026 03:00" },
+      "INMET": { "count": 1, "state": "NO DISPONIBLE", "detail": "Fuente oficial no disponible" },
+      "SMN": { "count": 1, "state": "NO DISPONIBLE", "detail": "Fuente oficial no disponible" }
+    },
+    "screenshotPath": "artifacts/hydrology-municipalities-production-post-deploy.png",
+    "proofRunId": "proof-20260715T141011Z"
+  },
+  "cron": {
+    "status": "not_checked",
+    "reason": "No existing production cron receipt or log was found; the existing scheduler receipt is local-only and was not treated as production evidence."
+  },
+  "blockers": [
+    "Production POST /api/hydrology/ingest returned HTTP 503 HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE after the 12000 ms upstream timeout.",
+    "INMET and SMN production municipality layers are NO DISPONIBLE/degraded with zero rendered telemetry.",
+    "The live production revision is not commit-correlated to 4c5f4e4.",
+    "Production DB rows were correlated, but correlation does not override the failed HTTP ingest and missing source layers."
+  ],
+  "nextAction": "Investigate the Render upstream timeout and restore production INMET/SMN source availability, then rerun the bounded smoke against a commit-correlated deployment."
+}

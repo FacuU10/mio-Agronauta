@@ -19,19 +19,26 @@ import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
 interface HydrologyGovernmentRouterDeps {
-  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'>
+  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun'>>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
-  ingestionRunner: (input: { source?: HydrologySource; reason?: string; proofRunId?: string }) => Promise<GovernmentIngestionResponse>
+  ingestionRunner: (input: { source?: HydrologySource; reason?: string; proofRunId?: string; runId?: string }) => Promise<GovernmentIngestionResponse>
+  ingestionCoordinator: HydrologyIngestionCoordinator
 }
 
-type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'>
-type GovernmentSourceClient = { fetchTelemetry(): Promise<ScraperResult>; timeoutMs?: number }
+type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun'>>
+type GovernmentSourceClient = { fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult>; timeoutMs?: number }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; httpSummary?: HydrologyGovernmentHttpSummary; diagnostic?: HydrologyGovernmentIngestDiagnostic }
-type GovernmentIngestionResponse = { runId?: string; proofRunId?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+export type GovernmentIngestionResponse = { contractVersion?: 'hydrology-government-ingest-v1'; runId?: string; proofRunId?: string; statusPath?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type CompletedGovernmentIngestionResponse = { runId: string; proofRunId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type HydrologyStartupOperation = 'runner_execution' | 'seed_municipalities'
 type SanitizedErrorDetail = { name: string; message: string; code?: string }
 type HydrologyStartupFailureDetails = { operation: HydrologyStartupOperation; errorName: string; message?: string; code?: string; aggregateErrors?: SanitizedErrorDetail[] }
+export type HydrologyIngestionInput = { source?: HydrologySource; reason?: string; proofRunId?: string; runId?: string }
+export interface HydrologyIngestionCoordinator {
+  start(input: HydrologyIngestionInput, key: string): { ok: true; runId: string; proofRunId: string; status: 'queued'; promise: Promise<GovernmentIngestionResponse>; existing: boolean } | { ok: false; retryAfterMs: number }
+  observe(runId: string, waitMs?: number): Promise<GovernmentIngestionResponse | undefined>
+  run(input: HydrologyIngestionInput, key?: string): Promise<GovernmentIngestionResponse>
+}
 
 interface GovernmentIngestionRunnerDeps {
   repository?: GovernmentIngestionRepository
@@ -47,6 +54,9 @@ const SOURCE_RUNNER_TIMEOUT_CUSHION_MS = 2_000
 const SOURCE_RUNNER_TIMEOUT_CAP_MS = 60_000
 const INGEST_RATE_WINDOW_MS = 60_000
 const INGEST_RATE_LIMIT = 4
+const INGEST_OBSERVATION_WAIT_CAP_MS = 60_000
+const INGEST_OBSERVATION_TTL_MS = 15 * 60_000
+const INGEST_OBSERVATION_MAX = 32
 const PROVINCE = { provinceCode: 'AR-W', name: 'Corrientes' }
 type FloodRiskRiver = 'Paraná' | 'Uruguay'
 type PnaFloodRiskPort = {
@@ -99,13 +109,15 @@ const EXCLUDED_TOPIC_RE = /(tiempo\s+de\s+(?:llegada|propagaci[oó]n|onda|lag)|l
 const OUT_OF_SCOPE_MESSAGE = 'Entiendo la urgencia, pero esos cálculos están fuera del alcance de la Fase 1 de Iberá-Alerta. No calculo tiempos de propagación, routing de onda, caudales/descargas de represas, flujos turbinados o vertidos, ni decisiones de evacuación. Puedo limitar la respuesta a observaciones y pronósticos oficiales disponibles de PNA, INA, INMET y SMN.'
 
 export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmentRouterDeps> = {}): Router {
+  const hydrologyRepository = deps.hydrologyRepository ?? new HydrologyRepository(getPostgresPool())
+  const ingestionRunner = deps.ingestionRunner ?? createGovernmentIngestionRunner()
   const resolved: HydrologyGovernmentRouterDeps = {
-    hydrologyRepository: deps.hydrologyRepository ?? new HydrologyRepository(getPostgresPool()),
+    hydrologyRepository,
     hydrologyCopilotService: deps.hydrologyCopilotService ?? new HydrologyCopilotService(),
-    ingestionRunner: deps.ingestionRunner ?? createGovernmentIngestionRunner(),
+    ingestionRunner,
+    ingestionCoordinator: deps.ingestionCoordinator ?? createHydrologyIngestionCoordinator(ingestionRunner, hydrologyRepository),
   }
   const router = Router()
-  const ingestAdmission = createIngestAdmission()
 
   router.get('/municipalities', async (req, res) => {
     const requestId = requestIdFor(req)
@@ -179,33 +191,57 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     return res.json(payload)
   })
 
+  router.get('/ingest/:runId', async (req, res) => {
+    const requestId = requestIdFor(req)
+    const runId = req.params['runId'] ?? ''
+    const observed = await resolved.ingestionCoordinator.observe(runId, boundedObservationWait(req.query['waitMs']))
+    if (!observed) {
+      return res.status(404).setHeader('x-request-id', requestId).json({
+        contractVersion: '1.0.0',
+        code: 'HYDROLOGY_INGEST_NOT_FOUND',
+        message: 'La ejecución de ingesta no está disponible para observación.',
+        retryable: false,
+        details: { requestId },
+      })
+    }
+    return res
+      .setHeader('x-request-id', requestId)
+      .setHeader('Cache-Control', 'no-store')
+      .json(hydrologyGovernmentIngestResponseSchema.parse({ ...observed, contractVersion: 'hydrology-government-ingest-v1' }))
+  })
+
   router.post('/ingest', async (req, res) => {
+    if (!isHydrologyIngestAuthorized(req)) return res.status(401).json({ contractVersion: '1.0.0', code: 'HYDROLOGY_INGEST_UNAUTHORIZED', message: 'La ingesta hidrológica requiere una credencial interna.', retryable: false })
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
-    const admission = ingestAdmission.tryAcquire(req.ip || 'unknown')
+    const runId = `manual-${randomUUID()}`
+    const proofRunId = parsed.data.proofRunId?.trim() || runId
+    const admission = resolved.ingestionCoordinator.start({ ...parsed.data, runId, proofRunId }, req.ip || 'unknown')
     if (!admission.ok) return res.setHeader('Retry-After', String(Math.ceil(admission.retryAfterMs / 1000))).status(429).json({ ...agronautasContractErrorSchema.parse({ contractVersion: '1.0.0', code: 'INVALID_CONTRACT', message: 'La ingesta hidrológica está limitada temporalmente.', retryable: true }), details: { retryAfterMs: admission.retryAfterMs } })
 
-    try {
-      const result = await resolved.ingestionRunner(parsed.data)
-      return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({ contractVersion: 'hydrology-government-ingest-v1', ...result, proofRunId: parsed.data.proofRunId ?? result.proofRunId }))
-    } catch (error) {
-      const startupFailure = describeHydrologyStartupFailure(error, 'runner_execution')
-      logger.error(startupFailure, 'Government hydrology ingestion could not start')
-      const diagnostic = startupFailureDiagnostic(startupFailure.operation)
-      const requestedSources = parsed.data.source ? [parsed.data.source] : ALL_SOURCES
-      const results: GovernmentIngestionSourceResult[] = requestedSources.map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: 'No se pudo iniciar la ingesta hidrológica', diagnostic }))
-      return res.status(503).json(hydrologyGovernmentIngestResponseSchema.parse({
-        contractVersion: 'hydrology-government-ingest-v1',
-        status: 'failed',
-        proofRunId: parsed.data.proofRunId,
-        requestedSources,
-        results,
-        sources: requestedSources,
-         sourceResults: results.map(({ source, recordsIngested, errorMessage }) => ({ source, status: 'failed' as const, recordsIngested, errorMessage })),
-       }))
-    } finally {
-      admission.release()
-    }
+    const responseRunId = admission.runId
+    const responseProofRunId = admission.proofRunId
+    const requestedSources = parsed.data.source ? [parsed.data.source] : ALL_SOURCES
+    void admission.promise
+      .then((result) => logger.info({ runId: responseRunId, proofRunId: responseProofRunId, status: result.status, sources: result.results?.map(({ source, status, recordsIngested }) => ({ source, status, recordsIngested })) ?? [] }, 'Government hydrology ingestion completed in background'))
+      .catch((error) => {
+        const startupFailure = describeHydrologyStartupFailure(error, 'runner_execution')
+        logger.error({ runId: responseRunId, proofRunId: responseProofRunId, ...startupFailure }, 'Government hydrology ingestion failed in background')
+      })
+      .finally(() => undefined)
+      .catch(() => undefined)
+
+    return res.status(202).json(hydrologyGovernmentIngestResponseSchema.parse({
+      contractVersion: 'hydrology-government-ingest-v1',
+      runId: responseRunId,
+      proofRunId: responseProofRunId,
+      statusPath: `/api/hydrology/ingest/${encodeURIComponent(responseRunId)}`,
+      status: 'queued',
+      requestedSources,
+      results: [],
+      sources: requestedSources,
+      sourceResults: [],
+    }))
   })
 
   router.post('/municipalities/:id/copilot/chat', async (req, res) => {
@@ -224,7 +260,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     }
 
     try {
-      for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context: toMunicipalityCopilotContext(municipality) })) {
+       for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context: buildMunicipalCopilotContext(municipality) })) {
         writeSse(res, event.type, event.data)
       }
       return res.end()
@@ -264,11 +300,11 @@ function toProvinceAlerts(municipality: MunicipalityTelemetryView) {
     }))
 }
 
-function toMunicipalityCopilotContext(municipality: MunicipalityTelemetryDashboard): HydrologyDenseContextV1 {
+export function buildMunicipalCopilotContext(municipality: MunicipalityTelemetryDashboard): HydrologyDenseContextV1 {
   const zone = MUNICIPAL_COPILOT_ZONES.includes(municipality.municipality.name as MunicipalCopilotZone) ? municipality.municipality.name as MunicipalCopilotZone : null
-  const telemetry = zone ? municipality.latestTelemetry : []
+  const telemetry = zone === null ? [] : municipality.latestTelemetry
   const sources = [...new Set(telemetry.map((item) => item.source))]
-  const latest = zone ? sourceFreshnessFor(telemetry).map((item) => item.lastSuccessfulObservedAt).filter(Boolean).sort().at(-1) ?? null : null
+  const latest = zone === null ? null : sourceFreshnessFor(telemetry).map((item) => item.lastSuccessfulObservedAt).filter(Boolean).sort().at(-1) ?? null
   return {
     contractVersion: 'hydrology-dense-context-v1',
     fieldId: municipality.municipality.id,
@@ -290,18 +326,81 @@ const MUNICIPAL_COPILOT_ZONES = ['Mercedes', 'Ituzaingó', 'Virasoro'] as const
 type MunicipalCopilotZone = (typeof MUNICIPAL_COPILOT_ZONES)[number]
 
 function createIngestAdmission() {
-  let inFlight = false
   const requests = new Map<string, number[]>()
   return {
     tryAcquire(key: string): { ok: true; release: () => void } | { ok: false; retryAfterMs: number } {
       const now = Date.now()
       const recent = (requests.get(key) ?? []).filter((startedAt) => now - startedAt < INGEST_RATE_WINDOW_MS)
-      if (inFlight || recent.length >= INGEST_RATE_LIMIT) return { ok: false, retryAfterMs: Math.max(1_000, INGEST_RATE_WINDOW_MS - (now - (recent[0] ?? now))) }
+      if (recent.length >= INGEST_RATE_LIMIT) return { ok: false, retryAfterMs: Math.max(1_000, INGEST_RATE_WINDOW_MS - (now - (recent[0] ?? now))) }
       requests.set(key, [...recent, now])
-      inFlight = true
-      return { ok: true, release: () => { inFlight = false } }
+      return { ok: true, release: () => undefined }
     },
   }
+}
+
+export function createHydrologyIngestionCoordinator(runner: (input: HydrologyIngestionInput) => Promise<GovernmentIngestionResponse> = createGovernmentIngestionRunner(), failureRepository?: Partial<Pick<HydrologyRepository, 'saveIngestionRun'>>): HydrologyIngestionCoordinator {
+  const admission = createIngestAdmission()
+  const repository = failureRepository ?? new HydrologyRepository(getPostgresPool())
+  const active = new Map<string, { runId: string; proofRunId: string; promise: Promise<GovernmentIngestionResponse> }>()
+  const observations = new Map<string, { response: GovernmentIngestionResponse; promise: Promise<GovernmentIngestionResponse>; expiresAt: number }>()
+  const pruneObservations = (now = Date.now()) => {
+    for (const [runId, observation] of observations) if (observation.expiresAt <= now) observations.delete(runId)
+    while (observations.size > INGEST_OBSERVATION_MAX) observations.delete(observations.keys().next().value as string)
+  }
+  const start = (input: HydrologyIngestionInput, key: string) => {
+    const sourceKey = input.source ?? 'ALL'
+    const existing = active.get(sourceKey)
+    if (existing) return { ok: true as const, ...existing, status: 'queued' as const, existing: true }
+    const runId = input.runId?.trim() || `manual-${randomUUID()}`
+    const proofRunId = input.proofRunId?.trim() || runId
+    const acquired = admission.tryAcquire(key)
+    if (!acquired.ok) return acquired
+    const requestedSources = input.source ? [input.source] : ALL_SOURCES
+    const queued: GovernmentIngestionResponse = { contractVersion: 'hydrology-government-ingest-v1', runId, proofRunId, status: 'queued', requestedSources, results: [], sources: requestedSources, sourceResults: [] }
+    const promise = Promise.resolve()
+      .then(() => runner({ ...input, runId, proofRunId: input.proofRunId?.trim() || undefined }))
+      .catch(async (error) => {
+        await persistHydrologyRunFailure(repository, input.source ? [input.source] : ALL_SOURCES, proofRunId, error)
+        throw error
+      })
+    const observedPromise = promise
+      .then((response) => {
+        observations.set(runId, { response, promise: observedPromise, expiresAt: Date.now() + INGEST_OBSERVATION_TTL_MS })
+        pruneObservations()
+        return response
+      })
+      .catch(() => {
+        const response: GovernmentIngestionResponse = { contractVersion: 'hydrology-government-ingest-v1', runId, proofRunId, status: 'failed', requestedSources, results: requestedSources.map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: 'Hydrology ingestion startup failed' })), sources: requestedSources, sourceResults: requestedSources.map((source) => ({ source, status: 'failed', recordsIngested: 0, errorMessage: 'Hydrology ingestion startup failed' })) }
+        observations.set(runId, { response, promise: observedPromise, expiresAt: Date.now() + INGEST_OBSERVATION_TTL_MS })
+        pruneObservations()
+        return response
+      })
+    observations.set(runId, { response: queued, promise: observedPromise, expiresAt: Date.now() + INGEST_OBSERVATION_TTL_MS })
+    pruneObservations()
+    active.set(sourceKey, { runId, proofRunId, promise })
+    void promise.finally(() => { if (active.get(sourceKey)?.promise === promise) active.delete(sourceKey); acquired.release() }).catch(() => undefined)
+    return { ok: true as const, runId, proofRunId, status: 'queued' as const, promise, existing: false }
+  }
+  const observe = async (runId: string, waitMs = 0) => {
+    pruneObservations()
+    const observation = observations.get(runId)
+    if (!observation || observation.response.status !== 'queued' || waitMs <= 0) return observation?.response
+    await waitForObservation(observation.promise, Math.min(waitMs, INGEST_OBSERVATION_WAIT_CAP_MS))
+    return observations.get(runId)?.response ?? observation.response
+  }
+  return { start, observe, run: (input, key = 'scheduler') => { const result = start(input, key); return result.ok ? result.promise : Promise.reject(new Error(`hydrology ingest admission retry after ${result.retryAfterMs}ms`)) } }
+}
+
+export async function waitForObservation(promise: Promise<GovernmentIngestionResponse>, waitMs: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, waitMs)
+    void promise.then(() => { clearTimeout(timeout); resolve() }, () => { clearTimeout(timeout); resolve() })
+  })
+}
+
+function boundedObservationWait(value: unknown): number {
+  const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : 0
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, INGEST_OBSERVATION_WAIT_CAP_MS) : 0
 }
 
 function formatArgentinaDateTime(iso: string): string {
@@ -375,9 +474,9 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
     throw error
   })
 
-  return async (input: { source?: HydrologySource; proofRunId?: string }): Promise<CompletedGovernmentIngestionResponse> => {
+  return async (input: { source?: HydrologySource; proofRunId?: string; runId?: string }): Promise<CompletedGovernmentIngestionResponse> => {
     const sources = input.source ? [input.source] : ALL_SOURCES
-    const runId = `manual-${randomUUID()}`
+    const runId = input.runId?.trim() || `manual-${randomUUID()}`
     const proofRunId = input.proofRunId?.trim() || runId
     await ensureMunicipalitiesSeeded()
     const results: GovernmentIngestionSourceResult[] = []
@@ -449,7 +548,7 @@ async function persistHydrologySourceRun(repository: GovernmentIngestionReposito
     await repository.saveTelemetryDeduped(records, run)
     return true
   } catch (error) {
-    logger.error({ runId, source, operation: 'save_source_run', ...safeErrorLogFields(error) }, 'Government hydrology source persistence failed after provider execution')
+    logger.error({ runId, source, operation: 'save_source_run', recordsAttempted: records.length, proofRunId: run.proofRunId, ...safeErrorLogFields(error) }, 'Government hydrology source persistence failed after provider execution')
     return false
   }
 }
@@ -471,23 +570,41 @@ function toSourceResults(results: GovernmentIngestionSourceResult[]): Array<{ so
 }
 
 async function fetchWithDeadline(client: GovernmentSourceClient, source: HydrologySource, timeoutMs: number): Promise<ScraperResult> {
-  let timeout: NodeJS.Timeout | undefined
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  let providerPromise: Promise<ScraperResult>
+  let deadlineTimer: NodeJS.Timeout | undefined
   try {
-    return await Promise.race([
-      client.fetchTelemetry(),
+    providerPromise = client.fetchTelemetry(controller.signal)
+    void providerPromise.catch(() => undefined)
+    const result = await Promise.race([
+      providerPromise,
       new Promise<ScraperResult>((resolve) => {
-        timeout = setTimeout(() => resolve({
+        deadlineTimer = setTimeout(() => resolve({
           ok: false,
           error: `timeout after ${timeoutMs}ms`,
           diagnostic: { failureKind: 'runner_timeout', reason: `${source} runner timed out`, attempts: 1, timeoutMs },
         }), timeoutMs)
       }),
     ])
+    return controller.signal.aborted ? { ok: false, error: `timeout after ${timeoutMs}ms`, diagnostic: { failureKind: 'runner_timeout', reason: `${source} runner timed out`, attempts: 1, timeoutMs } } : result
   } catch (error) {
+    if (controller.signal.aborted) return { ok: false, error: `timeout after ${timeoutMs}ms`, diagnostic: { failureKind: 'runner_timeout', reason: `${source} runner timed out`, attempts: 1, timeoutMs } }
     return thrownProviderFailureDiagnostic(source, error, timeoutMs)
   } finally {
-    if (timeout) clearTimeout(timeout)
+    clearTimeout(timeout)
+    if (deadlineTimer) clearTimeout(deadlineTimer)
   }
+}
+
+async function persistHydrologyRunFailure(repository: Partial<Pick<HydrologyRepository, 'saveIngestionRun'>>, sources: HydrologySource[], proofRunId: string, error: unknown): Promise<void> {
+  if (!repository.saveIngestionRun) {
+    logger.warn({ proofRunId, sources, operation: 'save_ingestion_failure' }, 'Government hydrology background failure could not be persisted: repository API unavailable')
+    return
+  }
+  const writes = await Promise.allSettled(sources.map(async (source) => repository.saveIngestionRun!({ source, proofRunId, status: 'failed', startedAt: new Date(), finishedAt: new Date(), recordsIngested: 0, errorMessage: `Hydrology ingestion background failure: ${describeHydrologyStartupFailure(error, 'runner_execution').operation}` })))
+  const failedWrites = writes.filter((write) => write.status === 'rejected').length
+  if (failedWrites > 0) logger.error({ proofRunId, sources, failedWrites, operation: 'save_ingestion_failure' }, 'Government hydrology background failure persistence was partial')
 }
 
 function thrownProviderFailureDiagnostic(source: HydrologySource, error: unknown, timeoutMs: number): ScraperResult {
@@ -534,10 +651,6 @@ function emptyResponseDiagnostic(source: HydrologySource, timeoutMs = DEFAULT_SO
 
 function genericFailureDiagnostic(source: HydrologySource, reason: string, timeoutMs = DEFAULT_SOURCE_RUNNER_TIMEOUT_MS): HydrologyGovernmentIngestDiagnostic {
   return { failureKind: 'network_failure', reason: reason.length > 120 ? `${source} ingest failed` : reason, attempts: 1, timeoutMs }
-}
-
-function startupFailureDiagnostic(operation: HydrologyStartupOperation = 'runner_execution'): HydrologyGovernmentIngestDiagnostic {
-  return { failureKind: 'startup_failure', reason: `ingest startup failed during ${operation}`, attempts: 1, timeoutMs: DEFAULT_SOURCE_RUNNER_TIMEOUT_MS }
 }
 
 export function describeHydrologyStartupFailure(error: unknown, fallbackOperation: HydrologyStartupOperation): HydrologyStartupFailureDetails {
@@ -598,6 +711,8 @@ function governmentFallbackTelemetry(source: HydrologySource, observedAt: Date):
 export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>>; rowCount?: number | null }> }): Promise<{ inserted: number; skipped: boolean }> {
   const pnaIds = PNA_FLOOD_RISK_PORTS.map((municipality) => municipality.id)
   const existing = await db.query('SELECT COUNT(*)::int AS count FROM agronautas_municipalities WHERE id = ANY($1)', [pnaIds])
+  if (Number(existing.rows[0]?.['count'] ?? 0) === PNA_FLOOD_RISK_PORTS.length) return { inserted: 0, skipped: true }
+
   for (const station of INA_SERIES_STATIONS) {
     await db.query(
       `INSERT INTO hydrology_stations (id, source, station_code, station_name, river_name, zone, source_url, is_active, country_code)
@@ -613,8 +728,6 @@ export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: strin
       [station.id, station.id, station.name, station.river, `https://alerta.ina.gob.ar/a5/obs/puntual/series/${station.id}`],
     )
   }
-  if (Number(existing.rows[0]?.['count'] ?? 0) === PNA_FLOOD_RISK_PORTS.length) return { inserted: 0, skipped: true }
-
   for (const municipality of PNA_FLOOD_RISK_PORTS) {
     const stationCode = municipality.primaryPnaPortId
     await db.query(
@@ -659,6 +772,11 @@ export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: strin
   }
 
   return { inserted: PNA_FLOOD_RISK_PORTS.length, skipped: false }
+}
+
+function isHydrologyIngestAuthorized(req: Request): boolean {
+  const token = process.env['HYDROLOGY_INGEST_TOKEN']?.trim()
+  return Boolean(token && req.header('x-hydrology-ingest-token') === token)
 }
 
 function pnaPort(id: string, localityId: string, name: string, river: FloodRiskRiver, alertHeightM: number, evacuationHeightM: number, lng: number, lat: number, overrides: Partial<Pick<PnaFloodRiskPort, 'primaryPnaPortId' | 'secondaryPnaPortIds' | 'inaStationIds' | 'inmetStationIds'>> = {}): PnaFloodRiskPort {
