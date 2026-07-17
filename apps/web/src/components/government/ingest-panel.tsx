@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, type FormEvent } from 'react'
 
 type IngestStatus = 'queued' | 'started' | 'completed' | 'partial' | 'failed'
 type SourceStatus = 'success' | 'failed' | 'empty' | 'skipped'
@@ -20,6 +20,7 @@ export type SafeIngestView = {
 }
 
 const INGEST_BODY = JSON.stringify({ contractVersion: '1.0.0', reason: 'operator_browser' })
+const VERIFY_BODY = JSON.stringify({ contractVersion: '1.0.0' })
 
 const statusLabels: Record<IngestStatus, string> = {
   queued: 'Ingesta en cola',
@@ -38,6 +39,7 @@ const sourceStatusLabels: Record<SourceStatus, string> = {
 
 export function IngestPanel() {
   const [token, setToken] = useState('')
+  const [authorized, setAuthorized] = useState(false)
   const [pending, setPending] = useState(false)
   const [result, setResult] = useState<SafeIngestView | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -48,12 +50,48 @@ export function IngestPanel() {
     return () => {
       mountedRef.current = false
       setToken('')
+      setAuthorized(false)
     }
   }, [])
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
+  async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (pending || !token.trim()) return
+
+    setPending(true)
+    setError(null)
+
+    try {
+      const response = await fetch('/api/hydrology/ingest/verify', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-hydrology-ingest-token': token,
+        },
+        body: VERIFY_BODY,
+        cache: 'no-store',
+      })
+
+      if (!response.ok) throw new IngestRequestError(safeErrorForStatus(response.status))
+      const payload = await response.json() as { contractVersion?: string; authorized?: boolean }
+      if (payload.contractVersion !== '1.0.0' || payload.authorized !== true) {
+        throw new IngestRequestError('No se pudo verificar el acceso a la ingesta.')
+      }
+      if (mountedRef.current) setAuthorized(true)
+    } catch (cause) {
+      if (mountedRef.current) {
+        setToken('')
+        setAuthorized(false)
+        setError(cause instanceof IngestRequestError ? cause.message : 'No se pudo verificar el acceso a la ingesta.')
+      }
+    } finally {
+      if (mountedRef.current) setPending(false)
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (pending || !authorized || !token.trim()) return
 
     setPending(true)
     setResult(null)
@@ -82,12 +120,16 @@ export function IngestPanel() {
     } finally {
       if (mountedRef.current) {
         setToken('')
+        setAuthorized(false)
         setPending(false)
       }
     }
   }
 
-  const statusMessage = pending ? 'Procesando ingesta…' : result ? statusLabels[result.status] : 'Listo para iniciar'
+  const statusMessage = pending
+    ? authorized ? 'Procesando ingesta…' : 'Verificando acceso…'
+    : result ? statusLabels[result.status]
+    : authorized ? 'Acceso verificado' : 'Se requiere verificación de acceso'
 
   return (
     <main className="min-h-screen bg-slate-950 px-5 py-8 text-slate-50 sm:px-8 lg:px-12">
@@ -96,30 +138,43 @@ export function IngestPanel() {
         <h1 className="mt-4 text-4xl font-black tracking-tight sm:text-5xl">Ingesta hidrológica</h1>
         <p className="mt-4 max-w-2xl text-slate-300">Iniciá una actualización puntual de las fuentes oficiales. El token se usa únicamente para esta solicitud y se descarta al finalizar.</p>
 
-        <form aria-label="Iniciar ingesta hidrológica" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl" onSubmit={submit}>
-          <label className="block text-sm font-bold text-slate-100" htmlFor="hydrology-ingest-token">Token de ingesta</label>
-          <input
-            id="hydrology-ingest-token"
-            name="hydrology-ingest-token"
-            type="password"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            onInput={(event) => setToken(event.currentTarget.value)}
-            autoComplete="off"
-            spellCheck={false}
-            required
-            aria-describedby="hydrology-ingest-token-help"
-            className="mt-2 block w-full rounded-2xl border border-white/15 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-300/20"
-          />
-          <p id="hydrology-ingest-token-help" className="mt-2 text-sm text-slate-400">Campo obligatorio. No se guarda en el navegador.</p>
-          <button
-            type="submit"
-            disabled={pending || !token.trim()}
-            className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-amber-300 px-5 py-3 font-black text-slate-950 transition hover:bg-amber-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {pending ? 'Procesando…' : 'Iniciar ingesta'}
-          </button>
-        </form>
+        {!authorized ? (
+          <form aria-label="Verificar acceso a ingesta" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl" onSubmit={verify}>
+            <label className="block text-sm font-bold text-slate-100" htmlFor="hydrology-ingest-token">Token de ingesta</label>
+            <input
+              id="hydrology-ingest-token"
+              name="hydrology-ingest-token"
+              type="password"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              onInput={(event) => setToken(event.currentTarget.value)}
+              autoComplete="off"
+              spellCheck={false}
+              required
+              aria-describedby="hydrology-ingest-token-help"
+              className="mt-2 block w-full rounded-2xl border border-white/15 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-300/20"
+            />
+            <p id="hydrology-ingest-token-help" className="mt-2 text-sm text-slate-400">Campo obligatorio. Se conserva únicamente en memoria durante esta página.</p>
+            <button
+              type="submit"
+              disabled={pending || !token.trim()}
+              className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-amber-300 px-5 py-3 font-black text-slate-950 transition hover:bg-amber-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pending ? 'Verificando…' : 'Verificar acceso'}
+            </button>
+          </form>
+        ) : (
+          <form aria-label="Iniciar ingesta hidrológica" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl" onSubmit={submit}>
+            <p className="text-sm text-teal-100">Acceso verificado para esta página. La credencial permanece solo en memoria.</p>
+            <button
+              type="submit"
+              disabled={pending}
+              className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-amber-300 px-5 py-3 font-black text-slate-950 transition hover:bg-amber-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pending ? 'Procesando…' : 'Iniciar ingesta'}
+            </button>
+          </form>
+        )}
 
         <p className="mt-6 rounded-2xl border border-teal-300/20 bg-teal-300/10 px-4 py-3 text-teal-100" role="status" aria-live="polite" aria-busy={pending}>
           {statusMessage}

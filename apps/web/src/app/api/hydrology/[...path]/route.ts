@@ -16,9 +16,9 @@ export async function DELETE(request: NextRequest, context: RouteContext) { retu
 async function proxyHydrologyRequest(request: NextRequest, context: RouteContext) {
   const { path = [] } = await context.params
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID()
-  const isCanonicalIngest = isCanonicalIngestRequest(request.method, path)
+  const isProtectedIngest = isProtectedIngestRequest(request.method, path)
   const ingestToken = request.headers.get(HYDROLOGY_INGEST_TOKEN_HEADER)
-  if (isCanonicalIngest && !ingestToken?.trim()) {
+  if (isProtectedIngest && !ingestToken?.trim()) {
     return hydrologyIngestTokenRequired(requestId)
   }
 
@@ -27,7 +27,7 @@ async function proxyHydrologyRequest(request: NextRequest, context: RouteContext
     console.error('[hydrology-bff] upstream configuration failure', { requestId, reason: upstream.reason, nodeEnv: process.env['NODE_ENV'] ?? 'unset' })
     return hydrologyProxyError(503, requestId, 'upstream_configuration', 'Hydrology upstream is not configured for production.')
   }
-  const headers = buildUpstreamHeaders(request, requestId, isCanonicalIngest)
+  const headers = buildUpstreamHeaders(request, requestId, isProtectedIngest)
   console.info('[hydrology-bff] forwarding hydrology request', {
     requestId,
     method: request.method,
@@ -50,7 +50,7 @@ async function proxyHydrologyRequest(request: NextRequest, context: RouteContext
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'AbortError'
     console.error('[hydrology-bff] upstream fetch failure', { requestId, upstreamOrigin: upstream.origin, upstreamPath: upstream.pathname, errorName: error instanceof Error ? error.name : typeof error, timedOut, timeoutMs })
-    return hydrologyProxyError(timedOut ? 503 : 502, requestId, timedOut ? 'upstream_timeout' : 'upstream_fetch', timedOut ? 'Hydrology upstream request timed out.' : 'Hydrology upstream request failed.', { upstreamOrigin: upstream.origin, upstreamPath: upstream.pathname, timeoutMs })
+    return hydrologyProxyError(timedOut ? 503 : 502, requestId, timedOut ? 'upstream_timeout' : 'upstream_fetch', timedOut ? 'Hydrology upstream request timed out.' : 'Hydrology upstream request failed.', timedOut ? {} : { upstreamOrigin: upstream.origin, upstreamPath: upstream.pathname, timeoutMs })
   } finally {
     clearTimeout(timeout)
   }
@@ -58,6 +58,7 @@ async function proxyHydrologyRequest(request: NextRequest, context: RouteContext
   const responseHeaders = new Headers()
   copyResponseHeader(upstreamResponse.headers, responseHeaders, 'content-type')
   responseHeaders.set('x-request-id', upstreamResponse.headers.get('x-request-id') || requestId)
+  responseHeaders.set('Cache-Control', 'no-store')
   return new NextResponse(upstreamResponse.body, { status: upstreamResponse.status, headers: responseHeaders })
 }
 
@@ -79,18 +80,21 @@ function buildUpstreamUrl(path: string[], search: string): { ok: true; url: stri
   return { ok: true, url: `${baseUrl}${pathname}${search}`, origin: parsed.origin, pathname }
 }
 
-function isCanonicalIngestRequest(method: string, path: string[]): boolean {
-  return method === 'POST' && path.length === 1 && path[0] === 'ingest'
+function isProtectedIngestRequest(method: string, path: string[]): boolean {
+  return method === 'POST' && (
+    (path.length === 1 && path[0] === 'ingest') ||
+    (path.length === 2 && path[0] === 'ingest' && path[1] === 'verify')
+  )
 }
 
-function buildUpstreamHeaders(request: NextRequest, requestId: string, isCanonicalIngest: boolean): Headers {
+function buildUpstreamHeaders(request: NextRequest, requestId: string, isProtectedIngest: boolean): Headers {
   const headers = new Headers()
   for (const name of FORWARDED_HEADERS) {
     const value = request.headers.get(name)
     if (value) headers.set(name, value)
   }
   headers.set('x-request-id', requestId)
-  if (isCanonicalIngest) {
+  if (isProtectedIngest) {
     const ingestToken = request.headers.get(HYDROLOGY_INGEST_TOKEN_HEADER)
     if (ingestToken) headers.set(HYDROLOGY_INGEST_TOKEN_HEADER, ingestToken)
   }
@@ -104,7 +108,7 @@ function hydrologyIngestTokenRequired(requestId: string) {
     message: 'Hydrology ingest authorization is required.',
     retryable: false,
     details: { requestId, phase: 'request_validation' },
-  }, { status: 401, headers: { 'x-request-id': requestId } })
+  }, { status: 401, headers: { 'x-request-id': requestId, 'Cache-Control': 'no-store' } })
 }
 
 function hydrologyProxyError(status: 502 | 503, requestId: string, phase: 'upstream_configuration' | 'upstream_fetch' | 'upstream_timeout', message: string, details: Record<string, unknown> = {}) {
@@ -114,7 +118,7 @@ function hydrologyProxyError(status: 502 | 503, requestId: string, phase: 'upstr
     message,
     retryable: true,
     details: { requestId, phase, ...details },
-  }, { status, headers: { 'x-request-id': requestId } })
+  }, { status, headers: { 'x-request-id': requestId, 'Cache-Control': 'no-store' } })
 }
 
 function upstreamTimeoutMs(): number {

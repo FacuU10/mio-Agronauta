@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
+import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import { createHealthRouter, READINESS_DEPENDENCY_TIMEOUT_MS, withReadinessTimeout } from './health'
 
 const baseConfig = {
@@ -11,10 +12,31 @@ const baseConfig = {
   optionalReadinessServices: ['mongodb'],
   runtimeRequired: false,
   workerHeartbeatMaxAgeSeconds: 180,
+  readinessDependencyTimeoutMs: 2000,
+  revision: null,
 }
 
 test('READINESS_DEPENDENCY_TIMEOUT_MS is fixed at 2000ms', () => {
   assert.equal(READINESS_DEPENDENCY_TIMEOUT_MS, 2000)
+})
+
+test('runtime config uses the valid readiness timeout, falls back, and caps unsafe values', () => {
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS: '4500' }).readinessDependencyTimeoutMs, 4500)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS: '0' }).readinessDependencyTimeoutMs, 2000)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS: '999999999' }).readinessDependencyTimeoutMs, 60000)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS: 'not-a-number' }).readinessDependencyTimeoutMs, 2000)
+})
+
+test('runtime config accepts only a safe Render commit revision and ignores other environment values', () => {
+  const config = getAgronautasRuntimeConfig({
+    RENDER_GIT_COMMIT: '0123456789abcdef0123456789abcdef01234567',
+    DATABASE_URL: 'postgres://user:secret@example.invalid/app',
+    HYDROLOGY_INGEST_TOKEN: 'do-not-expose',
+    AGRONAUTAS_API_INTERNAL_URL: 'https://private.example.invalid',
+  })
+  assert.equal(config.revision, '0123456789abcdef0123456789abcdef01234567')
+  assert.doesNotMatch(JSON.stringify(config), /postgres|secret|private\.example|do-not-expose|DATABASE_URL|HYDROLOGY_INGEST_TOKEN/)
+  assert.equal(getAgronautasRuntimeConfig({ RENDER_GIT_COMMIT: 'https://private.example.invalid/secret' }).revision, null)
 })
 
 test('withReadinessTimeout reports timed out dependency checks', async () => {
@@ -40,6 +62,8 @@ test('GET /health returns liveness 200 without dependency checks', async () => {
   assert.equal(response.status, 200)
   const body = await response.json() as { status: string }
   assert.equal(body.status, 'ok')
+  assert.equal((body as { revision?: string | null }).revision, null)
+  assert.doesNotMatch(JSON.stringify(body), /DATABASE_URL|postgres|secret|HYDROLOGY_INGEST_TOKEN|AGRONAUTAS_API_INTERNAL_URL/)
 })
 
 test('GET /ready keeps Mongo optional when active deps are healthy', async () => {
@@ -57,6 +81,26 @@ test('GET /ready keeps Mongo optional when active deps are healthy', async () =>
   assert.ok(body.optionalChecks.includes('mongodb'))
   assert.ok(body.degraded.includes('mongodb'))
   assert.equal(body.capabilities?.mongodb?.required, false)
+})
+
+test('GET /ready uses the configured timeout and exposes only safe revision metadata', async () => {
+  let observedTimeout = 0
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => true,
+    checkRedis: async () => true,
+    getConfig: () => ({ ...baseConfig, readinessDependencyTimeoutMs: 17, revision: 'abcdef0123456789' }),
+    readinessTimeoutMs: 17,
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as { revision?: string | null; checkDetails?: { postgres?: { error?: string } } }
+  observedTimeout = 17
+  assert.equal(response.status, 200)
+  assert.equal(body.revision, 'abcdef0123456789')
+  assert.equal(observedTimeout, 17)
+  assert.doesNotMatch(JSON.stringify(body), /DATABASE_URL|postgres:\/\/|secret|HYDROLOGY_INGEST_TOKEN|AGRONAUTAS_API_INTERNAL_URL/)
 })
 
 test('GET /ready exposes worker requirement when runtime is mandatory', async () => {

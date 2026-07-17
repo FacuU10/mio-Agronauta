@@ -211,7 +211,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   router.post('/ingest', async (req, res) => {
-    if (!isHydrologyIngestAuthorized(req)) return res.status(401).json({ contractVersion: '1.0.0', code: 'HYDROLOGY_INGEST_UNAUTHORIZED', message: 'La ingesta hidrológica requiere una credencial interna.', retryable: false })
+    if (!isHydrologyIngestAuthorized(req)) return respondHydrologyIngestUnauthorized(res)
     const parsed = hydrologyGovernmentIngestRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'Payload inválido', { issues: parsed.error.flatten() })
     const runId = `manual-${randomUUID()}`
@@ -242,6 +242,14 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       sources: requestedSources,
       sourceResults: [],
     }))
+  })
+
+  router.post('/ingest/verify', (req, res) => {
+    if (!isHydrologyIngestAuthorized(req)) return respondHydrologyIngestUnauthorized(res)
+    return res
+      .setHeader('Cache-Control', 'no-store')
+      .status(200)
+      .json({ contractVersion: '1.0.0', authorized: true })
   })
 
   router.post('/municipalities/:id/copilot/chat', async (req, res) => {
@@ -777,6 +785,13 @@ export async function seedGovernmentMunicipalitiesIfEmpty(db: { query(sql: strin
 function isHydrologyIngestAuthorized(req: Request): boolean {
   const token = process.env['HYDROLOGY_INGEST_TOKEN']?.trim()
   return Boolean(token && req.header('x-hydrology-ingest-token') === token)
+}
+
+function respondHydrologyIngestUnauthorized(res: Response) {
+  return res
+    .setHeader('Cache-Control', 'no-store')
+    .status(401)
+    .json({ contractVersion: '1.0.0', code: 'HYDROLOGY_INGEST_UNAUTHORIZED', message: 'La ingesta hidrológica requiere una credencial interna.', retryable: false })
 }
 
 function pnaPort(id: string, localityId: string, name: string, river: FloodRiskRiver, alertHeightM: number, evacuationHeightM: number, lng: number, lat: number, overrides: Partial<Pick<PnaFloodRiskPort, 'primaryPnaPortId' | 'secondaryPnaPortIds' | 'inaStationIds' | 'inmetStationIds'>> = {}): PnaFloodRiskPort {

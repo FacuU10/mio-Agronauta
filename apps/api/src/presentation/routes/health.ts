@@ -45,7 +45,7 @@ export async function withReadinessTimeout(
       service,
       ok: false,
       timedOut: message.includes('timed out'),
-      error: message,
+      error: message.includes('timed out') ? message : `${service} readiness check failed`,
     }
   } finally {
     if (timeout) clearTimeout(timeout)
@@ -61,12 +61,13 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
     checkRedis,
     getConfig: getAgronautasRuntimeConfig,
     getWorkerReadiness: async (maxHeartbeatAgeSeconds) => workerReadinessRepository.getWorkerReadiness(maxHeartbeatAgeSeconds),
-    readinessTimeoutMs: READINESS_DEPENDENCY_TIMEOUT_MS,
+    readinessTimeoutMs: getAgronautasRuntimeConfig().readinessDependencyTimeoutMs,
     ...deps,
   }
 
   router.get('/health', (req: Request, res: Response) => {
-    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() })
+    const config = resolved.getConfig()
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString(), revision: config.revision })
   })
 
   router.get('/ready', async (req: Request, res: Response) => {
@@ -105,6 +106,7 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
 
       res.status(ready ? 200 : 503).json({
         ready,
+        revision: config.revision,
         mode: config.mode,
         routePrefix: config.routePrefix,
         checks: dependencyChecks,
@@ -146,10 +148,11 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         },
         timestamp: new Date().toISOString(),
       })
-    } catch (error) {
+    } catch {
       res.status(503).json({
         ready: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        revision: null,
+        error: 'Readiness check failed',
         timestamp: new Date().toISOString(),
       })
     }

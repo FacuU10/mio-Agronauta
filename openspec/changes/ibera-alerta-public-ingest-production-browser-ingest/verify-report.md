@@ -21,7 +21,7 @@ persistence: hybrid
 
 # Final Verification Report — Iberá-Alerta Complete Candidate
 
-**Verified:** 2026-07-16, after the scoped verifier/header and browser-ingest remediation.
+**Verified:** 2026-07-17, including the scoped verifier/header and browser-ingest remediation plus the current read-only Render/runtime checks below.
 **Scope:** `ibera-alerta-production-proof-recovery`, `ibera-alerta-public-ingest-production`, and `ibera-alerta-public-ingest-production-browser-ingest`, including all three current `apply-progress.md` artifacts.
 **Mode:** Strict TDD; hybrid artifacts; automatic; force-chained/stacked-to-main; review budget 1200.
 
@@ -142,7 +142,55 @@ The preserved `artifacts/hydrology-production-post-deploy-20260715.json` is fail
 - No production scheduler receipt/log or `/municipalities/ingest` browser-origin ingest proof exists.
 - The latest apply-progress also records the requested plural hostname `www.agronautas.com.ar` as NXDOMAIN; the singular deployment observation must not be substituted for the requested hostname.
 
-These observations are intentionally not counted as production PASS evidence, and no production request was run during this verification.
+These historical observations are intentionally not counted as production PASS evidence. The current executor performed the additional read-only checks recorded below; no authenticated ingest request was made.
+
+## Current read-only Render/runtime verification — 2026-07-17
+
+### Deployment discovery
+
+| Item | Result |
+|---|---|
+| Candidate revision | Local `HEAD` and `origin/main` both equal `b59b76571834d481f3bf29e50444820e30e8e613`. |
+| Public web origin | `https://www.agronauta.com.ar`, confirmed by repository OpenSpec/runbook references and live HTTP. |
+| API origin | `https://agronauta.onrender.com`, discovered from the live BFF's safe `HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE` details and confirmed by live Render headers. |
+| Provider revision correlation | **BLOCKED**. Live responses expose Render request/instance metadata but no commit SHA. No Render service configuration or non-empty Render credentials exist locally; unauthenticated `GET https://api.render.com/v1/services` returned `401`, and no Render CLI is installed. |
+
+### Production endpoint/data matrix
+
+| Origin / endpoint | Observed result | Classification |
+|---|---|---|
+| Web `GET /health`, `/ready`, `/agronautas/health`, `/agronautas/ready` | All returned `404`; these are API routes, not web-origin routes. | Informational |
+| Web `GET /api/hydrology/municipalities` via BFF | One bounded HTTP request returned `503` after 13.3 s with safe `HYDROLOGY_BFF_UPSTREAM_UNAVAILABLE`, `phase=upstream_timeout`, `timeoutMs=12000`, and upstream `https://agronauta.onrender.com/api/hydrology/municipalities`. A later Playwright navigation received `200`. | **CRITICAL: intermittent BFF/upstream behavior; not stable PASS** |
+| API `GET /health` | HTTP `200`, JSON `status=ok`, Render origin header present. | PASS for liveness |
+| API `GET /ready` | First bounded check returned HTTP `503` because Postgres readiness timed out; a subsequent bounded check returned HTTP `200`, `ready=true`, with Postgres/Redis/worker required checks true and Mongo optional/degraded. | **CRITICAL: readiness is inconsistent** |
+| API `GET /api/hydrology/municipalities` | HTTP `200`, JSON contract, 18 municipalities. | PASS for direct API read |
+| API municipality source freshness | PNA `fresh` (last success `2026-07-15T17:02:59.547Z`); INA `fresh` (`2026-07-15T15:00:00.000Z`); INMET `degraded` with no last-success timestamp; SMN `degraded` with no last-success timestamp. | **CRITICAL: INMET/SMN unavailable** |
+| API `GET /api/hydrology/municipalities/corrientes/dashboard` | HTTP `200`; 3 telemetry cards from INA/PNA, 4 provenance entries covering PNA/INA/INMET/SMN, 0 alerts. | PASS contract/read; degraded source coverage remains |
+| API `GET /api/hydrology/municipalities/alvear/dashboard` | HTTP `200`; 1 PNA telemetry card, 4 provenance entries covering PNA/INA/INMET/SMN, 0 alerts. | PASS contract/read; degraded source coverage remains |
+
+### Production UI matrix
+
+| Page / flow | Observed result | Classification |
+|---|---|---|
+| Browser `GET /municipalities` | Playwright loaded HTTP `200`; visible page showed 18 localities, PNA/INA `ACTUALIZADA`, and INMET/SMN `NO DISPONIBLE`. The browser's same-origin hydrology request returned HTTP `200` in that run. | PASS for page rendering, **not stable BFF proof** |
+| Browser `GET /municipalities/ingest` | Playwright loaded HTTP `200`; one password input, labelled token control, and submit button were present. No submission was performed. | **CRITICAL spec mismatch: anonymous page is accessible** |
+| Authenticated browser ingest | Not attempted by instruction; no token was read, guessed, printed, or submitted. | **BLOCKED / UNTESTED** |
+
+### Render scheduler/cron matrix
+
+| Check | Result |
+|---|---|
+| Render scheduler/cron status | **UNAVAILABLE**: provider API requires authentication (`401` without credentials), no local Render CLI/configuration was found, and no provider execution receipt was exposed by the public endpoints. |
+| Production cron proof | **ABSENT**. No authenticated cron invocation, receipt, `proofRunId`, or correlated ingestion-run proof was created or inferred. |
+
+### Current precise blockers
+
+1. The live Render revision cannot be correlated to `b59b765` with available read-only provider access.
+2. The web BFF produced a bounded HTTP 503 upstream timeout at least once, while a later browser request succeeded; production read-path stability is therefore unproven.
+3. API readiness flapped between Postgres-timeout HTTP 503 and HTTP 200; the first failure is a production operational blocker.
+4. INMET and SMN have no successful production observation and render as degraded/unavailable; only PNA and INA currently have fresh data.
+5. `/municipalities/ingest` is anonymously reachable and renders its token form, contradicting the current browser spec's anonymous-rejection requirement.
+6. No provider-managed cron status or execution receipt is available, and authenticated browser ingest was intentionally not performed.
 
 ## Exact remaining blockers
 

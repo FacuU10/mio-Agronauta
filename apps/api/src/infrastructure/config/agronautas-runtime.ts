@@ -2,6 +2,8 @@ type RuntimeMode = 'real' | 'demo'
 
 const DEFAULT_ROUTE_PREFIX = '/agronautas'
 const DEFAULT_OPTIONAL_READINESS_SERVICES = ['mongodb']
+export const DEFAULT_READINESS_DEPENDENCY_TIMEOUT_MS = 2000
+export const MAX_READINESS_DEPENDENCY_TIMEOUT_MS = 60_000
 
 export interface AgronautasRuntimeConfig {
   mode: RuntimeMode
@@ -10,6 +12,8 @@ export interface AgronautasRuntimeConfig {
   optionalReadinessServices: string[]
   runtimeRequired: boolean
   workerHeartbeatMaxAgeSeconds: number
+  readinessDependencyTimeoutMs: number
+  revision: string | null
 }
 
 export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env): AgronautasRuntimeConfig {
@@ -20,6 +24,8 @@ export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env)
     optionalReadinessServices: parseCsv(env['READINESS_OPTIONAL_SERVICES'], DEFAULT_OPTIONAL_READINESS_SERVICES),
     runtimeRequired: parseBoolean(env['AGRONAUTAS_RUNTIME_REQUIRED'], false),
     workerHeartbeatMaxAgeSeconds: parsePositiveInteger(env['AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS'], 180),
+    readinessDependencyTimeoutMs: parseBoundedPositiveInteger(env['AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS'], DEFAULT_READINESS_DEPENDENCY_TIMEOUT_MS, MAX_READINESS_DEPENDENCY_TIMEOUT_MS),
+    revision: parseRevision(env['RENDER_GIT_COMMIT']),
   }
 }
 
@@ -72,4 +78,15 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function parseBoundedPositiveInteger(value: string | undefined, fallback: number, cap: number): number {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, cap)
+}
+
+function parseRevision(value: string | undefined): string | null {
+  const revision = value?.trim()
+  return revision && /^[0-9a-f]{7,64}$/i.test(revision) ? revision : null
 }

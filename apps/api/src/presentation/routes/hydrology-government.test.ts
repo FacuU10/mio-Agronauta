@@ -121,6 +121,49 @@ test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', asyn
   assert.deepEqual(json.requestedSources, ['PNA'])
 })
 
+test('POST /api/hydrology/ingest/verify returns the exact safe authorization contract without starting ingestion', async () => {
+  const token = crypto.randomUUID()
+  let coordinatorCalled = false
+  await withEnv({ HYDROLOGY_INGEST_TOKEN: token }, async () => {
+    const response = await request(createTestApp({ ingestionCoordinator: {
+      start() { coordinatorCalled = true; throw new Error('verification must not start ingestion') },
+      observe: async () => undefined,
+      run: async () => { coordinatorCalled = true; throw new Error('verification must not run ingestion') },
+    } }), '/api/hydrology/ingest/verify', {
+      method: 'POST',
+      headers: { 'x-hydrology-ingest-token': token },
+      body: '{}',
+    }, { authenticateIngest: false })
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    const body = await response.json()
+    assert.deepEqual(body, { contractVersion: '1.0.0', authorized: true })
+    assert.equal(coordinatorCalled, false)
+    assert.equal(JSON.stringify(body).includes(token), false)
+  })
+})
+
+test('POST /api/hydrology/ingest/verify rejects missing and invalid credentials without leaking the token', async () => {
+  const configuredToken = crypto.randomUUID()
+  const invalidToken = crypto.randomUUID()
+  await withEnv({ HYDROLOGY_INGEST_TOKEN: configuredToken }, async () => {
+    for (const headerToken of [undefined, invalidToken]) {
+      const response = await request(createTestApp(), '/api/hydrology/ingest/verify', {
+        method: 'POST',
+        headers: headerToken ? { 'x-hydrology-ingest-token': headerToken } : undefined,
+        body: '{}',
+      }, { authenticateIngest: false })
+      assert.equal(response.status, 401)
+      assert.equal(response.headers.get('cache-control'), 'no-store')
+      const body = await response.json() as Record<string, unknown>
+      assert.equal(body['code'], 'HYDROLOGY_INGEST_UNAUTHORIZED')
+      assert.equal(JSON.stringify(body).includes(configuredToken), false)
+      assert.equal(JSON.stringify(body).includes(invalidToken), false)
+    }
+  })
+})
+
 test('POST /api/hydrology/ingest echoes the requested proofRunId when the runner omits it', async () => {
   let receivedProofRunId: string | undefined
   const response = await request(createTestApp({ ingestionRunner: async (input) => {
@@ -777,6 +820,55 @@ test('default government ingestion runner continues when one source fails and pe
   assert.ok(saved.some((item) => item.source === 'SMN' && item.status === 'failed' && item.records === 0 && /upstream unavailable/.test(item.errorMessage ?? '')))
 })
 
+test('environmental INMET and SMN geo-block degradation preserves last-known telemetry and never reports scraper success', async () => {
+  const lastKnown = [telemetryRecord('INMET'), telemetryRecord('SMN')]
+  const stored: unknown[] = lastKnown.map((record) => ({ ...record }))
+  const savedRuns: Array<{ source: string; status: string; records: number }> = []
+  const runner = createGovernmentIngestionRunner({
+    now: () => new Date('2026-06-26T12:00:00.000Z'),
+    allowFixtureFallback: false,
+    clients: {
+      PNA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      INA: { async fetchTelemetry() { return { ok: true as const, records: [] } } },
+      INMET: { async fetchTelemetry() { return { ok: false as const, error: 'HTTP 403 Forbidden', diagnostic: { failureKind: 'http_status' as const, reason: 'INMET upstream blocked the deployment region', attempts: 1, upstreamStatus: 403 } } } },
+      SMN: { async fetchTelemetry() { return { ok: false as const, error: 'HTTP 403 Forbidden', diagnostic: { failureKind: 'http_status' as const, reason: 'SMN upstream blocked the deployment region', attempts: 1, upstreamStatus: 403 } } } },
+    },
+    repository: {
+      async saveTelemetryDeduped(records, run) {
+        savedRuns.push({ source: run.source, status: run.status, records: records.length })
+        stored.push(...records.map((record) => ({ ...record })))
+        return { inserted: records.length, unchanged: 0 }
+      },
+    },
+    seedDb: {
+      async query(sql: string) {
+        if (/SELECT COUNT\(\*\)::int AS count FROM agronautas_municipalities/.test(sql)) return { rows: [{ count: 17 }], rowCount: 1 }
+        return { rows: [], rowCount: 1 }
+      },
+    },
+  })
+
+  const result = await runner({})
+
+  assert.equal(result.status, 'partial')
+  assert.deepEqual(result.results.map((item) => [item.source, item.status, item.recordsIngested]), [
+    ['PNA', 'empty', 0],
+    ['INA', 'empty', 0],
+    ['INMET', 'failed', 0],
+    ['SMN', 'failed', 0],
+  ])
+  assert.deepEqual(result.results.filter((item) => item.source === 'INMET' || item.source === 'SMN').map((item) => [item.source, item.diagnostic?.failureKind, item.diagnostic?.upstreamStatus]), [
+    ['INMET', 'http_status', 403],
+    ['SMN', 'http_status', 403],
+  ])
+  assert.deepEqual(stored, lastKnown)
+  assert.deepEqual(savedRuns.filter((run) => run.source === 'INMET' || run.source === 'SMN'), [
+    { source: 'INMET', status: 'failed', records: 0 },
+    { source: 'SMN', status: 'failed', records: 0 },
+  ])
+  assert.doesNotMatch(JSON.stringify(result), /"source":"(?:INMET|SMN)"[^}]*"status":"success"/)
+})
+
 test('government municipality seeding inserts Corrientes PNA municipalities only when empty', async () => {
   const queries: Array<{ sql: string; params?: unknown[] }> = []
   const db = {
@@ -927,6 +1019,7 @@ function createTestApp(overrides: Partial<Parameters<typeof createHydrologyGover
     },
     hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: 'test' } }; yield { type: 'token' as const, data: 'Respuesta oficial.' }; yield { type: 'done' as const, data: { model: 'test' } } } },
     ingestionRunner: overrides.ingestionRunner,
+    ingestionCoordinator: overrides.ingestionCoordinator,
   }))
   return app
 }
