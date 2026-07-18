@@ -9,6 +9,7 @@ import {
   hydrologyGovernmentIngestDiagnosticSchema,
   hydrologyDenseContextV1Schema,
   hydrologyGovernmentIngestResponseSchema,
+  hydrologyOperatorReceiptSchema,
   hydrologyProviderPayloadGuardSchema,
   hydrologyTelemetrySchema,
   pdfReportRequestSchema,
@@ -97,6 +98,75 @@ test('hydrology government ingest schema carries proof run id and safe http summ
   assert.equal(parsed.proofRunId, 'proof-20260714T000000Z')
   assert.equal(parsed.results[0]?.httpSummary?.host, 'www.ina.gob.ar')
   assert.equal(parsed.results[0]?.httpSummary?.attempts, 1)
+})
+
+test('hydrology operator receipt records redacted Cron, source, chat and row correlation evidence', () => {
+  const parsed = hydrologyOperatorReceiptSchema.parse({
+    verifier: 'ibera-alerta-operator-v1',
+    evidenceScope: 'production',
+    capturedAt: '2026-07-18T12:00:00.000Z',
+    runtime: {
+      service: 'agronautas-api',
+      revision: 'render-revision-redacted',
+      config: {
+        schedulerEnabled: false,
+        secretNames: ['HYDROLOGY_INGEST_TOKEN', 'GROQ_API_KEY'],
+        regionalRunner: { mode: 'proxy', allowlisted: true },
+      },
+    },
+    request: {
+      requestId: 'request-1',
+      method: 'POST',
+      path: '/api/hydrology/ingest',
+      acknowledgementStatus: 202,
+      responseShape: {
+        contractVersion: 'hydrology-government-ingest-v1',
+        status: 'partial',
+        proofRunId: 'proof-1',
+        hasStatusPath: true,
+        resultCount: 4,
+      },
+    },
+    sourceOutcomes: [
+      { source: 'PNA', status: 'success', recordsIngested: 1, attempts: 1 },
+      { source: 'INA', status: 'empty', recordsIngested: 0, attempts: 1 },
+      { source: 'INMET', status: 'failed', recordsIngested: 0, attempts: 1 },
+      { source: 'SMN', status: 'success', recordsIngested: 1, attempts: 1 },
+    ],
+    rowCorrelation: [
+      { rowId: 'row-1', source: 'PNA', proofRunId: 'proof-1', status: 'success', recordsIngested: 1, correlated: true },
+      { rowId: 'row-2', source: 'INA', proofRunId: 'proof-1', status: 'empty', recordsIngested: 0, correlated: true },
+      { rowId: 'row-3', source: 'INMET', proofRunId: 'proof-1', status: 'failed', recordsIngested: 0, correlated: true },
+      { rowId: 'row-4', source: 'SMN', proofRunId: 'proof-1', status: 'success', recordsIngested: 1, correlated: true },
+    ],
+    chat: { mode: 'degraded-fallback', status: 'degraded', eventTypes: ['metadata', 'token', 'done'], rawContentIncluded: false },
+    passed: true,
+  })
+
+  assert.equal(parsed.request.acknowledgementStatus, 202)
+  assert.equal(parsed.rowCorrelation[0]?.proofRunId, parsed.request.responseShape.proofRunId)
+  assert.equal(parsed.chat.rawContentIncluded, false)
+})
+
+test('hydrology operator receipt rejects secret values, raw chat, and mismatched row correlation', () => {
+  const base = {
+    verifier: 'ibera-alerta-operator-v1' as const,
+    evidenceScope: 'local' as const,
+    capturedAt: '2026-07-18T12:00:00.000Z',
+    runtime: { service: 'api', revision: 'local', config: { schedulerEnabled: false, secretNames: ['HYDROLOGY_INGEST_TOKEN'], regionalRunner: { mode: 'direct' as const, allowlisted: true } } },
+    request: { requestId: 'request-1', method: 'POST' as const, path: '/api/hydrology/ingest' as const, acknowledgementStatus: 202 as const, responseShape: { contractVersion: 'hydrology-government-ingest-v1' as const, status: 'completed' as const, proofRunId: 'proof-1', hasStatusPath: true, resultCount: 1 } },
+    sourceOutcomes: [{ source: 'PNA' as const, status: 'success' as const, recordsIngested: 1, attempts: 1 as const }],
+    rowCorrelation: [{ rowId: 'row-1', source: 'PNA' as const, proofRunId: 'proof-1', status: 'success' as const, recordsIngested: 1, correlated: true as const }],
+    chat: { mode: 'not_run' as const, status: 'not_run' as const, eventTypes: [] as const, rawContentIncluded: false as const },
+    passed: true,
+  }
+  const secretValue = hydrologyOperatorReceiptSchema.safeParse({ ...base, runtime: { ...base.runtime, config: { ...base.runtime.config, ingestToken: 'must-not-appear' } } })
+  const rawChat = hydrologyOperatorReceiptSchema.safeParse({ ...base, chat: { ...base.chat, rawContentIncluded: true } })
+  const mismatchedRow = hydrologyOperatorReceiptSchema.safeParse({ ...base, rowCorrelation: [{ ...base.rowCorrelation[0], proofRunId: 'other-proof' }] })
+
+  assert.equal(secretValue.success, false)
+  assert.equal(rawChat.success, false)
+  assert.equal(mismatchedRow.success, false)
 })
 
 test('hydrology ingest diagnostic schema rejects unsafe or unbounded public fields', () => {

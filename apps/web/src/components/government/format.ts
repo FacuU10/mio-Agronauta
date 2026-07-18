@@ -20,7 +20,7 @@ export function formatOfficialTime(value?: string | null) {
 
 export function statusLabel(status?: string | null) {
   const labels: Record<string, string> = {
-    fresh: 'actualizada',
+    fresh: 'Vigente',
     stale: 'demorada',
     degraded: 'degradada',
     missing: 'sin datos',

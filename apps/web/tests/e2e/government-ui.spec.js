@@ -1,41 +1,52 @@
 import { expect, test } from '@playwright/test'
 
 const overviewPayload = {
-  contractVersion: 'government-municipalities-v1',
-  province: { code: 'AR-W', name: 'Corrientes' },
-  lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z',
+  contractVersion: 'hydrology-government-municipalities-v1',
+  province: { provinceCode: 'AR-W', name: 'Corrientes' },
   sourceFreshness: [
-    { source: 'PNA', status: 'fresh', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' },
-    { source: 'INA', status: 'fresh', lastSuccessfulObservedAt: '2026-06-23T18:30:00.000Z' },
-    { source: 'SMN', status: 'stale', lastSuccessfulObservedAt: '2026-06-23T12:10:00.000Z' },
-    { source: 'INMET', status: 'degraded', lastSuccessfulObservedAt: '2026-06-22T09:15:00.000Z', errorMessage: 'Estación sin respuesta' },
+    { source: 'PNA', freshness: 'fresh', label: 'Último dato PNA', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' },
+    { source: 'INA', freshness: 'fresh', label: 'Último dato INA', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' },
+    { source: 'SMN', freshness: 'degraded', label: 'Último dato SMN', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' },
+    { source: 'INMET', freshness: 'degraded', label: 'Estación sin respuesta', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' },
   ],
   provinceAlerts: [
-    { severity: 'warning', title: 'Vigilancia reforzada', source: 'SMN', observedAt: '2026-06-23T12:10:00.000Z', localizedWarning: 'Tormentas aisladas con monitoreo activo.' },
+    { zone: 'Vigilancia reforzada', source: 'SMN', stationId: 'SMN-NEA', observedAt: '2026-06-23T12:10:00.000Z', lastSuccessfulObservedAt: '2026-06-23T12:10:00.000Z', message: 'Tormentas aisladas con monitoreo activo.' },
   ],
   municipalities: [
-    { id: 'ituzaingo', localityId: 'ituzaingo', name: 'Ituzaingó', riskLevel: 'high', localizedWarning: 'Altura en observación prioritaria.', alertHeightM: 4.8, evacuationHeightM: 5.4, latest: { pnaHeightM: 4.92, rainMm: 18, stormSeverity: 2, lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' } },
-    { id: 'mercedes', localityId: 'mercedes', name: 'Mercedes', riskLevel: 'moderate', localizedWarning: 'Lluvias persistentes sin alerta crítica.', latest: { rainMm: 9, lastSuccessfulObservedAt: '2026-06-23T11:20:00.000Z' } },
+    {
+      id: 'ituzaingo', localityId: 'ituzaingo', name: 'Ituzaingó', provinceCode: 'AR-W', alertHeightM: 4.8, evacuationHeightM: 5.4,
+      gaugeMappings: { primaryPnaPortId: 'PNA-ITU', secondaryPnaPortIds: [], inaStationIds: ['INA-ITU'], smnRegionIds: ['SMN-NEA'], inmetStationIds: ['INMET-URU'] },
+      latestTelemetry: [
+        { source: 'PNA', stationId: 'PNA-ITU', metric: 'river_height_m', value: 4.92, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', sourceUrl: 'https://example.com/pna' },
+        { source: 'INA', stationId: 'INA-ITU', metric: 'river_height_m', value: 4.8, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', sourceUrl: 'https://example.com/ina' },
+      ],
+      officialAlerts: [],
+    },
+    {
+      id: 'mercedes', localityId: 'mercedes', name: 'Mercedes', provinceCode: 'AR-W',
+      gaugeMappings: { primaryPnaPortId: 'PNA-MER', secondaryPnaPortIds: [], inaStationIds: [], smnRegionIds: [], inmetStationIds: [] },
+      latestTelemetry: [{ source: 'PNA', stationId: 'PNA-MER', metric: 'river_height_m', value: 3.1, unit: 'm', observedAt: '2026-06-23T11:20:00.000Z', lastSuccessfulObservedAt: '2026-06-23T11:20:00.000Z' }],
+      officialAlerts: [],
+    },
   ],
 }
 
 const dashboardPayload = {
-  contractVersion: 'government-municipality-dashboard-v1',
-  municipality: { id: 'ituzaingo', localityId: 'ituzaingo', name: 'Ituzaingó', alertHeightM: 4.8, evacuationHeightM: 5.4 },
+  contractVersion: 'hydrology-government-dashboard-v1',
+  municipality: { id: 'ituzaingo', localityId: 'ituzaingo', name: 'Ituzaingó', alertHeightM: 4.8, evacuationHeightM: 5.4, officialAlerts: [] },
   telemetryCards: [
-    { source: 'PNA', stationId: 'PNA-ITU', metric: 'river_height', value: 4.92, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', label: 'Altura del río' },
-    { source: 'INMET', stationId: 'INMET-URU', metric: 'rainfall', value: null, unit: 'mm', observedAt: '2026-06-22T09:15:00.000Z', lastSuccessfulObservedAt: '2026-06-22T09:15:00.000Z', label: 'Lluvia fronteriza' },
+    { source: 'PNA', stationId: 'PNA-ITU', metric: 'river_height_m', value: 4.92, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', label: 'Altura del río' },
+    { source: 'INMET', stationId: 'INMET-URU', metric: 'rain_mm', value: null, unit: 'mm', observedAt: '2026-06-22T09:15:00.000Z', lastSuccessfulObservedAt: '2026-06-22T09:15:00.000Z', label: 'Lluvia fronteriza' },
     { source: 'SMN', stationId: 'SMN-NEA', metric: 'storm_alert', value: 2, unit: 'nivel', observedAt: '2026-06-23T12:10:00.000Z', lastSuccessfulObservedAt: '2026-06-23T12:10:00.000Z', label: 'Alerta de tormenta' },
   ],
-  inaForecast30Days: [
-    { stationId: 'INA-ITU', horizonDays: 1, forecastHeightM: 4.8, observedAt: '2026-06-23T18:30:00.000Z', confidence: 'normal' },
-    { stationId: 'INA-ITU', horizonDays: 30, forecastHeightM: 4.35, observedAt: '2026-06-23T18:30:00.000Z', confidence: 'speculative' },
+  inaPredictions30d: [
+    { source: 'INA', stationId: 'INA-ITU', metric: 'river_height_m', value: 4.8, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', forecastHorizonDays: 1, confidence: 'normal' },
+    { source: 'INA', stationId: 'INA-ITU', metric: 'river_height_m', value: 4.35, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', forecastHorizonDays: 30, confidence: 'speculative' },
   ],
-  smn: { alerts: [{ title: 'Tormentas aisladas' }], rainfall: [{ value: 18, unit: 'mm' }], freshness: 'stale' },
-  inmet: { stations: [{ id: 'INMET-URU' }], rainfall: [], freshness: 'degraded' },
+  alerts: [{ source: 'SMN', stationId: 'SMN-NEA', metric: 'storm_alert', value: 2, unit: 'nivel', observedAt: '2026-06-23T12:10:00.000Z', lastSuccessfulObservedAt: '2026-06-23T12:10:00.000Z', label: 'Alerta de tormenta' }],
   provenance: [
-    { source: 'PNA', url: 'https://contenidosweb.prefecturanaval.gob.ar/alturas/', lastRunStatus: 'success' },
-    { source: 'INMET', lastRunStatus: 'degraded', errorMessage: 'Estación sin respuesta' },
+    { source: 'PNA', freshness: 'fresh', label: 'Último dato obtenido: 23/06/2026 13:40', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z' },
+    { source: 'INMET', freshness: 'degraded', label: 'Estación sin respuesta', lastSuccessfulObservedAt: '2026-06-23T09:15:00.000Z' },
   ],
 }
 
@@ -68,11 +79,11 @@ test('government detail keeps degraded partial-source states explicit', async ({
     ...dashboardPayload,
     telemetryCards: [
       ...dashboardPayload.telemetryCards,
-      { source: 'INA', stationId: 'INA-ITU', metric: 'forecast_height', value: null, unit: 'm', observedAt: null, lastSuccessfulObservedAt: null, label: 'Pronóstico INA' },
+      { source: 'INA', stationId: 'INA-ITU', metric: 'river_height_m', value: null, unit: 'm', observedAt: null, lastSuccessfulObservedAt: null, label: 'Pronóstico INA' },
     ],
     provenance: [
       ...dashboardPayload.provenance,
-      { source: 'INA', lastRunStatus: 'degraded', errorMessage: 'Pronóstico no disponible' },
+      { source: 'INA', freshness: 'degraded', label: 'Pronóstico no disponible', lastSuccessfulObservedAt: null },
     ],
   }
   await mockGovernmentApi(page, overviewPayload, degradedDashboard)

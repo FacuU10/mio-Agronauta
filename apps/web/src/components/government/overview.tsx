@@ -18,7 +18,9 @@ type Municipality = {
   evacuationHeightM?: number
   gaugeMappings: { primaryPnaPortId: string | null; secondaryPnaPortIds: string[]; inaStationIds: string[]; smnRegionIds: string[]; inmetStationIds: string[] }
   latestTelemetry: Telemetry[]
+  officialAlerts: OfficialAlert[]
 }
+type OfficialAlert = { source: 'SMN' | 'INMET'; coverageKey: string; message: string; observedAt: string; lastSuccessfulObservedAt: string; freshness: 'fresh' | 'degraded'; sourceUrl?: string }
 type OverviewPayload = {
   province: { provinceCode: string; name: string }
   sourceFreshness: Freshness[]
@@ -99,8 +101,18 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
                     <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">PNA</dt><dd className="font-black text-white">{summary.pnaHeightM ?? '—'} m</dd></div>
                     <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">INA</dt><dd className="font-black text-white">{summary.inaHeightM ?? '—'} m</dd></div>
                   </dl>
-                  {summary.inaHeightM != null ? <p className="mt-3 text-sm text-slate-300">INA · {formatOfficialTime(summary.inaObservedAt)}{summary.inaSourceUrl ? <> · <a className="underline underline-offset-2" href={summary.inaSourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></> : null}</p> : null}
+                  {summary.inaHeightM != null ? <p className="mt-3 text-sm text-slate-300">INA · {formatOfficialTime(summary.inaObservedAt)}{summary.inaSourceUrl ? <> · <a className="underline underline-offset-2" href={summary.inaSourceUrl} target="_blank" rel="noreferrer">Ver fuente INA</a></> : null}</p> : null}
                   <p className="mt-4 flex items-center gap-2 text-sm text-slate-300"><Clock3 size={16} aria-hidden="true" />{formatOfficialTime(summary.lastSuccessfulObservedAt)}</p>
+                  <div className="mt-5 border-t border-white/10 pt-4" aria-label={`Alertas oficiales de ${municipality.name}`}>
+                    {municipality.officialAlerts.length > 0 ? municipality.officialAlerts.map((alert) => (
+                      <div key={`${alert.source}-${alert.coverageKey}-${alert.observedAt}`} className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4">
+                        <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-100">{alert.source}</p>
+                        <p className="mt-2 font-black text-white">{alert.message}</p>
+                        <p className="mt-2 text-sm text-amber-100"><span>{`Cobertura ${alert.coverageKey}`}</span><span> · </span><span>{`Estado: ${statusLabel(alert.freshness)}`}</span></p>
+                        <p className="mt-1 text-sm text-amber-100">{formatOfficialTime(alert.lastSuccessfulObservedAt || alert.observedAt)}{alert.sourceUrl ? <> · <a className="underline underline-offset-2" href={alert.sourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></> : null}</p>
+                      </div>
+                    )) : <p className="text-sm text-slate-300"><span>Sin alertas oficiales recientes</span><span>.</span></p>}
+                  </div>
                   <Link href={`/municipalities/${municipality.id}`} className="mt-5 inline-flex items-center gap-2 rounded-full bg-amber-300 px-4 py-2 font-black text-slate-950 transition-colors duration-200 hover:bg-amber-200 focus-visible:ring-4 focus-visible:ring-amber-100">Abrir tablero de {municipality.name}<ArrowUpRight size={18} aria-hidden="true" /></Link>
                 </article>
               )})}

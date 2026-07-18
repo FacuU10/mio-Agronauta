@@ -126,6 +126,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     try {
       municipalities = (await resolved.hydrologyRepository.getMunicipalityTelemetryOverview(PROVINCE.provinceCode)).map((municipality) => ({
         ...municipality,
+        officialAlerts: municipality.officialAlerts ?? [],
         latestTelemetry: municipality.latestTelemetry.filter((item) => !item.sourceUrl?.startsWith('offline-fixture://')),
       }))
       logger.info({ requestId, phase: 'repository_query', municipalityCount: municipalities.length, telemetryCount: municipalities.flatMap((item) => item.latestTelemetry).length }, 'Government hydrology municipalities repository query succeeded')
@@ -181,7 +182,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
 
     const payload = hydrologyGovernmentDashboardResponseSchema.parse({
       contractVersion: 'hydrology-government-dashboard-v1',
-      municipality: municipality.municipality,
+      municipality: { ...municipality.municipality, officialAlerts: municipality.officialAlerts ?? [] },
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
       inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
@@ -273,7 +274,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       }
       return res.end()
     } catch (error) {
-      writeSse(res, 'error', { message: 'El copiloto hidrológico no está disponible.', reason: error instanceof Error ? error.message : 'unknown_error' })
+      writeSse(res, 'error', { message: 'El copiloto hidrológico no está disponible.', reason: 'upstream_unavailable' })
       return res.end()
     }
   })

@@ -28,6 +28,9 @@ export const hydrologyTargetZones = ['Mercedes', 'Ituzaingó', 'Virasoro'] as co
 export const hydrologyMetrics = ['river_height_m', 'rain_mm', 'storm_alert'] as const
 export const hydrologyForecastConfidence = ['normal', 'speculative'] as const
 export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure', 'response_too_large'] as const
+export const hydrologyOperatorReceiptScopes = ['local', 'production'] as const
+export const hydrologyOperatorReceiptChatModes = ['groq', 'degraded-fallback', 'not_run'] as const
+export const hydrologyOperatorReceiptRunnerModes = ['direct', 'proxy'] as const
 export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
 export const hydrologyExcludedInputs = [
   'itaipu_discharge',
@@ -424,6 +427,15 @@ export const hydrologyGovernmentMunicipalitySchema = z.object({
     inmetStationIds: z.array(z.string().min(1).max(80)).default([]),
   }),
   latestTelemetry: z.array(hydrologyTelemetrySchema).default([]),
+  officialAlerts: z.array(z.object({
+    source: z.enum(['SMN', 'INMET']),
+    coverageKey: z.string().min(1).max(120),
+    message: z.string().min(1).max(300),
+    observedAt: z.string().datetime(),
+    lastSuccessfulObservedAt: z.string().datetime(),
+    freshness: z.enum(['fresh', 'degraded']),
+    sourceUrl: z.string().url().optional(),
+  })).default([]),
 })
 
 export const hydrologyGovernmentProvinceAlertSchema = z.object({
@@ -509,6 +521,70 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
     recordsIngested: z.number().int().nonnegative().default(0),
     errorMessage: z.string().min(1).max(240).optional(),
   })).default([]),
+})
+
+export const hydrologyOperatorReceiptSchema = z.object({
+  verifier: z.literal('ibera-alerta-operator-v1'),
+  evidenceScope: z.enum(hydrologyOperatorReceiptScopes),
+  capturedAt: z.string().datetime(),
+  runtime: z.object({
+    service: z.string().trim().min(1).max(80),
+    revision: z.string().trim().min(1).max(160),
+    config: z.object({
+      schedulerEnabled: z.boolean(),
+      secretNames: z.array(z.string().trim().regex(/^[A-Z][A-Z0-9_]*$/)).max(20),
+      regionalRunner: z.object({
+        mode: z.enum(hydrologyOperatorReceiptRunnerModes),
+        allowlisted: z.boolean(),
+      }).strict(),
+    }).strict(),
+  }).strict(),
+  request: z.object({
+    requestId: z.string().trim().min(1).max(120),
+    method: z.literal('POST'),
+    path: z.literal('/api/hydrology/ingest'),
+    acknowledgementStatus: z.literal(202),
+    responseShape: z.object({
+      contractVersion: z.literal('hydrology-government-ingest-v1'),
+      status: z.enum(['queued', 'started', 'completed', 'partial', 'failed']).refine((value) => value !== 'queued', 'Receipt requires a terminal ingest status'),
+      proofRunId: z.string().trim().min(1).max(120),
+      hasStatusPath: z.boolean(),
+      resultCount: z.number().int().nonnegative().max(4),
+    }).strict(),
+  }).strict(),
+  sourceOutcomes: z.array(z.object({
+    source: hydrologySourceSchema,
+    status: z.enum(['success', 'failed', 'empty', 'skipped']),
+    recordsIngested: z.number().int().nonnegative(),
+    attempts: z.literal(1),
+  }).strict()).min(1).max(4),
+  rowCorrelation: z.array(z.object({
+    rowId: z.string().trim().min(1).max(120),
+    source: hydrologySourceSchema,
+    proofRunId: z.string().trim().min(1).max(120),
+    status: z.enum(['success', 'failed', 'empty', 'skipped']),
+    recordsIngested: z.number().int().nonnegative(),
+    correlated: z.literal(true),
+  }).strict()).min(1).max(4),
+  chat: z.object({
+    mode: z.enum(hydrologyOperatorReceiptChatModes),
+    status: z.enum(['completed', 'degraded', 'not_run']),
+    eventTypes: z.array(z.enum(['metadata', 'token', 'done', 'error'])).max(4),
+    rawContentIncluded: z.literal(false),
+  }).strict(),
+  passed: z.boolean(),
+}).strict().superRefine((value, ctx) => {
+  if (value.request.responseShape.proofRunId !== value.rowCorrelation[0]?.proofRunId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Row correlation must use the request proofRunId', path: ['rowCorrelation'] })
+  }
+
+  if (value.rowCorrelation.some((row) => row.proofRunId !== value.request.responseShape.proofRunId)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Every correlated row must match the request proofRunId', path: ['rowCorrelation'] })
+  }
+
+  if (new Set(value.sourceOutcomes.map((outcome) => outcome.source)).size !== value.sourceOutcomes.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Source outcomes must not repeat a provider', path: ['sourceOutcomes'] })
+  }
 })
 
 export const monitoringStatusSchema = z.object({
@@ -613,6 +689,7 @@ export type HydrologyGovernmentIngestDiagnostic = z.infer<typeof hydrologyGovern
 export type HydrologyGovernmentHttpSummary = z.infer<typeof hydrologyGovernmentHttpSummarySchema>
 export type HydrologyGovernmentIngestRequest = z.infer<typeof hydrologyGovernmentIngestRequestSchema>
 export type HydrologyGovernmentIngestResponse = z.infer<typeof hydrologyGovernmentIngestResponseSchema>
+export type HydrologyOperatorReceipt = z.infer<typeof hydrologyOperatorReceiptSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>

@@ -3,6 +3,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
 test('real hydrology municipalities page renders the current API source state', async ({ page, request }) => {
+  test.skip(process.env['HYDROLOGY_REAL_E2E'] !== 'true', 'Requires an explicitly authorized API/database runtime with the coverage migration applied; production evidence is manual.')
+
   const apiResponse = await request.get('/api/hydrology/municipalities')
   expect(apiResponse.status(), await apiResponse.text()).toBe(200)
   const payload = await apiResponse.json()
@@ -23,7 +25,12 @@ test('real hydrology municipalities page renders the current API source state', 
     await expect(page.getByRole('heading', { name: source, exact: true })).toBeVisible()
   }
   await expect(page.getByText(/^INA ·/).first()).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Ver fuente oficial' }).first()).toBeVisible()
+  const officialAlertCount = payload.municipalities.reduce((total, municipality) => total + municipality.officialAlerts.length, 0)
+  if (officialAlertCount > 0) {
+    await expect(page.getByRole('link', { name: 'Ver fuente oficial' }).first()).toBeVisible()
+  } else {
+    await expect(page.getByRole('link', { name: 'Ver fuente INA' }).first()).toBeVisible()
+  }
 
   const environment = new URL(page.url()).hostname === 'www.agronauta.com.ar' ? 'production' : 'local'
   const matrixPath = resolve(process.cwd(), '../../artifacts/hydrology-local-real-matrix.json')

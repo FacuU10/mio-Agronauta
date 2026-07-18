@@ -62,6 +62,94 @@ test('government municipality migration is additive and defines mapping indexes'
   assert.doesNotMatch(sql, /DROP TABLE/i)
 })
 
+test('municipality alert coverage migration is additive and rejects dynamic alert identifiers', async () => {
+  const sql = await readFile(resolve(process.cwd(), '../../apps/api/prisma/migrations/20260718120000_municipality_alert_coverage/migration.sql'), 'utf8')
+
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS municipality_alert_coverage/)
+  assert.match(sql, /municipality_id TEXT NOT NULL REFERENCES agronautas_municipalities\(id\)/)
+  assert.match(sql, /official_coverage_key TEXT NOT NULL/)
+  assert.match(sql, /seed_version TEXT NOT NULL/)
+  assert.match(sql, /WHERE active/)
+  assert.match(sql, /NOT LIKE 'alert-%'/)
+  assert.doesNotMatch(sql, /DROP TABLE/i)
+})
+
+test('HydrologyRepository projects current alerts through stable active coverage keys without dynamic alert IDs', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const observedAt = new Date('2026-07-18T10:00:00.000Z')
+  const rows = [{
+    municipality_id: 'mun-corrientes', locality_id: 'corrientes-capital', municipality_name: 'Corrientes', province_code: 'AR-W',
+    alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'corrientes', secondary_pna_port_ids: [],
+    ina_station_ids: [], smn_region_ids: ['smn-corrientes'], inmet_station_ids: ['A830'], source: 'PNA', station_id: 'corrientes',
+    metric: 'river_height_m', value: '3.42', unit: 'm', observed_at: observedAt, ingested_at: observedAt,
+    last_successful_observed_at: observedAt, quality: 'ok', freshness: 'fresh', tendency: null, forecast_horizon_days: null, confidence: 'normal', source_url: 'https://pna.example',
+    official_alerts: [{ source: 'SMN', coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'fresh', sourceUrl: 'https://smn.example' }],
+  }]
+  const db = { async query(sql: string, params: unknown[] = []) { calls.push({ sql, params }); return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const repo = new HydrologyRepository(db)
+
+  const municipalities = await repo.getMunicipalityTelemetryOverview('AR-W')
+
+  assert.deepEqual(municipalities[0]?.officialAlerts, [{
+    source: 'SMN', coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'fresh', sourceUrl: 'https://smn.example',
+  }])
+  assert.equal(municipalities[0]?.latestTelemetry[0]?.source, 'PNA')
+  assert.match(calls[0]?.sql ?? '', /municipality_alert_coverage/)
+  assert.match(calls[0]?.sql ?? '', /official_coverage_key/)
+  assert.match(calls[0]?.sql ?? '', /raw->>'coverageKey'/)
+  assert.match(calls[0]?.sql ?? '', /coverage\.active/)
+  assert.doesNotMatch(calls[0]?.sql ?? '', /official_coverage_key\s*=\s*'alert-/i)
+})
+
+test('HydrologyRepository keeps INMET coverage alerts isolated from unrelated municipalities', async () => {
+  const observedAt = new Date('2026-07-18T11:00:00.000Z')
+  const rows = [
+    {
+      municipality_id: 'mun-ituzaingo', locality_id: 'ituzaingo-corrientes', municipality_name: 'Ituzaingó', province_code: 'AR-W',
+      alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'ituzaingo', secondary_pna_port_ids: [], ina_station_ids: [], smn_region_ids: [], inmet_station_ids: ['A830'],
+      source: 'INMET', station_id: 'A830', metric: 'storm_alert', value: null, unit: 'alert', observed_at: observedAt, ingested_at: observedAt,
+      last_successful_observed_at: observedAt, quality: 'ok', freshness: 'degraded', tendency: null, forecast_horizon_days: null, confidence: null, source_url: 'https://inmet.example',
+      official_alerts: [{ source: 'INMET', coverageKey: 'A830', message: 'Alerta meteorológica regional', observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'degraded', sourceUrl: 'https://inmet.example' }],
+    },
+    {
+      municipality_id: 'mun-goya', locality_id: 'goya-corrientes', municipality_name: 'Goya', province_code: 'AR-W',
+      alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'goya', secondary_pna_port_ids: [], ina_station_ids: [], smn_region_ids: [], inmet_station_ids: ['A846'],
+      source: null, station_id: null, metric: null, value: null, unit: null, observed_at: null, ingested_at: null,
+      last_successful_observed_at: null, quality: null, freshness: null, tendency: null, forecast_horizon_days: null, confidence: null, source_url: null,
+      official_alerts: [],
+    },
+  ]
+  const db = { async query() { return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const repo = new HydrologyRepository(db)
+
+  const municipalities = await repo.getMunicipalityTelemetryOverview('AR-W')
+
+  assert.equal(municipalities[0]?.name, 'Ituzaingó')
+  assert.equal(municipalities[0]?.officialAlerts?.[0]?.source, 'INMET')
+  assert.deepEqual(municipalities[1]?.officialAlerts, [])
+})
+
+test('inactive alert coverage leaves station telemetry intact and returns no official alerts', async () => {
+  const rows = [{
+    municipality_id: 'mun-corrientes', locality_id: 'corrientes-capital', municipality_name: 'Corrientes', province_code: 'AR-W',
+    alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'corrientes', secondary_pna_port_ids: [],
+    ina_station_ids: [], smn_region_ids: ['smn-corrientes'], inmet_station_ids: [], source: 'PNA', station_id: 'corrientes',
+    metric: 'river_height_m', value: '3.42', unit: 'm', observed_at: new Date('2026-07-18T10:00:00.000Z'), ingested_at: new Date('2026-07-18T10:00:00.000Z'),
+    last_successful_observed_at: new Date('2026-07-18T10:00:00.000Z'), quality: 'ok', freshness: 'fresh', tendency: null, forecast_horizon_days: null, confidence: 'normal', source_url: 'https://pna.example',
+    official_alerts: [],
+  }]
+  let sql = ''
+  const db = { async query(query: string) { sql = query; return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const repo = new HydrologyRepository(db)
+
+  const municipality = await repo.getMunicipalityTelemetryDashboard('mun-corrientes')
+
+  assert.deepEqual(municipality?.officialAlerts, [])
+  assert.equal(municipality?.latestTelemetry[0]?.stationId, 'corrientes')
+  assert.match(sql, /coverage\.active/)
+  assert.match(sql, /metric\s*=\s*'storm_alert'/)
+})
+
 test('HydrologyRepository resolves municipality telemetry from gauge mappings without lot context', async () => {
   const calls: Array<{ sql: string; params: unknown[] }> = []
   const rows = [{

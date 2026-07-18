@@ -14,6 +14,16 @@ export interface MunicipalityGaugeMappings {
   inmetStationIds: string[]
 }
 
+export interface MunicipalityOfficialAlert {
+  source: Extract<HydrologyTelemetry['source'], 'SMN' | 'INMET'>
+  coverageKey: string
+  message: string
+  observedAt: string
+  lastSuccessfulObservedAt: string
+  freshness: Extract<HydrologyTelemetry['freshness'], 'fresh' | 'degraded'>
+  sourceUrl?: string
+}
+
 export interface MunicipalityTelemetryView {
   id: string
   localityId: string
@@ -23,12 +33,14 @@ export interface MunicipalityTelemetryView {
   evacuationHeightM?: number
   gaugeMappings: MunicipalityGaugeMappings
   latestTelemetry: HydrologyTelemetry[]
+  officialAlerts?: MunicipalityOfficialAlert[]
 }
 
 export interface MunicipalityTelemetryDashboard {
-  municipality: Omit<MunicipalityTelemetryView, 'gaugeMappings' | 'latestTelemetry'>
+  municipality: Omit<MunicipalityTelemetryView, 'gaugeMappings' | 'latestTelemetry' | 'officialAlerts'>
   gaugeMappings: MunicipalityGaugeMappings
   latestTelemetry: HydrologyTelemetry[]
+  officialAlerts?: MunicipalityOfficialAlert[]
 }
 
 export class HydrologyRepository {
@@ -182,8 +194,8 @@ export class HydrologyRepository {
     const result = await this.db.query(municipalityTelemetrySql('m.id = $1'), [municipalityId]) as QueryResult<MunicipalityTelemetryRow>
     const view = toMunicipalityTelemetryViews(result.rows)[0]
     if (!view) return null
-    const { gaugeMappings, latestTelemetry, ...municipality } = view
-    return { municipality, gaugeMappings, latestTelemetry }
+    const { gaugeMappings, latestTelemetry, officialAlerts, ...municipality } = view
+    return { municipality, gaugeMappings, latestTelemetry, officialAlerts }
   }
 
   async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number }> {
@@ -206,6 +218,7 @@ interface MunicipalityTelemetryRow extends Record<string, unknown> {
   smn_region_ids: string[] | null
   inmet_station_ids: string[] | null
   station_id: string | null
+  official_alerts: unknown
 }
 
 interface FieldHydrologyZoneRow extends Record<string, unknown> {
@@ -268,7 +281,8 @@ const municipalityTelemetrySql = (where: string) => `SELECT
     latest.tendency,
     latest.forecast_horizon_days,
     latest.confidence,
-    latest.source_url
+    latest.source_url,
+    COALESCE(official_alerts.official_alerts, '[]'::jsonb) AS official_alerts
   FROM agronautas_municipalities m
   LEFT JOIN municipality_gauge_mappings mgm ON mgm.municipality_id = m.id
   LEFT JOIN LATERAL (
@@ -306,6 +320,47 @@ const municipalityTelemetrySql = (where: string) => `SELECT
       AND (ht.source_url IS NULL OR ht.source_url NOT LIKE 'offline-fixture://%')
     ORDER BY ht.source, ht.station_id, ht.metric, ht.unit, ht.forecast_horizon_days, ht.observed_at DESC, ht.ingested_at DESC
   ) latest ON true
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'source', current_alert.source,
+      'coverageKey', current_alert.official_coverage_key,
+      'message', current_alert.message,
+      'observedAt', current_alert.observed_at,
+      'lastSuccessfulObservedAt', current_alert.last_successful_observed_at,
+      'freshness', current_alert.freshness,
+      'sourceUrl', current_alert.source_url
+    ) ORDER BY current_alert.observed_at DESC), '[]'::jsonb) AS official_alerts
+    FROM (
+      SELECT DISTINCT ON (coverage.source, coverage.official_coverage_key)
+        coverage.source,
+        coverage.official_coverage_key,
+        COALESCE(
+          NULLIF(ht.raw->>'message', ''),
+          NULLIF(ht.raw->>'title', ''),
+          NULLIF(ht.raw->>'description', ''),
+          'Alerta oficial ' || ht.source
+        ) AS message,
+        ht.observed_at,
+        ht.last_successful_observed_at,
+        CASE WHEN ht.freshness = 'fresh' THEN 'fresh' ELSE 'degraded' END AS freshness,
+        ht.source_url
+      FROM municipality_alert_coverage coverage
+      JOIN hydrology_telemetry ht
+        ON ht.source = coverage.source
+       AND ht.metric = 'storm_alert'
+       AND ht.station_id NOT LIKE 'alert-%'
+       AND (
+         ht.station_id = coverage.official_coverage_key
+         OR ht.raw->>'coverageKey' = coverage.official_coverage_key
+         OR ht.raw->>'coverage_key' = coverage.official_coverage_key
+       )
+      WHERE coverage.municipality_id = m.id
+        AND coverage.active = true
+        AND (ht.forecast_horizon_days IS NULL OR ht.forecast_horizon_days <= 30)
+        AND (ht.source_url IS NULL OR ht.source_url NOT LIKE 'offline-fixture://%')
+      ORDER BY coverage.source, coverage.official_coverage_key, ht.observed_at DESC, ht.ingested_at DESC
+    ) current_alert
+  ) official_alerts ON true
   WHERE ${where}
   ORDER BY m.name, latest.source, latest.station_id, latest.metric`
 
@@ -350,6 +405,7 @@ const toMunicipalityTelemetryViews = (rows: MunicipalityTelemetryRow[]): Municip
         inmetStationIds: asTextArray(row.inmet_station_ids),
       },
       latestTelemetry: [],
+      officialAlerts: toOfficialAlerts(row.official_alerts),
     }
     if (!byId.has(row.municipality_id)) byId.set(row.municipality_id, current)
     const telemetry = toTelemetryOrNull(row)
@@ -357,6 +413,24 @@ const toMunicipalityTelemetryViews = (rows: MunicipalityTelemetryRow[]): Municip
   }
   return [...byId.values()]
 }
+
+const toOfficialAlerts = (value: unknown): MunicipalityOfficialAlert[] => {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return []
+    const source = item['source']
+    const coverageKey = item['coverageKey']
+    const message = item['message']
+    const observedAt = toIsoOrNull(item['observedAt'])
+    const lastSuccessfulObservedAt = toIsoOrNull(item['lastSuccessfulObservedAt'])
+    if ((source !== 'SMN' && source !== 'INMET') || typeof coverageKey !== 'string' || !coverageKey || typeof message !== 'string' || !message || !observedAt || !lastSuccessfulObservedAt) return []
+    const freshness = item['freshness'] === 'fresh' ? 'fresh' : item['freshness'] === 'degraded' ? 'degraded' : undefined
+    if (!freshness) return []
+    return [{ source, coverageKey, message, observedAt, lastSuccessfulObservedAt, freshness, sourceUrl: typeof item['sourceUrl'] === 'string' && item['sourceUrl'] ? item['sourceUrl'] : undefined }]
+  })
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
 const toIsoOrNull = (value: unknown): string | null => {
   if (value === null || value === undefined || value === '') return null

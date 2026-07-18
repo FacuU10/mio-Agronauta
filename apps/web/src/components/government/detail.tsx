@@ -9,8 +9,9 @@ import { formatOfficialTime, statusLabel } from './format'
 type TelemetryCard = { source: string; stationId: string; metric: string; value: number | null; unit: string; observedAt?: string | null; lastSuccessfulObservedAt?: string | null; label: string }
 type ForecastRow = TelemetryCard & { forecastHorizonDays?: number | null; confidence?: string | null; sourceUrl?: string | null }
 type Provenance = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
+type OfficialAlert = { source: 'SMN' | 'INMET'; coverageKey: string; message: string; observedAt: string; lastSuccessfulObservedAt: string; freshness: 'fresh' | 'degraded'; sourceUrl?: string }
 type DashboardPayload = {
-  municipality: { id: string; localityId: string; name: string; alertHeightM?: number; evacuationHeightM?: number }
+  municipality: { id: string; localityId: string; name: string; alertHeightM?: number; evacuationHeightM?: number; officialAlerts: OfficialAlert[] }
   telemetryCards: TelemetryCard[]
   inaPredictions30d: ForecastRow[]
   alerts: TelemetryCard[]
@@ -97,8 +98,8 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
           <section aria-labelledby="alerts-heading" className="mt-10 rounded-[2rem] border border-amber-200/20 bg-amber-200/10 p-4 shadow-2xl sm:p-6">
             <h2 id="alerts-heading" className="text-2xl font-black">Alertas oficiales</h2>
             <div className="mt-5 grid gap-3 md:grid-cols-2">
-              {(data?.alerts ?? []).map((alert) => (<article key={`${alert.source}-${alert.stationId}-${alert.observedAt}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{alert.source} · {alert.stationId}</h3><p className="mt-2 text-stone-200">{alert.value === null ? 'Alerta vigente o en seguimiento.' : `${alert.value} ${alert.unit}`}</p><p className="mt-2 text-sm text-amber-100">{formatOfficialTime(alert.lastSuccessfulObservedAt ?? alert.observedAt)}</p></article>))}
-              {data && data.alerts.length === 0 ? <p className="text-stone-300">Sin alertas oficiales recientes.</p> : null}
+              {(data?.municipality.officialAlerts ?? []).map((alert) => (<article key={`${alert.source}-${alert.coverageKey}-${alert.observedAt}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{`${alert.source} · ${alert.coverageKey}`}</h3><p className="mt-2 text-stone-200">{alert.message}</p><p className="mt-2 text-sm text-amber-100"><span>{`Cobertura ${alert.coverageKey}`}</span><span> · </span><span>{statusLabel(alert.freshness)}</span></p><p className="mt-2 text-sm text-amber-100">{formatOfficialTime(alert.lastSuccessfulObservedAt || alert.observedAt)}{alert.sourceUrl ? <> · <a className="underline underline-offset-2" href={alert.sourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></> : null}</p></article>))}
+              {data && data.municipality.officialAlerts.length === 0 ? <p className="text-stone-300"><span>Sin alertas oficiales recientes</span><span>.</span></p> : null}
             </div>
           </section>
 

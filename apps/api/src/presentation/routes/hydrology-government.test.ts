@@ -27,6 +27,24 @@ test('GET /api/hydrology/municipalities devuelve resumen provincial y municipios
   assert.equal(json.provinceAlerts[0]?.zone, 'Mercedes')
 })
 
+test('GET /api/hydrology/municipalities returns canonical stable officialAlerts per municipality', async () => {
+  const response = await request(createTestApp(), '/api/hydrology/municipalities')
+
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentMunicipalitiesResponseSchema.parse(await response.json())
+  assert.deepEqual(json.municipalities[0]?.officialAlerts, [{
+    source: 'SMN',
+    coverageKey: 'smn-corrientes',
+    message: 'Tormentas fuertes',
+    observedAt: '2026-06-23T09:00:00.000Z',
+    lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z',
+    freshness: 'fresh',
+    sourceUrl: 'https://example.com/smn',
+  }])
+  assert.deepEqual(json.municipalities[0]?.latestTelemetry.filter((item) => item.source === 'PNA' || item.source === 'INA').map((item) => item.source), ['PNA', 'INA', 'INA'])
+  assert.doesNotMatch(JSON.stringify(json.municipalities[0]?.officialAlerts), /alert-/)
+})
+
 test('GET /api/hydrology/municipalities returns classified error when repository query fails', async () => {
   const response = await request(createTestApp({
     hydrologyRepository: {
@@ -103,6 +121,15 @@ test('GET /api/hydrology/municipalities/:id/dashboard devuelve metadata, cards, 
   assert.equal(json.inaPredictions30d[0]?.forecastHorizonDays, 20)
   assert.equal(json.inaPredictions30d[0]?.confidence, 'speculative')
   assert.equal(json.alerts[0]?.source, 'SMN')
+  assert.deepEqual(json.municipality.officialAlerts, [{
+    source: 'SMN',
+    coverageKey: 'smn-corrientes',
+    message: 'Tormentas fuertes',
+    observedAt: '2026-06-23T09:00:00.000Z',
+    lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z',
+    freshness: 'fresh',
+    sourceUrl: 'https://example.com/smn',
+  }])
   assert.equal(json.provenance[0]?.label, 'Último dato obtenido: 23/06/2026 10:30')
 })
 
@@ -995,6 +1022,20 @@ test('POST /api/hydrology/municipalities/:id/copilot/chat streamea eventos del c
   assert.match(body, /event: done/)
 })
 
+test('POST /api/hydrology/municipalities/:id/copilot/chat redacts provider failures from the degraded SSE response', async () => {
+  const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat() { throw new Error('groq token secret=do-not-return') } } }), '/api/hydrology/municipalities/mercedes/copilot/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: '¿Hay alertas oficiales?' }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.text()
+  assert.match(body, /El copiloto hidrológico no está disponible/)
+  assert.match(body, /upstream_unavailable/)
+  assert.doesNotMatch(body, /groq token secret|do-not-return/)
+})
+
 test('unsupported municipality Copilot context is schema-valid and contains no substituted data', () => {
   const municipality = municipalityDashboard()
   municipality.municipality.name = 'Goya'
@@ -1025,8 +1066,8 @@ function createTestApp(overrides: Partial<Parameters<typeof createHydrologyGover
 }
 
 function municipalityDashboard() {
-  const { gaugeMappings, latestTelemetry, ...municipality } = municipalityView()
-  return { municipality, gaugeMappings, latestTelemetry }
+  const { gaugeMappings, latestTelemetry, officialAlerts, ...municipality } = municipalityView()
+  return { municipality, gaugeMappings, latestTelemetry, officialAlerts }
 }
 
 function municipalityView() {
@@ -1038,6 +1079,7 @@ function municipalityView() {
     alertHeightM: 4.8,
     evacuationHeightM: undefined,
     gaugeMappings: { primaryPnaPortId: 'pna-mercedes', secondaryPnaPortIds: [], inaStationIds: ['ina-mercedes'], smnRegionIds: ['smn-corrientes'], inmetStationIds: ['inmet-parana'] },
+    officialAlerts: [{ source: 'SMN' as const, coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: '2026-06-23T09:00:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z', freshness: 'fresh' as const, sourceUrl: 'https://example.com/smn' }],
     latestTelemetry: [
       { source: 'PNA' as const, stationId: 'pna-mercedes', observedAt: '2026-06-23T10:30:00.000Z', ingestedAt: '2026-06-23T10:35:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.2, unit: 'm', metric: 'river_height_m' as const, quality: 'ok' as const, freshness: 'fresh' as const, tendency: 'creciente', sourceUrl: 'https://example.com/pna' },
       { source: 'INA' as const, stationId: 'ina-mercedes', observedAt: '2026-07-13T10:30:00.000Z', ingestedAt: '2026-06-23T10:35:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', value: 3.8, unit: 'm', metric: 'river_height_m' as const, quality: 'estimated' as const, freshness: 'fresh' as const, forecastHorizonDays: 20, confidence: 'speculative' as const, sourceUrl: 'https://example.com/ina' },
