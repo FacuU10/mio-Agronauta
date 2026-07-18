@@ -112,3 +112,38 @@ Official source clients MUST use configurable provider URLs and mark unverified/
 - The frontend source of truth is the canonical hydrology payload, not legacy presentation fields.
 - Manual ingest is safe to expose only with configured production provider URLs and existing deployment controls; unsupported providers must degrade explicitly and preserve last known data.
 - Local verification passed, but a final deployed smoke remains required against the real web/API URLs and provider environment variables.
+
+### Requirement: Canonical INA CSV queries
+
+INA observation requests for series `6764`, `33988`, and `38469` MUST use `getObservaciones` URLs with `series_id={id}&format=csv`. They MUST NOT request `format=mnemos`.
+
+#### Scenario: All fixed INA series use CSV
+
+- GIVEN an INA ingest is requested
+- WHEN the client builds queries for the three fixed series
+- THEN each URL contains its series ID and `format=csv`
+- AND none contains `format=mnemos`
+
+### Requirement: INA CSV header fallback
+
+The system MUST parse INA CSV using a supplied header. When the first row is data, it MUST apply this exact column order: `id`, `tipo`, `series_id`, `timestart`, `timeend`, `nombre`, `descripcion`, `unit_id`, `timeupdate`, `valor`. Headerless rows MUST contain exactly ten columns and rows without valid mapped values MUST be rejected without creating telemetry.
+
+#### Scenario: Headered and headerless CSV are mapped
+
+- GIVEN valid headered and headerless INA CSV responses
+- WHEN the responses are ingested
+- THEN each valid observation is mapped to normalized INA telemetry
+
+#### Scenario: Malformed headerless rows are rejected
+
+- GIVEN a headerless row with missing columns or invalid mapped data
+- WHEN the response is ingested
+- THEN no telemetry is created from that row
+
+### Requirement: Municipal INA rendering acceptance
+
+Local acceptance MUST prove distinct INA telemetry renders for Corrientes, Paso de los Libres, and Bella Vista from series `6764`, `33988`, and `38469`, respectively.
+
+### Requirement: INA change isolation and rollback
+
+The INA standardization MUST NOT change PNA endpoints or behavior, INMET/SMN geo-block handling, browser ingest, proxies, deployment behavior, or persisted telemetry. Rolling back the INA client, adapter, and focused tests together MUST require no migration or telemetry rewrite.

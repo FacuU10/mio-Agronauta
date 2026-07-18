@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { InaAdapter } from '../adapters/ina-adapter.js'
 import { InaHttpClient, InmetHttpClient, PnaHttpClient, SmnHttpClient } from './http-clients.js'
+
+const readFixture = (name: string) => readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')
 
 test('PnaHttpClient defaults to the fast official contenidosweb endpoint and safe 25s timeout', async () => {
   const requests: string[] = []
@@ -45,25 +49,90 @@ test('InmetHttpClient uses the current official RSS feed in one bounded request'
   assert.equal(result.ok ? result.httpSummary?.attempts : 0, 1)
 })
 
+test('InmetHttpClient classifies the official no-alert text as a successful empty result', async () => {
+  const result = await new InmetHttpClient({ fetch: async () => new Response('Não há avisos meteorológicos ativos.\n', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } }) }).fetchTelemetry()
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.ok ? result.records : [], [])
+})
+
+test('InmetHttpClient matches the no-alert text across case and Unicode normalization', async () => {
+  const result = await new InmetHttpClient({ fetch: async () => new Response('NÃO HÁ AVISOS METEOROLÓGICOS ATIVOS.\n', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } }) }).fetchTelemetry()
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.ok ? result.records : [], [])
+})
+
+test('InmetHttpClient accepts optional terminal punctuation and whitespace only for the official no-alert text', async () => {
+  const noPunctuation = await new InmetHttpClient({ fetch: async () => new Response('\n Não há avisos meteorológicos ativos \t', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } }) }).fetchTelemetry()
+  const unrelatedText = await new InmetHttpClient({ fetch: async () => new Response('Não há avisos meteorológicos ativos hoje.', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } }) }).fetchTelemetry()
+
+  assert.equal(noPunctuation.ok, true)
+  assert.deepEqual(noPunctuation.ok ? noPunctuation.records : [], [])
+  assert.equal(unrelatedText.ok, false)
+  assert.equal(unrelatedText.ok ? '' : unrelatedText.diagnostic.failureKind, 'parse_failure')
+})
+
+test('InmetHttpClient retains parse failure for unexpected HTTP-200 payloads', async () => {
+  const result = await new InmetHttpClient({ fetch: async () => new Response('<html>maintenance</html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }) }).fetchTelemetry()
+
+  assert.equal(result.ok, false)
+  assert.equal(result.ok ? '' : result.diagnostic.failureKind, 'parse_failure')
+})
+
 test('INA fetches each configured official CSV series once and persists observed values with source URLs', async () => {
   const requests: string[] = []
-  const bodies = [
-    'series_id,timestart,valor\n6764,2026-07-14T12:00:00Z,3.13',
-    'series_id,timestart,valor\n33988,2026-07-14T12:00:00Z,2.73',
-    'series_id,timestart,valor\n38469,2026-07-14T12:00:00Z,2.34',
-  ]
+  const bodies = await Promise.all([
+    readFixture('ina-6764-headered.csv'),
+    readFixture('ina-33988-headerless.csv'),
+    readFixture('ina-38469-headerless.csv'),
+  ])
   const ina = await new InaHttpClient({ fetch: async (input) => {
     requests.push(String(input))
     return new Response(bodies[requests.length - 1], { status: 200, headers: { 'content-type': 'text/plain' } })
   } }).fetchTelemetry()
 
   assert.equal(requests.length, 3)
-  assert.match(requests[0] ?? '', /series_id=6764/)
-  assert.match(requests[1] ?? '', /series\/33988/)
-  assert.match(requests[2] ?? '', /series\/38469/)
+  assert.deepEqual(requests.map((request) => {
+    const url = new URL(request)
+    return { path: url.pathname, seriesId: url.searchParams.get('series_id'), format: url.searchParams.get('format') }
+  }), [
+    { path: '/a5/getObservaciones', seriesId: '6764', format: 'csv' },
+    { path: '/a5/getObservaciones', seriesId: '33988', format: 'csv' },
+    { path: '/a5/getObservaciones', seriesId: '38469', format: 'csv' },
+  ])
+  assert.equal(requests.some((request) => /format=mnemos/i.test(request)), false)
   assert.equal(ina.ok, true)
   assert.deepEqual(ina.ok ? ina.records.map((record) => [record.stationId, record.value]) : [], [['6764', 3.13], ['33988', 2.73], ['38469', 2.34]])
+  assert.deepEqual(ina.ok ? ina.records.map((record) => record.sourceUrl) : [], requests)
+  assert.equal(new Set(ina.ok ? ina.records.map((record) => record.stationId) : []).size, 3)
   assert.ok(ina.ok && ina.records.every((record) => record.sourceUrl?.startsWith('https://alerta.ina.gob.ar/') === true))
+})
+
+test('INA adapter maps headered and headerless fixtures and rejects malformed fallback rows', async () => {
+  const adapter = new InaAdapter('https://alerta.ina.gob.ar/a5/getObservaciones?format=csv')
+  const [headered, headerless, bellaVista] = await Promise.all([
+    readFixture('ina-6764-headered.csv'),
+    readFixture('ina-33988-headerless.csv'),
+    readFixture('ina-38469-headerless.csv'),
+  ])
+
+  assert.deepEqual([...adapter.parse(headered), ...adapter.parse(headerless), ...adapter.parse(bellaVista)].map((record) => [record.stationId, record.value]), [
+    ['6764', 3.13],
+    ['33988', 2.73],
+    ['38469', 2.34],
+  ])
+  assert.deepEqual(adapter.parse('1004,puntual,33988,2026-07-17T10:00:00Z,2026-07-17T10:00:00Z,Paso de los Libres,Altura del río,m,2026-07-17T10:05:00Z'), [])
+  assert.deepEqual(adapter.parse('1004,puntual,33988,not-a-date,2026-07-17T10:00:00Z,Paso de los Libres,Altura del río,m,2026-07-17T10:05:00Z,2.71'), [])
+})
+
+test('INA adapter extracts nested official HTML cell text while retaining row validation', () => {
+  const adapter = new InaAdapter('https://alerta.ina.gob.ar/a5/getObservaciones?format=html')
+  const nestedMarkup = '<table><tr><td><strong>Paso de los Libres</strong></td><td><span>Altura:</span> <b>2,71</b></td><td><time>2026-07-17T10:00:00Z</time></td><td><em>Tendencia:</em> Creciente</td></tr></table>'
+  const invalidMarkup = '<table><tr><td><strong>Paso de los Libres</strong></td><td><span>Altura:</span> sin dato</td><td><time>not-a-date</time></td></tr></table>'
+
+  assert.deepEqual(adapter.parse(nestedMarkup).map((record) => [record.stationId, record.value, record.tendency]), [['paso-de-los-libres', 2.71, 'Creciente']])
+  assert.deepEqual(adapter.parse(invalidMarkup), [])
 })
 
 test('INA fetches its fixed official series concurrently within one bounded attempt', async () => {

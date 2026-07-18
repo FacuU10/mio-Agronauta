@@ -216,9 +216,7 @@ function inaSeriesUrls(now = new Date()): string[] {
   const start = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()
   const end = now.toISOString()
   const range = `timestart=${encodeURIComponent(start)}&timeend=${encodeURIComponent(end)}`
-  return INA_SERIES_IDS.map((seriesId) => seriesId === '6764'
-    ? `https://alerta.ina.gob.ar/a5/getObservaciones?tipo=puntual&series_id=${seriesId}&${range}&format=csv`
-    : `https://alerta.ina.gob.ar/a5/obs/puntual/series/${seriesId}?${range}&format=mnemos`)
+  return INA_SERIES_IDS.map((seriesId) => `https://alerta.ina.gob.ar/a5/getObservaciones?tipo=puntual&series_id=${seriesId}&${range}&format=csv`)
 }
 
 function safeProviderUrl(url: string): Pick<HydrologyGovernmentIngestDiagnostic, 'providerHost' | 'providerPath'> {

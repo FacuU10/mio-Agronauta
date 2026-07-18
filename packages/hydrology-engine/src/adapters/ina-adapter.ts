@@ -1,6 +1,8 @@
 import { forecastConfidenceForHorizon, isForecastWithinPhase1Horizon, type NormalizedHydrologyTelemetry } from '../types.js'
 
 const INA_URL = 'https://alerta.ina.gob.ar/a5/getObservaciones'
+const INA_DEFAULT_CSV_COLUMNS = ['id', 'tipo', 'series_id', 'timestart', 'timeend', 'nombre', 'descripcion', 'unit_id', 'timeupdate', 'valor'] as const
+const INA_REQUIRED_CSV_COLUMNS = ['series_id', 'timestart', 'valor'] as const
 
 interface InaRow { stationId: string; observedAt: string; heightM?: number; tendency?: string; forecast?: Array<{ horizonDays: number; heightM: number }> }
 
@@ -29,7 +31,7 @@ export class InaAdapter {
 function parseOfficialHtml(payload: string, ingestedAt: Date): NormalizedHydrologyTelemetry[] {
   const rows = [...payload.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)]
   return rows.flatMap((match) => {
-    const cells = [...(match[1] ?? '').matchAll(/<t[dh][^>]*>\s*([^<]+?)\s*<\/t[dh]>/gi)].map((cell) => decodeHtml(cell[1] ?? '').trim())
+    const cells = [...(match[1] ?? '').matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((cell) => decodeHtml(stripHtmlTags(cell[1] ?? '')).replace(/\s+/gu, ' ').trim())
     if (cells.length < 3) return []
     const stationId = cells[0]?.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '')
     const heightM = asNumber(cells.find((cell) => /(?:altura|nivel)\s*:/i.test(cell))?.replace(/.*?:/, ''))
@@ -40,9 +42,13 @@ function parseOfficialHtml(payload: string, ingestedAt: Date): NormalizedHydrolo
 }
 
 function parseOfficialCsv(payload: string, ingestedAt: Date, sourceUrl: string): NormalizedHydrologyTelemetry[] {
-  const [headerLine, ...lines] = payload.trim().split(/\r?\n/)
-  if (!headerLine) return []
-  const headers = parseCsvLine(headerLine).map((value) => value.trim().toLowerCase())
+  const [firstLine, ...remainingLines] = payload.trim().split(/\r?\n/)
+  if (!firstLine) return []
+  const firstValues = parseCsvLine(firstLine)
+  const suppliedHeaders = firstValues.map((value) => value.trim().toLowerCase())
+  const hasSuppliedHeader = INA_REQUIRED_CSV_COLUMNS.every((column) => suppliedHeaders.includes(column))
+  const headers = hasSuppliedHeader ? suppliedHeaders : [...INA_DEFAULT_CSV_COLUMNS]
+  const lines = hasSuppliedHeader ? remainingLines : [firstLine, ...remainingLines]
   return lines.flatMap((line) => {
     const values = parseCsvLine(line)
     if (values.length !== headers.length) return []
@@ -78,6 +84,10 @@ function parseCsvLine(line: string): string[] {
 
 function decodeHtml(value: string): string {
   return value.replace(/&nbsp;/gi, ' ').replace(/&aacute;/gi, 'á').replace(/&eacute;/gi, 'é').replace(/&iacute;/gi, 'í').replace(/&oacute;/gi, 'ó').replace(/&uacute;/gi, 'ú').replace(/&ntilde;/gi, 'ñ')
+}
+
+function stripHtmlTags(value: string): string {
+  return value.replace(/<[^>]*>/g, ' ')
 }
 
 const record = (stationId: string, observedAt: Date, ingestedAt: Date, value: number, tendency?: string, sourceUrl = INA_URL): NormalizedHydrologyTelemetry => ({

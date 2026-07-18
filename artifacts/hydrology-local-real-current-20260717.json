@@ -1,0 +1,208 @@
+{
+  "verifier": "hydrology-local-real-matrix-v1",
+  "proofRunId": "proof-20260717T203215Z",
+  "oneShotPerSource": true,
+  "retries": 0,
+  "sources": [
+    "PNA",
+    "INA",
+    "INMET",
+    "SMN"
+  ],
+  "environment": {
+    "nodeEnv": "development",
+    "hasDatabaseUrl": true,
+    "databaseTarget": "remote",
+    "providerOverrides": {
+      "PNA": false,
+      "INA": false,
+      "INMET": false,
+      "SMN": false
+    }
+  },
+  "startedAt": "2026-07-17T20:32:20.624Z",
+  "finishedAt": "2026-07-17T20:33:39.930Z",
+  "sourceMatrix": [
+    {
+      "source": "PNA",
+      "localApi": {
+        "status": "pass",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260717T203215Z"
+      },
+      "providerHttp": {
+        "status": "pass",
+        "detail": "contenidosweb.prefecturanaval.gob.ar/alturas/ status=200 elapsedMs=911",
+        "evidence": {
+          "host": "contenidosweb.prefecturanaval.gob.ar",
+          "path": "/alturas/",
+          "status": 200,
+          "elapsedMs": 911,
+          "attempts": 1,
+          "timeoutMs": 25000,
+          "responseBytes": 111735,
+          "responseChars": 111543
+        }
+      },
+      "localDb": {
+        "status": "pass",
+        "detail": "PNA DB row correlated to proofRunId=proof-20260717T203215Z status=success",
+        "evidence": {
+          "rowCount": 1,
+          "recordsIngested": 9,
+          "rowIds": [
+            "7cc45d50-be6e-49e7-84bd-1859fe393b60"
+          ]
+        }
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "pass"
+    },
+    {
+      "source": "INA",
+      "localApi": {
+        "status": "pass",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260717T203215Z"
+      },
+      "providerHttp": {
+        "status": "pass",
+        "detail": "alerta.ina.gob.ar/a5/getObservaciones status=200 elapsedMs=713",
+        "evidence": {
+          "host": "alerta.ina.gob.ar",
+          "path": "/a5/getObservaciones",
+          "status": 200,
+          "elapsedMs": 713,
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "responseBytes": 1012,
+          "responseChars": 1012
+        }
+      },
+      "localDb": {
+        "status": "pass",
+        "detail": "INA DB row correlated to proofRunId=proof-20260717T203215Z status=success",
+        "evidence": {
+          "rowCount": 1,
+          "recordsIngested": 38,
+          "rowIds": [
+            "ba4d1ead-2846-4660-a3e3-d9ae50c90cd0"
+          ]
+        }
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "pass"
+    },
+    {
+      "source": "INMET",
+      "localApi": {
+        "status": "pass",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260717T203215Z"
+      },
+      "providerHttp": {
+        "status": "pass",
+        "detail": "apiprevmet3.inmet.gov.br/avisos/rss status=200 elapsedMs=2044",
+        "evidence": {
+          "host": "apiprevmet3.inmet.gov.br",
+          "path": "/avisos/rss",
+          "status": 200,
+          "elapsedMs": 2044,
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "responseBytes": 168681,
+          "responseChars": 167223
+        }
+      },
+      "localDb": {
+        "status": "pass",
+        "detail": "INMET DB row correlated to proofRunId=proof-20260717T203215Z status=success",
+        "evidence": {
+          "rowCount": 1,
+          "recordsIngested": 100,
+          "rowIds": [
+            "c1499b11-d670-4982-b856-7c9e556812a7"
+          ]
+        }
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "pass"
+    },
+    {
+      "source": "SMN",
+      "localApi": {
+        "status": "pass",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260717T203215Z"
+      },
+      "providerHttp": {
+        "status": "pass",
+        "detail": "ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo_2026.xml status=200 elapsedMs=420",
+        "evidence": {
+          "host": "ssl.smn.gob.ar",
+          "path": "/feeds/CAP/rss_alertaCAP_nuevo_2026.xml",
+          "status": 200,
+          "elapsedMs": 420,
+          "attempts": 1,
+          "timeoutMs": 15000,
+          "responseBytes": 119191,
+          "responseChars": 118059
+        }
+      },
+      "localDb": {
+        "status": "pass",
+        "detail": "SMN DB row correlated to proofRunId=proof-20260717T203215Z status=success",
+        "evidence": {
+          "rowCount": 1,
+          "recordsIngested": 120,
+          "rowIds": [
+            "e707fb3c-8bfc-4c28-ab67-4b8b08697efc"
+          ]
+        }
+      },
+      "prodApi": {
+        "status": "not_run",
+        "detail": "Run after deployment with production base URL; local apply cannot mutate production without credentials"
+      },
+      "prodDb": {
+        "status": "not_run",
+        "detail": "Requires read-only production DATABASE_URL; no secret is guessed or printed"
+      },
+      "browser": {
+        "status": "not_run",
+        "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
+      },
+      "status": "pass"
+    }
+  ],
+  "passed": true
+}

@@ -5,11 +5,13 @@ const INMET_URL = 'https://apiprevmet3.inmet.gov.br/avisos/rss'
 const relevantStates = new Set(['PR', 'SC', 'RS'])
 const relevantStations = new Set(['A830', 'A809', 'A846', 'A826'])
 const MAX_RSS_ITEMS = 100
+const INMET_NO_ALERT_TEXT = 'nao ha avisos meteorologicos ativos'
 
 export class InmetAdapter {
   constructor(private readonly sourceUrl = INMET_URL, private readonly stationId?: string) {}
 
   parse(payload: string | { measurements?: unknown[]; data?: unknown[] }, ingestedAt = new Date()): NormalizedHydrologyTelemetry[] {
+    if (typeof payload === 'string' && isOfficialNoAlertText(payload)) return []
     if (typeof payload === 'string' && /<rss\b/i.test(payload)) return parseOfficialRss(payload, ingestedAt, this.sourceUrl)
     const data = typeof payload === 'string' ? JSON.parse(payload) as { measurements?: unknown[]; data?: unknown[] } : payload
     return readArray(data.measurements ?? data.data ?? data)
@@ -18,6 +20,15 @@ export class InmetAdapter {
       .filter((row) => relevantStations.has(row.stationId) || relevantStates.has(row.uf) || /paran[aá]|igua[cç]u|uruguai|uruguay/i.test(row.basin ?? ''))
       .map((row) => ({ source: 'INMET', stationId: row.stationId, observedAt: new Date(row.observedAt), ingestedAt, lastSuccessfulObservedAt: new Date(row.observedAt), value: row.rainMm, unit: 'mm', metric: 'rain_mm', quality: 'ok', freshness: 'fresh', sourceUrl: this.sourceUrl, raw: { uf: row.uf, basin: row.basin } }))
   }
+}
+
+function normalizeNoAlertText(payload: string): string {
+  return payload.normalize('NFD').replace(/\p{M}/gu, '').trim().replace(/\s+/gu, ' ').toLowerCase()
+}
+
+function isOfficialNoAlertText(payload: string): boolean {
+  const normalized = normalizeNoAlertText(payload)
+  return normalized === INMET_NO_ALERT_TEXT || normalized === `${INMET_NO_ALERT_TEXT}.`
 }
 
 function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string): NormalizedHydrologyTelemetry[] {

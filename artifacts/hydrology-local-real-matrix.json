@@ -47,7 +47,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260717T203215Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -85,7 +85,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260717T203215Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -123,7 +123,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260717T203215Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
@@ -161,7 +161,7 @@
       },
       "browser": {
         "status": "pass",
-        "detail": "local /municipalities rendered for proofRunId=proof-20260715T170010Z",
+        "detail": "local /municipalities rendered for proofRunId=proof-20260717T203215Z",
         "evidence": {
           "evidencePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local-browser-evidence.json",
           "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\artifacts\\hydrology-municipalities-local.png",
