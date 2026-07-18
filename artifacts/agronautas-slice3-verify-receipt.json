@@ -1,0 +1,23 @@
+{
+  "verifier": "agronautas-slice3-verify-receipt-v1",
+  "timestamp": "2026-07-18T22:54:16.770Z",
+  "postgres": {
+    "connected": true,
+    "tableCount": 21
+  },
+  "redis": {
+    "connected": true,
+    "ping": "PONG"
+  },
+  "providerEvidencePortTest": {
+    "defaultEvidenceMode": "seam",
+    "defaultProofRef": "run-verify-window:verify-1784414040617",
+    "injectedDegradedEvidenceMode": "unavailable",
+    "injectedDegradedReasons": [
+      "weather_data_unavailable"
+    ],
+    "demoEvidenceMode": "mock"
+  },
+  "mockOverLivePreventionVerified": true,
+  "passed": true
+}

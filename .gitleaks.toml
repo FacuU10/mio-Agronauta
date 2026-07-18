@@ -1,0 +1,20 @@
+# Agronautas Gitleaks Configuration
+# Defines simple, robust patterns to detect exposed secrets during development and CI.
+
+[title]
+"Agronautas Gitleaks Configuration"
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key or Secret"
+regex = '(?i)(api_key|apikey|secret|private_key|db_password|password|token)\s*=\s*[\'"][0-9a-zA-Z_\-]{16,120}[\'"]'
+
+[[rules]]
+id = "private-key"
+description = "Private Key"
+regex = '-----BEGIN[A-Z|\s_]+PRIVATE\sKEY-----'
+
+[[rules]]
+id = "database-url-credentials"
+description = "Database credentials in connection URL"
+regex = 'postgres(ql)?://[a-zA-Z0-9_\-]+:[a-zA-Z0-9_\-]+@'

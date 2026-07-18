@@ -11,4 +11,4 @@ COPY apps/workflow-runtime-python/src ./src
 
 RUN pip install --no-cache-dir .
 
-CMD ["workflow-runtime"]
+CMD ["python", "-m", "worker.queue.consumer"]

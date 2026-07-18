@@ -1,0 +1,45 @@
+{
+  "verifier": "agronautas-slice2-verify-receipt-v1",
+  "timestamp": "2026-07-18T22:34:04.865Z",
+  "postgres": {
+    "connected": true,
+    "latestMigrations": [
+      {
+        "id": "a003e583-a70a-482c-bdb3-fd8bf2d79844",
+        "migration_name": "20260605230000_prod_phase1_foundations",
+        "finished_at": null
+      },
+      {
+        "id": "3841e129-a372-454c-9a0d-6303b9aa0323",
+        "migration_name": "20260605230000_prod_phase1_foundations",
+        "finished_at": null
+      },
+      {
+        "id": "62d05915-7013-49da-9ffc-0bdebaeda377",
+        "migration_name": "20260718120000_municipality_alert_coverage",
+        "finished_at": "2026-07-18T14:25:28.521Z"
+      },
+      {
+        "id": "8e3d0383-f82a-40a5-8ee6-426f4ed80534",
+        "migration_name": "20260714120000_hydrology_proof_run_id",
+        "finished_at": "2026-07-14T07:27:31.263Z"
+      },
+      {
+        "id": "11349c02-c30f-4eff-a89c-36873b976afd",
+        "migration_name": "20260623210000_government_hydrology_municipalities",
+        "finished_at": "2026-06-27T22:03:20.771Z"
+      }
+    ],
+    "tableCount": 21
+  },
+  "redis": {
+    "connected": true,
+    "ping": "PONG"
+  },
+  "schedulerLock": {
+    "testRunId": "verify-window:verify-1784414040617",
+    "acquired": true,
+    "released": true
+  },
+  "passed": true
+}

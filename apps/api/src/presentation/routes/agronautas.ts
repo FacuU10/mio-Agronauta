@@ -44,6 +44,7 @@ import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import type { Field } from '../../domain/entities/agronautas'
+import { ProviderEvidencePort, RealProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -61,6 +62,7 @@ interface AgronautasRouterDeps {
   hydrologyRepository: Pick<HydrologyRepository, 'getDenseContextForField'>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
   isVersionedNamespace: boolean
+  providerEvidencePort: ProviderEvidencePort
 }
 
 export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {}): Router {
@@ -77,6 +79,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     hydrologyRepository: deps.hydrologyRepository ?? new HydrologyRepository(getPostgresPool()),
     hydrologyCopilotService: deps.hydrologyCopilotService ?? new HydrologyCopilotService(),
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
+    providerEvidencePort: deps.providerEvidencePort ?? new RealProviderEvidencePort(),
   }
 
   const router = Router()
@@ -530,17 +533,37 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       ...alerts.flatMap((alert) => alert.degradationReasons),
       ...climate.filter((item) => Boolean(item.staleCause)).map(() => 'weather_data_stale' as const),
     ]
+
+    const provenance = await Promise.all(climate.map(async (item) => {
+      const evidence = await resolved.providerEvidencePort.getEvidence(item.provider, 'climate', fieldId)
+      return {
+        evidenceId: `${item.provider}:weather:${item.observedAt.toISOString()}`,
+        provider: item.provider,
+        signalType: 'weather' as const,
+        observedAt: item.observedAt.toISOString(),
+        ingestedAt: snapshotContract.computedAt,
+        sourceUrl: item.provenance[0]?.startsWith('http') ? item.provenance[0] : 'https://api.open-meteo.com/',
+        rawHash: createHash('sha256').update(JSON.stringify(item)).digest('hex'),
+        confidence: item.confidence,
+        freshness: item.staleCause ? 'degraded' as const : 'fresh' as const,
+        providerMode: evidence.mode,
+        lastSuccessfulObservedAt: evidence.observedAt.toISOString(),
+        nextDueAt: snapshotContract.validUntil,
+        degradationReasons: item.staleCause ? ['weather_data_stale' as const] : []
+      }
+    }))
+
     return dashboardSnapshotSchema.parse({
       contractVersion: '1.0.0',
       snapshotId: snapshotContract.snapshotId,
       field: { fieldId: field.props.id, cropCategory: field.props.cropCategory ?? 'other', crop: field.props.crop, locality: field.props.localityName, provinceCode: field.props.provinceCode },
       status: degraded ? 'degraded' : snapshot.freshness,
       freshness: degraded ? 'degraded' : snapshot.freshness,
-      signals: climate.map((item) => ({ signalType: 'weather', status: item.staleCause ? 'degraded' : 'fresh', evidenceRefs: item.provenance, confidence: item.confidence, degradationReasons: item.staleCause ? ['weather_data_stale'] : [] })),
+      signals: climate.map((item) => ({ signalType: 'weather' as const, status: item.staleCause ? 'degraded' : 'fresh', evidenceRefs: item.provenance, confidence: item.confidence, degradationReasons: item.staleCause ? ['weather_data_stale'] : [] })),
       risk: { score: snapshotContract.score, level: snapshotContract.level, confidence: snapshotContract.confidence, drivers: snapshotContract.drivers },
       alerts: toStoredAlertContracts(alerts),
-      provenance: climate.map((item) => ({ evidenceId: `${item.provider}:weather:${item.observedAt.toISOString()}`, provider: item.provider, signalType: 'weather', observedAt: item.observedAt.toISOString(), ingestedAt: snapshotContract.computedAt, sourceUrl: item.provenance[0]?.startsWith('http') ? item.provenance[0] : 'https://api.open-meteo.com/', rawHash: createHash('sha256').update(JSON.stringify(item)).digest('hex'), confidence: item.confidence, freshness: item.staleCause ? 'degraded' : 'fresh', degradationReasons: item.staleCause ? ['weather_data_stale'] : [] })),
-      scheduler: { lastRunAt: snapshotContract.computedAt, nextRunAt: snapshotContract.validUntil, lockStatus: 'unknown', failures: degraded ? [{ provider: 'agronautas', signalType: 'weather', reason: snapshotContract.degradationReasons.join(',') || 'degraded_evidence' }] : [], nextDueBySource: [] },
+      provenance,
+      scheduler: { lastRunAt: snapshotContract.computedAt, nextRunAt: snapshotContract.validUntil, lockStatus: 'unknown' as const, failures: degraded ? [{ provider: 'agronautas', signalType: 'weather' as const, reason: snapshotContract.degradationReasons.join(',') || 'degraded_evidence' }] : [], nextDueBySource: [] },
       generatedAt: new Date().toISOString(),
       lastDataFetchedAt: (climateLastFetchedAt ?? snapshot.props.computedAt).toISOString(),
       presentation: { disclaimer: 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.', confidenceLabel: toConfidenceLabel(snapshotContract.confidence), sourcesUnavailable: degraded, staleFlags },

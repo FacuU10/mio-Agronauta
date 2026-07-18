@@ -95,3 +95,28 @@ Esta validación mínima no reemplaza el gate final. Para lanzamiento, el verify
 - Errores contractuales `UNAUTHORIZED`, `FORBIDDEN` y `WORKER_UNAVAILABLE` para auth/runtime.
 - Recompute reutiliza el run en vuelo cuando el lock ya existe.
 - Alertas se upsertean por `(field_id, risk_snapshot_id, alert_type)`.
+
+## Environment Manifest Verification Steps
+
+The production and staging environments must adhere to this non-secret manifest before any service deployment or liveness gate can pass.
+
+### Environment Variable Manifest
+
+| Variable Name | Owner | Purpose | Surface | Fail-Fast / Validation Behavior |
+|---|---|---|---|---|
+| `DATABASE_URL` | DB Admin | Main Postgres database connection URL | API, Web BFF | **Blocking Blocker**: Application refuses to start if missing or invalid in production. |
+| `REDIS_URL` | Infra Team | Distributed locks and job scheduling metadata | API | **Blocking Blocker**: Application refuses to start if missing or unreachable in production. |
+| `AGRONAUTAS_RUNTIME_REQUIRED` | Product | Enforces full runtime availability including worker and optional integrations | API | Optional/False by default. If True, `/ready` is unhealthy if workers/optional backends fail. |
+| `NASA_FIRMS_API_KEY` | SecOps | Access NASA active fire hotspots data | API | **Blocking in production**: If `AGRONAUTAS_RUNTIME_REQUIRED=true` and key is missing or placeholder. |
+| `SENTINEL_CLIENT_ID` | SecOps | Authentication client ID for Copernicus/Sentinel hub imagery | API | **Blocking in production**: If `AGRONAUTAS_RUNTIME_REQUIRED=true` and ID is missing or placeholder. |
+| `SENTINEL_CLIENT_SECRET` | SecOps | Authentication client secret for Copernicus/Sentinel hub imagery | API | **Blocking in production**: If `AGRONAUTAS_RUNTIME_REQUIRED=true` and secret is missing or placeholder. |
+| `HYDROLOGY_INGEST_TOKEN` | SecOps | Operator authentication token for submitting government hydrology records | API | **Blocking in production**: If missing or placeholder. |
+| `AGRONAUTAS_SCHEDULER_ENABLED` | App Admin | Enables background job scheduler daemon | API | Optional/Boolean flag. |
+| `HYDROLOGY_SCHEDULER_ENABLED` | App Admin | Enables background hydrology ingestion scheduler daemon | API | Optional/Boolean flag. |
+
+### Verification Steps
+
+1. **Static Manifest Check**: Before starting the server in staging or production, run the `ProductionEnvValidatorPort` validator to verify all required variables are set.
+2. **Readiness Probe Check**: Verify `/ready` returns `200 OK`. If any required or critical non-optional service is down, `/ready` must fail fast with a `503 Service Unavailable` status.
+3. **No-Secret Leak Verification**: Ensure that any startup or validation failure logs do NOT print the actual value of any environment variable, outputting only the missing or invalid variable name.
+

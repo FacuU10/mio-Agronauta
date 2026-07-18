@@ -187,6 +187,20 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         </Card>
       ) : null}
 
+      {dashboardPayload?.freshness === 'degraded' || risk?.status === 'degraded' ? (
+        <Card className="border-rose-200 bg-rose-50" data-testid="agronautas-degraded-banner">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
+            <div>
+              <p className="text-sm font-semibold text-rose-900">Señal degradada detectada · Evidencia histórica provista como fallback honesto</p>
+              <p className="text-sm text-rose-800">Los proveedores en tiempo real se encuentran caídos o inaccesibles. Mostrando datos persistidos en caché de corridas previas.</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => onSelectField(selectedFieldId)}>Sincronizar fuentes</Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyAnswer={hydrologyAnswer} hydrologyError={hydrologyError} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} />
 
       <NextFeaturesPanel dashboardPayload={dashboardPayload} />

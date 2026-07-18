@@ -10,12 +10,14 @@ import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
 import { createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, type GovernmentIngestionResponse, type HydrologyIngestionCoordinator, type HydrologyIngestionInput } from './presentation/routes/hydrology-government'
 import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
-import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type SourceWindow } from './infrastructure/jobs/agronautas-scheduler'
+import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type SourceWindow, type ScheduledWindowLock } from './infrastructure/jobs/agronautas-scheduler'
 import { PostgresSignalIngestionRepository } from './infrastructure/database/postgres/agronautas-signal-ingestion-repository'
 import { PostgresSourceCadenceRepository } from './infrastructure/database/postgres/agronautas-source-cadence-repository'
+import { RedisSchedulerWindowLock } from './infrastructure/database/redis/scheduler-lock'
 import type { SignalIngestionRepository, SourceCadenceRepository } from './domain/repositories/agronautas'
 import { HydrologyIngestionScheduler, type HydrologyIngestionRunner, type HydrologyIngestionSource } from './infrastructure/jobs/hydrology-ingestion-scheduler'
 import type { HydrologySource } from '@repo/zod-schemas'
+import { ProductionEnvValidatorPort } from './infrastructure/config/validator'
 
 dotenv.config()
 
@@ -59,6 +61,8 @@ export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyInges
 }
 
 export function startServer(): void {
+  ProductionEnvValidatorPort.validate()
+
   const hydrologyIngestionCoordinator = createHydrologyIngestionCoordinator()
   const app = createApp({ hydrologyIngestionCoordinator })
 
@@ -74,6 +78,7 @@ interface AgronautasSchedulerStartupDependencies {
   signalIngestionRepository?: Pick<SignalIngestionRepository, 'getLastSuccessfulObservedAtBySource'>
   sourceCadenceRepository?: Pick<SourceCadenceRepository, 'listEnabled'>
   scheduler?: Pick<AgronautasSignalScheduler, 'tick'>
+  schedulerLock?: ScheduledWindowLock
   now?: () => Date
   setInterval?: typeof setInterval
   clearInterval?: typeof clearInterval
@@ -83,10 +88,11 @@ export function startAgronautasSchedulerFromEnv(env: NodeJS.ProcessEnv = process
   const enabled = env['AGRONAUTAS_SCHEDULER_ENABLED'] === 'true'
   const signalIngestionRepository = dependencies.signalIngestionRepository ?? new PostgresSignalIngestionRepository()
   const sourceCadenceRepository = dependencies.sourceCadenceRepository ?? new PostgresSourceCadenceRepository()
+  const lock = dependencies.schedulerLock ?? new RedisSchedulerWindowLock()
   return createAgronautasSchedulerRuntime({
     enabled,
     scheduler: dependencies.scheduler ?? new AgronautasSignalScheduler(
-      { async acquireWindow() { return enabled } },
+      lock,
       { async enqueue(window: SourceWindow) { logger.info({ runId: window.runId, provider: window.provider, signalType: window.signalType }, 'Agronautas scheduler due window planned') }, async deadLetter(window: SourceWindow, error: Error) { logger.error({ runId: window.runId, error: error.message }, 'Agronautas scheduler enqueue failed') } },
     ),
     cadences: undefined,
