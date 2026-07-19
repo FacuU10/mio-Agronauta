@@ -4,6 +4,7 @@ import { hydrologyDenseContextV1Schema, type HydrologyDenseContextV1 } from '@re
 export interface HydrologyCopilotChatInput {
   message: string
   context: HydrologyDenseContextV1
+  signal?: AbortSignal
 }
 
 export interface HydrologyCopilotStreamEvent {
@@ -14,12 +15,40 @@ export interface HydrologyCopilotStreamEvent {
 interface GroqClient {
   chat: {
     completions: {
-      create(input: Record<string, unknown>): Promise<AsyncIterable<{ choices?: Array<{ delta?: { content?: string } }> }>>
+      create(input: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<AsyncIterable<{ choices?: Array<{ delta?: { content?: string } }> }>>
     }
   }
 }
 
-const MODEL = 'llama-3-70b-8192'
+export const DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
+const DEFAULT_GROQ_TIMEOUT_MS = 30_000
+
+export class GroqTimeoutError extends Error {
+  readonly code = 'GROQ_TIMEOUT'
+
+  constructor() {
+    super('groq_timeout')
+    this.name = 'GroqTimeoutError'
+  }
+}
+
+export class GroqUnavailableError extends Error {
+  readonly code = 'GROQ_UNAVAILABLE'
+
+  constructor() {
+    super('groq_unavailable')
+    this.name = 'GroqUnavailableError'
+  }
+}
+
+export function resolveGroqModel(env: Record<string, string | undefined> = process.env): string {
+  return env['GROQ_MODEL']?.trim() || env['AGRONAUTAS_GROQ_MODEL']?.trim() || DEFAULT_GROQ_MODEL
+}
+
+function resolveGroqTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const configured = Number.parseInt(env['GROQ_TIMEOUT_MS']?.trim() ?? '', 10)
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_GROQ_TIMEOUT_MS
+}
 
 const SYSTEM_PROMPT = `Sos el copiloto hidrológico de Iberá-Alerta.
 Respondé siempre 100% en español.
@@ -35,39 +64,75 @@ Marcá los pronósticos de 15 a 30 días como planificación especulativa o de b
 No cites Sentinel-1, simulaciones hidráulicas, Paraguay DMH, Itaipú ni Yacyretá como datos de Fase 1.`
 
 export class HydrologyCopilotService {
-  private readonly client: GroqClient
+  private readonly client: GroqClient | undefined
+  private readonly model: string
+  private readonly timeoutMs: number
 
-  constructor(client: GroqClient = new Groq({ apiKey: process.env['GROQ_API_KEY'] ?? 'missing-groq-api-key' }) as unknown as GroqClient) {
-    this.client = client
+  constructor(
+    client?: GroqClient,
+    options: { model?: string; timeoutMs?: number } = {},
+  ) {
+    const apiKey = process.env['GROQ_API_KEY']?.trim()
+    this.client = client ?? (apiKey ? new Groq({ apiKey }) as unknown as GroqClient : undefined)
+    this.model = options.model?.trim() || resolveGroqModel()
+    this.timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : resolveGroqTimeoutMs()
   }
 
   async *streamChat(input: HydrologyCopilotChatInput): AsyncIterable<HydrologyCopilotStreamEvent> {
     const context = hydrologyDenseContextV1Schema.parse(input.context)
-    yield { type: 'metadata', data: buildMetadata(context) }
+    yield { type: 'metadata', data: buildMetadata(context, this.model) }
+    const client = this.client
+    if (!client) throw new GroqUnavailableError()
 
-    const stream = await this.client.chat.completions.create({
-      model: MODEL,
-      stream: true,
-      temperature: 0.1,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: `Pregunta: ${input.message}\n\nContexto oficial HydrologyDenseContextV1:\n${JSON.stringify(context)}` },
-      ],
+    const controller = new AbortController()
+    const abortForDisconnect = () => controller.abort()
+    if (input.signal?.aborted) controller.abort()
+    else input.signal?.addEventListener('abort', abortForDisconnect, { once: true })
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort()
+        reject(new GroqTimeoutError())
+      }, this.timeoutMs)
     })
 
-    for await (const chunk of stream) {
-      const token = chunk.choices?.[0]?.delta?.content
-      if (token) yield { type: 'token', data: token }
-    }
+    try {
+      const stream = await Promise.race([
+        client.chat.completions.create({
+          model: this.model,
+          stream: true,
+          temperature: 0.1,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: `Pregunta: ${input.message}\n\nContexto oficial HydrologyDenseContextV1:\n${JSON.stringify(context)}` },
+          ],
+        }, { signal: controller.signal }),
+        timeoutPromise,
+      ])
 
-    yield { type: 'done', data: { model: MODEL } }
+      const iterator = stream[Symbol.asyncIterator]()
+      while (true) {
+        const next = await Promise.race([iterator.next(), timeoutPromise])
+        if (next.done) break
+        const token = next.value.choices?.[0]?.delta?.content
+        if (token) yield { type: 'token', data: token }
+      }
+
+      yield { type: 'done', data: { model: this.model } }
+    } catch (error) {
+      if (error instanceof GroqTimeoutError || controller.signal.aborted) throw new GroqTimeoutError()
+      throw error
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId)
+      input.signal?.removeEventListener('abort', abortForDisconnect)
+    }
   }
 }
 
-function buildMetadata(context: HydrologyDenseContextV1) {
+function buildMetadata(context: HydrologyDenseContextV1, model: string) {
   return {
     contractVersion: context.contractVersion,
-    model: MODEL,
+    model,
     fieldId: context.fieldId,
     zone: context.zone,
     sources: context.sources,

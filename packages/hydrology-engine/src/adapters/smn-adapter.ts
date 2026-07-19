@@ -26,6 +26,7 @@ function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string):
     const stationId = link?.match(/CAP_(\d+)_/)?.[1]
     const description = xmlTag(item, 'description')
     if (!title || !link || !stationId || !observedAt || /no se han emitido/i.test(description ?? '')) return []
+    const coverageKey = /corrientes/i.test(`${title} ${description ?? ''}`) ? 'smn-corrientes' : undefined
     return [{
       source: 'SMN' as const,
       stationId: `alert-${stationId}`,
@@ -38,7 +39,7 @@ function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string):
       quality: 'ok' as const,
       freshness: 'fresh' as const,
       sourceUrl,
-      raw: { title: title.slice(0, 256), description: (description ?? '').slice(0, 4096), link },
+      raw: { title: title.slice(0, 256), description: (description ?? '').slice(0, 4096), link, ...(coverageKey ? { coverageKey } : {}) },
     }]
   })
 }

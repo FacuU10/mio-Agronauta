@@ -29,6 +29,14 @@ test('INMET and SMN adapters keep relevant rain telemetry and storm alerts only'
   assert.equal(smn[1]?.metric, 'storm_alert')
 })
 
+test('official RSS alerts retain approved coverage keys while dynamic alert IDs stay non-mappable', () => {
+  const smn = new SmnAdapter().parse('<rss><channel><item><title>Alerta por tormentas en Corrientes</title><link>https://smn.example/CAP_20260714204142_alerta</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Corrientes</description></item><item><title>Alerta en Misiones</title><link>https://smn.example/CAP_20260714204143_alerta</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Misiones</description></item></channel></rss>')
+  const inmet = new InmetAdapter().parse('<rss><channel><item><title>Aviso meteorológico A830</title><link>https://inmet.example/54990.xml</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Estação A830</description></item><item><title>Aviso meteorológico nacional</title><link>https://inmet.example/54991.xml</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Sem estação aprovada</description></item></channel></rss>')
+
+  assert.deepEqual(smn.map((record) => [record.stationId, record.raw?.['coverageKey']]), [['alert-20260714204142', 'smn-corrientes'], ['alert-20260714204143', undefined]])
+  assert.deepEqual(inmet.map((record) => [record.stationId, record.raw?.['coverageKey']]), [['alert-54990', 'A830'], ['alert-54991', undefined]])
+})
+
 test('HydrologyRepository maps zones using ST_Intersects and prunes 30-day operational data', async () => {
   const calls: Array<{ sql: string; params: unknown[] }> = []
   const result = (rows: unknown[], rowCount: number) => ({ rows, rowCount, command: '', oid: 0, fields: [] })
@@ -77,27 +85,29 @@ test('municipality alert coverage migration is additive and rejects dynamic aler
 test('HydrologyRepository projects current alerts through stable active coverage keys without dynamic alert IDs', async () => {
   const calls: Array<{ sql: string; params: unknown[] }> = []
   const observedAt = new Date('2026-07-18T10:00:00.000Z')
+  const longMessage = 'Alerta útil\u0000: ' + 'detalle oficial '.repeat(40)
   const rows = [{
     municipality_id: 'mun-corrientes', locality_id: 'corrientes-capital', municipality_name: 'Corrientes', province_code: 'AR-W',
     alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'corrientes', secondary_pna_port_ids: [],
     ina_station_ids: [], smn_region_ids: ['smn-corrientes'], inmet_station_ids: ['A830'], source: 'PNA', station_id: 'corrientes',
     metric: 'river_height_m', value: '3.42', unit: 'm', observed_at: observedAt, ingested_at: observedAt,
     last_successful_observed_at: observedAt, quality: 'ok', freshness: 'fresh', tendency: null, forecast_horizon_days: null, confidence: 'normal', source_url: 'https://pna.example',
-    official_alerts: [{ source: 'SMN', coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'fresh', sourceUrl: 'https://smn.example' }],
+    official_alerts: [{ source: 'SMN', coverageKey: 'smn-corrientes', message: longMessage, observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'fresh', sourceUrl: 'https://smn.example' }],
   }]
   const db = { async query(sql: string, params: unknown[] = []) { calls.push({ sql, params }); return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
   const repo = new HydrologyRepository(db)
 
   const municipalities = await repo.getMunicipalityTelemetryOverview('AR-W')
 
-  assert.deepEqual(municipalities[0]?.officialAlerts, [{
-    source: 'SMN', coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'fresh', sourceUrl: 'https://smn.example',
-  }])
+  assert.ok((municipalities[0]?.officialAlerts?.[0]?.message.length ?? 0) <= 300)
+  assert.match(municipalities[0]?.officialAlerts?.[0]?.message ?? '', /^Alerta útil:/)
+  assert.doesNotMatch(municipalities[0]?.officialAlerts?.[0]?.message ?? '', /\u0000/)
   assert.equal(municipalities[0]?.latestTelemetry[0]?.source, 'PNA')
   assert.match(calls[0]?.sql ?? '', /municipality_alert_coverage/)
   assert.match(calls[0]?.sql ?? '', /official_coverage_key/)
   assert.match(calls[0]?.sql ?? '', /raw->>'coverageKey'/)
   assert.match(calls[0]?.sql ?? '', /coverage\.active/)
+  assert.match(calls[0]?.sql ?? '', /ht\.station_id NOT LIKE 'alert-%'[\s\S]*OR[\s\S]*raw->>'coverageKey'/)
   assert.doesNotMatch(calls[0]?.sql ?? '', /official_coverage_key\s*=\s*'alert-/i)
 })
 

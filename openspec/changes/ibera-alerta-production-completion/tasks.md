@@ -58,6 +58,13 @@ Chain strategy: feature-branch-chain
 - [x] 4.2 Define and test `ibera-alerta-operator-v1` receipt schema for redacted inventory, request/proofRunId, source outcomes, `202` response shape, row correlation, and no secrets/raw chat.
 - [x] 4.3 Remove the proven-unused temporary B1 harness, update stale mocked Playwright fixtures to the canonical contract, and verify the full build/test path; production operator execution remains a manual gate.
 
+## Corrective Apply: Groq Integration Hardening
+
+- [x] C.1 RED/GREEN/REFACTOR: Replace the hydrology Copilot stale model literal with explicit `GROQ_MODEL` configuration and the current default, preserving existing configuration compatibility.
+- [x] C.2 RED/GREEN/REFACTOR: Add bounded `AbortController` timeouts to hydrology streaming and the generic Groq JSON client, with timeout tests.
+- [x] C.3 RED/GREEN/REFACTOR: Ensure field and municipal Copilot SSE failures emit only stable safe reasons, never raw provider messages; preserve the deterministic missing-key fallback.
+- [x] C.4 Verify affected package builds/tests without claiming real Groq or Render Cron execution.
+
 ## Operational Evidence Gate (not an implementation task)
 
-- [ ] Authorized operator executes one API or regional BFF Cron request, correlates `proofRunId` to `hydrology_ingestion_runs`, and attaches the external execution record plus a validated redacted receipt. Do not mark this gate complete from local tests or configured Render values alone.
+- [ ] Future/non-blocking operator task: execute one API or regional BFF Cron request, correlate `proofRunId` to `hydrology_ingestion_runs`, and attach the external execution record plus a validated redacted receipt. Do not mark this gate complete from local tests or configured Render values alone.

@@ -45,6 +45,16 @@ test('GET /api/hydrology/municipalities returns canonical stable officialAlerts 
   assert.doesNotMatch(JSON.stringify(json.municipalities[0]?.officialAlerts), /alert-/)
 })
 
+test('GET /api/hydrology/municipalities/:id/dashboard truncates long official alert messages before Zod validation', async () => {
+  const dashboard = municipalityDashboard()
+  dashboard.officialAlerts = [{ ...dashboard.officialAlerts?.[0]!, message: 'INMET: alerta útil ' + 'detalle oficial '.repeat(40) }]
+  const response = await request(createTestApp({ hydrologyRepository: { async getMunicipalityTelemetryOverview() { return [municipalityView()] }, async getMunicipalityTelemetryDashboard() { return dashboard } } }), '/api/hydrology/municipalities/mercedes/dashboard')
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
+  assert.ok((json.municipality.officialAlerts[0]?.message.length ?? 0) <= 300)
+  assert.match(json.municipality.officialAlerts[0]?.message ?? '', /^INMET: alerta útil/)
+})
+
 test('GET /api/hydrology/municipalities returns classified error when repository query fails', async () => {
   const response = await request(createTestApp({
     hydrologyRepository: {
@@ -1034,6 +1044,19 @@ test('POST /api/hydrology/municipalities/:id/copilot/chat redacts provider failu
   assert.match(body, /El copiloto hidrológico no está disponible/)
   assert.match(body, /upstream_unavailable/)
   assert.doesNotMatch(body, /groq token secret|do-not-return/)
+})
+
+test('POST /api/hydrology/municipalities/:id/copilot/chat reports a Groq timeout without provider details', async () => {
+  const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat() { const { GroqTimeoutError } = await import('@repo/hydrology-engine'); throw new GroqTimeoutError() } } }), '/api/hydrology/municipalities/mercedes/copilot/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: '¿Hay alertas oficiales?' }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.text()
+  assert.match(body, /upstream_timeout/)
+  assert.doesNotMatch(body, /GROQ_TIMEOUT|groq_timeout/)
 })
 
 test('unsupported municipality Copilot context is schema-valid and contains no substituted data', () => {

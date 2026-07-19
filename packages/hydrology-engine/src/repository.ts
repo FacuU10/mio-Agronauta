@@ -348,9 +348,8 @@ const municipalityTelemetrySql = (where: string) => `SELECT
       JOIN hydrology_telemetry ht
         ON ht.source = coverage.source
        AND ht.metric = 'storm_alert'
-       AND ht.station_id NOT LIKE 'alert-%'
        AND (
-         ht.station_id = coverage.official_coverage_key
+         (ht.station_id NOT LIKE 'alert-%' AND ht.station_id = coverage.official_coverage_key)
          OR ht.raw->>'coverageKey' = coverage.official_coverage_key
          OR ht.raw->>'coverage_key' = coverage.official_coverage_key
        )
@@ -420,7 +419,7 @@ const toOfficialAlerts = (value: unknown): MunicipalityOfficialAlert[] => {
     if (!isRecord(item)) return []
     const source = item['source']
     const coverageKey = item['coverageKey']
-    const message = item['message']
+    const message = typeof item['message'] === 'string' ? sanitizeOfficialAlertMessage(item['message']) : ''
     const observedAt = toIsoOrNull(item['observedAt'])
     const lastSuccessfulObservedAt = toIsoOrNull(item['lastSuccessfulObservedAt'])
     if ((source !== 'SMN' && source !== 'INMET') || typeof coverageKey !== 'string' || !coverageKey || typeof message !== 'string' || !message || !observedAt || !lastSuccessfulObservedAt) return []
@@ -428,6 +427,11 @@ const toOfficialAlerts = (value: unknown): MunicipalityOfficialAlert[] => {
     if (!freshness) return []
     return [{ source, coverageKey, message, observedAt, lastSuccessfulObservedAt, freshness, sourceUrl: typeof item['sourceUrl'] === 'string' && item['sourceUrl'] ? item['sourceUrl'] : undefined }]
   })
+}
+
+export function sanitizeOfficialAlertMessage(message: string): string {
+  const sanitized = message.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim()
+  return sanitized.length > 300 ? `${sanitized.slice(0, 299).trimEnd()}…` : sanitized
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null

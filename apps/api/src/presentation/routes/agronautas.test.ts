@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
+import { DEFAULT_GROQ_MODEL } from '@repo/hydrology-engine'
 import type { DemoContactSubmissionRepository, FieldContextRepository, FieldRepository, SupportedCoverageResult } from '../../domain/repositories/agronautas'
 import { Field, FieldContext, RiskSnapshotFoundation, type ClimateSummary, type SatelliteSummary } from '../../domain/entities/agronautas'
 import { createAgronautasRouter } from './agronautas'
@@ -757,7 +758,7 @@ test('POST /fields/:id/copilot/chat streamea SSE de metadatos y tokens hidrológ
   const response = await request(createTestApp({
     fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
     hydrologyRepository: { async getDenseContextForField() { return hydrologyContext(field.props.id) } },
-    hydrologyCopilotService: { async *streamChat() { yield { type: 'metadata', data: { model: 'llama-3-70b-8192' } }; yield { type: 'token', data: 'Respuesta oficial.' }; yield { type: 'done', data: { model: 'llama-3-70b-8192' } } } },
+    hydrologyCopilotService: { async *streamChat() { yield { type: 'metadata', data: { model: DEFAULT_GROQ_MODEL } }; yield { type: 'token', data: 'Respuesta oficial.' }; yield { type: 'done', data: { model: DEFAULT_GROQ_MODEL } } } },
   }), `/agronautas/fields/${field.props.id}/copilot/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -770,6 +771,28 @@ test('POST /fields/:id/copilot/chat streamea SSE de metadatos y tokens hidrológ
   assert.match(body, /event: metadata/)
   assert.match(body, /data: "Respuesta oficial\."/)
   assert.match(body, /event: done/)
+})
+
+test('POST /fields/:id/copilot/chat redacts provider failures from the SSE response', async () => {
+  const fieldStore = new Map<string, Field>()
+  const field = testField('field-hydro-chat-error')
+  fieldStore.set(field.props.id, field)
+
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    hydrologyRepository: { async getDenseContextForField() { return hydrologyContext(field.props.id) } },
+    hydrologyCopilotService: { async *streamChat() { throw new Error('groq token secret=do-not-return') } },
+  }), `/agronautas/fields/${field.props.id}/copilot/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: '¿Cómo impacta en el lote?' }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.text()
+  assert.match(body, /El copiloto hidrológico no está disponible/)
+  assert.match(body, /upstream_unavailable/)
+  assert.doesNotMatch(body, /groq token secret|do-not-return/)
 })
 
 test('seeded Corrientes demo rows can power overview, weather, alerts, status and chat', async () => {
@@ -873,7 +896,7 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     alertSnapshotRepository: overrides.alertSnapshotRepository ?? { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
     demoContactSubmissionRepository: overrides.demoContactSubmissionRepository ?? createDemoContactSubmissionRepository(),
     hydrologyRepository: overrides.hydrologyRepository ?? { async getDenseContextForField(fieldId: string) { return hydrologyContext(fieldId) } },
-    hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: 'llama-3-70b-8192' } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: 'llama-3-70b-8192' } } } },
+    hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: DEFAULT_GROQ_MODEL } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: DEFAULT_GROQ_MODEL } } } },
   }))
   return app
 }

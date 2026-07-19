@@ -12,7 +12,7 @@ import {
   monitoringStatusSchema,
   riskSnapshotSchema,
 } from '@repo/zod-schemas'
-import { HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
+import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
 import { GenerateAlertsUseCase, toAlertContracts, toStaleAlertContracts, toStoredAlertContracts } from '../../application/usecases/generate-alerts-usecase'
 import { RequestRiskRecomputeUseCase } from '../../application/usecases/request-risk-recompute-usecase'
@@ -476,16 +476,21 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     res.setHeader('Connection', 'keep-alive')
     res.flushHeaders?.()
 
+    const controller = new AbortController()
+    const abortForDisconnect = () => controller.abort()
+    res.once('close', abortForDisconnect)
     try {
-      for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context })) {
+      for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context, signal: controller.signal })) {
         res.write(`event: ${event.type}\n`)
         res.write(`data: ${JSON.stringify(event.data)}\n\n`)
       }
       return res.end()
     } catch (error) {
       res.write('event: error\n')
-      res.write(`data: ${JSON.stringify({ message: 'El copiloto hidrológico no está disponible.', reason: error instanceof Error ? error.message : 'unknown_error' })}\n\n`)
+      res.write(`data: ${JSON.stringify({ message: 'El copiloto hidrológico no está disponible.', reason: error instanceof GroqTimeoutError ? 'upstream_timeout' : 'upstream_unavailable' })}\n\n`)
       return res.end()
+    } finally {
+      res.off('close', abortForDisconnect)
     }
   })
 

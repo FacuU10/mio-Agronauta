@@ -14,7 +14,7 @@ import {
   type HydrologySource,
   type HydrologyTelemetry,
 } from '@repo/zod-schemas'
-import { HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, SmnHttpClient, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperResult } from '@repo/hydrology-engine'
+import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperResult } from '@repo/hydrology-engine'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
@@ -126,7 +126,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     try {
       municipalities = (await resolved.hydrologyRepository.getMunicipalityTelemetryOverview(PROVINCE.provinceCode)).map((municipality) => ({
         ...municipality,
-        officialAlerts: municipality.officialAlerts ?? [],
+        officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts),
         latestTelemetry: municipality.latestTelemetry.filter((item) => !item.sourceUrl?.startsWith('offline-fixture://')),
       }))
       logger.info({ requestId, phase: 'repository_query', municipalityCount: municipalities.length, telemetryCount: municipalities.flatMap((item) => item.latestTelemetry).length }, 'Government hydrology municipalities repository query succeeded')
@@ -182,7 +182,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
 
     const payload = hydrologyGovernmentDashboardResponseSchema.parse({
       contractVersion: 'hydrology-government-dashboard-v1',
-      municipality: { ...municipality.municipality, officialAlerts: municipality.officialAlerts ?? [] },
+      municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts) },
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
       inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
@@ -268,18 +268,30 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       return res.end()
     }
 
+    const controller = new AbortController()
+    const abortForDisconnect = () => controller.abort()
+    res.once('close', abortForDisconnect)
     try {
-       for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context: buildMunicipalCopilotContext(municipality) })) {
+       for await (const event of resolved.hydrologyCopilotService.streamChat({ message: parsed.data.message, context: buildMunicipalCopilotContext(municipality), signal: controller.signal })) {
         writeSse(res, event.type, event.data)
       }
       return res.end()
     } catch (error) {
-      writeSse(res, 'error', { message: 'El copiloto hidrológico no está disponible.', reason: 'upstream_unavailable' })
+      writeSse(res, 'error', { message: 'El copiloto hidrológico no está disponible.', reason: isGroqTimeout(error) ? 'upstream_timeout' : 'upstream_unavailable' })
       return res.end()
+    } finally {
+      res.off('close', abortForDisconnect)
     }
   })
 
   return router
+}
+
+function sanitizeOfficialAlerts(alerts: MunicipalityTelemetryView['officialAlerts']): NonNullable<MunicipalityTelemetryView['officialAlerts']> {
+  return (alerts ?? []).flatMap((alert) => {
+    const message = sanitizeOfficialAlertMessage(alert.message)
+    return message ? [{ ...alert, message }] : []
+  })
 }
 
 function sourceFreshnessFor(telemetry: HydrologyTelemetry[]) {
@@ -535,6 +547,10 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
 
     return { runId, proofRunId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
   }
+}
+
+function isGroqTimeout(error: unknown): boolean {
+  return error instanceof GroqTimeoutError || (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'GROQ_TIMEOUT')
 }
 
 async function runHydrologyStartupOperation<T>(operation: HydrologyStartupOperation, run: () => Promise<T>): Promise<T> {

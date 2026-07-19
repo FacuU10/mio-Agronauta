@@ -38,6 +38,7 @@ function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string):
     const observedAt = asDateText(xmlTag(item, 'pubDate'))
     const stationId = link?.match(/\/(\d+)(?:\.xml)?$/)?.[1]
     if (!title || !link || !stationId || !observedAt) return []
+    const coverageKey = `${title} ${xmlTag(item, 'description') ?? ''}`.match(/\b(A830|A809|A846|A826)\b/i)?.[1]?.toUpperCase()
     return [{
       source: 'INMET' as const,
       stationId: `alert-${stationId}`,
@@ -50,7 +51,7 @@ function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string):
       quality: 'ok' as const,
       freshness: 'fresh' as const,
       sourceUrl,
-      raw: { title: title.slice(0, 256), description: (xmlTag(item, 'description') ?? '').slice(0, 4096), link },
+      raw: { title: title.slice(0, 256), description: (xmlTag(item, 'description') ?? '').slice(0, 4096), link, ...(coverageKey ? { coverageKey } : {}) },
     }]
   })
 }
