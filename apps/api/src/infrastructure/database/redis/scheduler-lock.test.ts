@@ -48,6 +48,8 @@ test('RedisSchedulerWindowLock uses NX with TTL and fallback to PG', async () =>
     'NX'
   ])
 
+  assert.ok(pgCalls[0])
+  assert.ok(pgCalls[1])
   assert.equal(pgCalls[0].params[0], 'open-meteo:climate:2026-07-04T00:00:00.000Z')
   assert.equal(pgCalls[1].params[0], 'open-meteo')
   assert.equal(pgCalls[1].params[1], 'climate')

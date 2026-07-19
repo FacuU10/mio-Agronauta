@@ -151,7 +151,7 @@ export class RealProviderEvidencePort implements ProviderEvidencePort {
     }
 
     // Force mock mode if requested specifically or as fallback
-    if (process.env.AGRONAUTAS_FORCE_MOCK_PROVIDERS === 'true') {
+    if (process.env['AGRONAUTAS_FORCE_MOCK_PROVIDERS'] === 'true') {
       mode = 'mock'
     }
 

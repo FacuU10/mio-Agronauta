@@ -1,72 +1,63 @@
 schema: gentle-ai.verify-result/v1
-evidence_revision: redacted:mvp-deferred-operations-20260719
-verdict: PASS_WITH_DEFERRED_OPERATIONS
-status: MVP_CLOSED
-blockers: 0
-critical_findings: 0
+change: ibera-alerta-production-completion
+verified_revision: 3898543bac247466a1a7968d7009c7ca6fbecd6f
+strict_tdd: true
+status: warning
+verdict: LOCAL_BUILD_GATE_FAILED
+mvp_closure: withheld
+blockers: 1
+critical_findings: 1
 requirements: 6/6
 scenarios: 12/12
 tasks: 23/23
-strict_tdd: true
-test_command: pnpm exec node --import tsx --test src/services/hydrology-copilot-service.test.ts; pnpm exec node --import tsx --test src/presentation/routes/hydrology-government.test.ts src/presentation/routes/agronautas.test.ts
+test_command: pnpm test
 test_exit_code: 0
-build_command: pnpm run build (packages/hydrology-engine)
-build_exit_code: 0
+test_output_hash: sha256:4fea5d3d029fcc43aefb34260d0ea42fd49aff519a48be49c64cf4f63f0767b2
+build_command: pnpm --dir packages/hydrology-engine build; pnpm --dir apps/api build; pnpm --dir apps/web build
+build_exit_code: 1
+build_output_hash: sha256:e44fff9b61be793ca46efc6a1fe27be761e4d41fbdb91a1661a33f4fe8c29ab2
+evidence_hash: sha256:74760eba54884b6868efca1331be82ebec6ab4564ee17037f8fd79efcb37bb7a
 persistence: hybrid
+next_recommended: fixes-required
 
 # Verification Report — Iberá-Alerta Production Completion
 
-**Decision:** The paid Render Cron and its production database correlation are explicitly deferred by product decision. They are future operational follow-ups, not MVP acceptance gates.
+## Result
 
-## MVP Closure
+The SDD acceptance tests and local Playwright evidence pass, but this revision cannot receive the requested `pass-with-deferred-operations` / MVP-closure verdict: the current API and web production builds fail. No code, environment, review, commit, or push action was performed during this verification.
 
-The current MVP is accepted for closure with the delivered API/BFF/UI flow, authenticated direct ingest with bounded partial-source outcomes, safe local Groq fallback, and local automated evidence.
+## Acceptance Criteria
 
-This closure does **not** claim any of the following:
-
-- A provider-managed Render Cron schedule or execution record.
-- Correlation of a production `proofRunId` to `hydrology_ingestion_runs`.
-- Render revision correlation.
-- A configured runtime `GROQ_API_KEY`.
-- A real Groq request or stream.
-
-The Groq state remains `degraded-fallback / not_run` unless a future authorized runtime acceptance proves otherwise.
-
-## Accepted Evidence Boundary
-
-| MVP area | Closure evidence | Status |
+| Requirement/scenarios | Result | Evidence |
 |---|---|---|
-| Municipal alert delivery | API/BFF/UI canonical contracts and stable coverage-key projection | Accepted |
-| Direct ingest | Authenticated direct ingest with bounded partial-source behavior | Accepted |
-| Copilot degradation | Missing-key fallback, safe SSE failure reasons, timeout and disconnect cancellation coverage | Accepted |
-| Local verification | Automated focused tests, builds, and diff checks recorded during implementation | Accepted |
-| Render paid Cron | Provider-managed execution and receipt | Deferred by product decision |
-| DB row correlation | Read-only `proofRunId` to `hydrology_ingestion_runs` correlation | Deferred by product decision |
-| Real Groq | Runtime credential and bounded real-stream acceptance | Deferred by product decision |
+| Reviewed municipal alert coverage (2/2) | PASS | Root suite includes coverage migration, idempotency, inactive rollback, and dynamic-ID exclusion tests. |
+| Coverage-scoped projection/rendering (2/2) | PASS | API/UI tests plus Playwright match/no-match scenarios pass. |
+| Single authenticated Cron ingress (2/2) | PASS | API suite covers missing/invalid token rejection and independent partial-source outcomes. |
+| Bounded acceptance receipts (2/2) | PASS for local/degraded scope | Receipt schema and safe degraded paths are tested; paid-provider operations are deferred below. |
+| Deferred timeline/long-range detail (1/1) | PASS | No new timeline/long-range API, UI, provider, or infrastructure is claimed by this change. |
+| Canonical municipal response (3/3) | PASS | Canonical `officialAlerts[]`, empty telemetry, and overview mapping are covered by API/UI tests. |
 
-## Executed Focused Evidence
+## Executed Evidence
 
-Focused implementation evidence passed and is the closure evidence for this MVP scope:
+| Command | Exit | Result |
+|---|---:|---|
+| `pnpm test` | 0 | 6/6 Turbo test tasks passed: zod-schemas 29/29, hydrology-engine 54/54, API 186/186, web 54/54 (323 tests total). |
+| `pnpm --dir packages/hydrology-engine build` | 0 | TypeScript build passed. |
+| `pnpm --dir apps/api build` | 2 | Failed: existing `provider-matrix.ts` TS4111 and `scheduler-lock.test.ts` TS2532 diagnostics. |
+| `pnpm --dir apps/web build` | 1 | Failed prerender of `/municipalities`: `PageNotFoundError: Cannot find module for page: /municipalities/page`. |
+| `pnpm --dir apps/web exec playwright test tests/e2e/municipalities-alerts.spec.ts --reporter=line` | 0 | Local dev-server evidence: 2/2 scenarios passed (matched alert isolation; empty-alert detail state). |
+| `git diff --check` | 0 | Clean before this report update. |
 
-| Command | Result | Scope |
-|---|---|---|
-| `pnpm exec node --import tsx --test src/services/hydrology-copilot-service.test.ts` | PASS — 6/6 | Missing-key local no-request fallback, upstream abort on disconnect, and timeout behavior |
-| `pnpm exec node --import tsx --test src/presentation/routes/hydrology-government.test.ts src/presentation/routes/agronautas.test.ts` | PASS — 76/76 | Field and government SSE contracts, including sanitized timeout classification |
-| `pnpm run build` in `packages/hydrology-engine` | PASS | Affected hydrology package build |
-| `git diff --check` | PASS | Documentation and implementation diff integrity recorded during the correction cycle |
+## Deferred-by-product-decision
 
-The full API build is not closure evidence because it remains limited by pre-existing TypeScript errors outside this change (`provider-matrix.ts` TS4111 and `scheduler-lock.test.ts` TS2532). This limitation is non-blocking for the accepted MVP scope and is not represented as a passed API build.
+The following are explicitly deferred and are neither executed nor claimed by this verification:
 
-## Operational Evidence Gate
+- Paid Render Cron provisioning, scheduling, and provider-managed execution receipt.
+- Read-only production correlation from `proofRunId` to `hydrology_ingestion_runs`.
+- Runtime `GROQ_API_KEY` configuration and a bounded real Groq stream.
 
-**Status: `deferred-by-product-decision`.** This is not evidence of execution. The gate is complete only as an MVP scope decision and must not be interpreted as proof that Render Cron, production row correlation, or real Groq works.
-
-## Deferred Follow-ups
-
-1. Provision paid Render Cron and capture one provider-managed scheduled execution record.
-2. Correlate that execution's `proofRunId` with `hydrology_ingestion_runs` using read-only database access; attach a validated redacted receipt.
-3. Configure a runtime `GROQ_API_KEY` and run one bounded real-stream acceptance only if real Groq is required by product scope.
+Their status is `deferred-by-product-decision`; they are not the reason for the local build gate failure.
 
 ## Archive Readiness
 
-The change can be archived as an MVP closure with deferred operations. Archive must preserve this decision and the follow-ups above; it must not convert them into completed production evidence.
+Not ready for archive. Restore passing API and web production builds, then re-run this verification. If those local checks pass, the recommended outcome is `pass-with-deferred-operations`, MVP closure with `blockers: 0`, and `next_recommended: archive` while preserving the deferred operations above.
