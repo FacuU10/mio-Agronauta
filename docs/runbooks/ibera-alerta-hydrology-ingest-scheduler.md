@@ -4,7 +4,7 @@ This runbook operates one authenticated hydrology ingest path, preserves source-
 
 ## Quick path
 
-1. Confirm `GET /health` and `GET /ready` before touching ingest.
+1. Confirm health and readiness through the path being operated before touching ingest. For the public web origin, use `GET /api/agronautas/health` and `GET /api/agronautas/ready`; bare `/health` and `/ready` are not public web routes.
 2. Run exactly one authenticated `POST /api/hydrology/ingest` through the canonical API or regional BFF path.
 3. Observe the returned `statusPath` once and correlate the returned `proofRunId` to `hydrology_ingestion_runs`.
 4. Save only the redacted operator receipt described below; never save a token, secret value, raw chat, or repeated probe output.
@@ -70,9 +70,13 @@ export PROOF_RUN_ID="ibera-proof-$(date -u +%Y%m%dT%H%M%SZ)"
 
 ### Health, readiness, BFF, UI
 
+For a known direct API origin, use its root `/health` and `/ready` routes. When only the public web origin is available, the canonical GET-only health and readiness probes are the Agronautas BFF routes below; do not infer a direct API host from a `404` at the web origin's bare `/health` or `/ready`.
+
 ```bash
 curl --fail-with-body --silent --show-error "$API_ORIGIN/health"
 curl --fail-with-body --silent --show-error "$API_ORIGIN/ready"
+curl --fail-with-body --silent --show-error "$WEB_ORIGIN/api/agronautas/health"
+curl --fail-with-body --silent --show-error "$WEB_ORIGIN/api/agronautas/ready"
 curl --fail-with-body --silent --show-error \
   -H "x-request-id: $REQUEST_ID" \
   "$WEB_ORIGIN/api/hydrology/municipalities"
