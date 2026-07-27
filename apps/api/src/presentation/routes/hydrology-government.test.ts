@@ -44,9 +44,9 @@ test('source freshness uses the last successful ingestion run and distinguishes 
 })
 
 test('source runner keeps provider timeout distinct from the bounded cold-start observation window', () => {
-  const client = { timeoutMs: 120_000, async fetchTelemetry() { return { ok: true as const, records: [] } } }
-  assert.equal(runnerTimeoutFor(client), 125_000)
-  assert.equal(runnerTimeoutFor({ ...client, timeoutMs: 999_999 }), 125_000)
+  const client = { timeoutMs: 120_000, totalTimeoutMs: 145_000, async fetchTelemetry() { return { ok: true as const, records: [] } } }
+  assert.equal(runnerTimeoutFor(client), 150_000)
+  assert.equal(runnerTimeoutFor({ ...client, timeoutMs: 999_999 }), 150_000)
 })
 
 test('GET /api/hydrology/municipalities returns canonical stable officialAlerts per municipality', async () => {

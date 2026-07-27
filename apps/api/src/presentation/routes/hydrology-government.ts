@@ -14,7 +14,7 @@ import {
   type HydrologySource,
   type HydrologyTelemetry,
 } from '@repo/zod-schemas'
-import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, type HydrologySourceFreshness, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperResult } from '@repo/hydrology-engine'
+import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, type HydrologySourceFreshness, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperAttemptLog, type ScraperResult } from '@repo/hydrology-engine'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
@@ -26,7 +26,7 @@ interface HydrologyGovernmentRouterDeps {
 }
 
 type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun' | 'findUnmappedAlertCoverageKeys'>>
-type GovernmentSourceClient = { fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult>; timeoutMs?: number }
+type GovernmentSourceClient = { fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult>; timeoutMs?: number; totalTimeoutMs?: number }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; httpSummary?: HydrologyGovernmentHttpSummary; diagnostic?: HydrologyGovernmentIngestDiagnostic }
 export type GovernmentIngestionResponse = { contractVersion?: 'hydrology-government-ingest-v1'; runId?: string; proofRunId?: string; statusPath?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type CompletedGovernmentIngestionResponse = { runId: string; proofRunId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
@@ -51,10 +51,10 @@ interface GovernmentIngestionRunnerDeps {
 const ALL_SOURCES: HydrologySource[] = ['PNA', 'INA', 'INMET', 'SMN']
 const DEFAULT_SOURCE_RUNNER_TIMEOUT_MS = 120_000
 const SOURCE_RUNNER_TIMEOUT_CUSHION_MS = 5_000
-const SOURCE_RUNNER_TIMEOUT_CAP_MS = 125_000
+const SOURCE_RUNNER_TIMEOUT_CAP_MS = 150_000
 const INGEST_RATE_WINDOW_MS = 60_000
 const INGEST_RATE_LIMIT = 4
-const INGEST_OBSERVATION_WAIT_CAP_MS = 125_000
+const INGEST_OBSERVATION_WAIT_CAP_MS = 150_000
 const INGEST_OBSERVATION_TTL_MS = 15 * 60_000
 const INGEST_OBSERVATION_MAX = 32
 const PROVINCE = { provinceCode: 'AR-W', name: 'Corrientes' }
@@ -520,6 +520,7 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
       const startedAt = now()
       const runnerTimeoutMs = runnerTimeoutFor(clients[source])
       const result = await fetchWithDeadline(clients[source], source, runnerTimeoutMs)
+      logSourceAttempts({ runId, proofRunId, source, attemptLog: result.attemptLog })
       const liveRecords = result.ok ? result.records : []
       const fallbackReason = !result.ok ? result.error : liveRecords.length === 0 ? `${source} returned no records` : undefined
       if (fallbackReason && !allowFixtureFallback) {
@@ -649,6 +650,7 @@ function logSourceIngestion(input: { runId: string; proofRunId: string; source: 
     providerPath: summary?.path ?? input.diagnostic?.providerPath,
     httpStatus: summary?.status ?? input.diagnostic?.upstreamStatus,
     elapsedMs: summary?.elapsedMs ?? input.diagnostic?.elapsedMs,
+    durationMs: input.diagnostic?.durationMs ?? summary?.elapsedMs,
     attempts: summary?.attempts ?? input.diagnostic?.attempts ?? 1,
     timeoutMs: summary?.timeoutMs ?? input.diagnostic?.timeoutMs,
     bytes: summary?.responseBytes,
@@ -659,6 +661,17 @@ function logSourceIngestion(input: { runId: string; proofRunId: string; source: 
   }
   if (input.diagnostic?.failureKind || input.error) logger.error(fields, 'Government hydrology source ingestion failed')
   else logger.info(fields, 'Government hydrology source ingestion succeeded')
+}
+
+function logSourceAttempts(input: { runId: string; proofRunId: string; source: HydrologySource; attemptLog?: ScraperAttemptLog[] }): void {
+  for (const attempt of input.attemptLog ?? []) {
+    logger.info({
+      runId: input.runId,
+      proofRunId: input.proofRunId,
+      source: input.source,
+      ...attempt,
+    }, 'Government hydrology source attempt completed')
+  }
 }
 
 async function logUnmappedCoverageKeys(repository: GovernmentIngestionRepository, runId: string, proofRunId: string, source: HydrologySource, records: NormalizedHydrologyTelemetry[]): Promise<void> {
@@ -711,15 +724,16 @@ function statusFromThrownProviderMessage(message: string): number | undefined {
 function mergeIngestDiagnostic(diagnostic: HydrologyGovernmentIngestDiagnostic, startedAt: Date, finishedAt: Date, timeoutMs: number): HydrologyGovernmentIngestDiagnostic {
   return {
     ...diagnostic,
-    attempts: 1,
+    attempts: diagnostic.attempts ?? 1,
     timeoutMs: diagnostic.timeoutMs ?? timeoutMs,
-    durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+    durationMs: diagnostic.durationMs ?? Math.max(0, finishedAt.getTime() - startedAt.getTime()),
     elapsedMs: diagnostic.elapsedMs ?? Math.max(0, finishedAt.getTime() - startedAt.getTime()),
   }
 }
 
 export function runnerTimeoutFor(client: GovernmentSourceClient): number {
-  const sourceTimeout = Number.isFinite(client.timeoutMs) && (client.timeoutMs ?? 0) > 0 ? client.timeoutMs as number : DEFAULT_SOURCE_RUNNER_TIMEOUT_MS
+  const requestedTimeout = client.totalTimeoutMs ?? client.timeoutMs
+  const sourceTimeout = Number.isFinite(requestedTimeout) && (requestedTimeout ?? 0) > 0 ? requestedTimeout as number : DEFAULT_SOURCE_RUNNER_TIMEOUT_MS
   return Math.min(SOURCE_RUNNER_TIMEOUT_CAP_MS, sourceTimeout + SOURCE_RUNNER_TIMEOUT_CUSHION_MS)
 }
 

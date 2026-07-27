@@ -37,14 +37,23 @@ test('PnaAdapter keeps existing data-station rows and ignores malformed official
 })
 
 test('PnaAdapter applies explicit row bounds to official table parsing', () => {
-  const extraRows = Array.from({ length: 64 }, (_, index) => `<tr><td>CORRIENTES</td><td>${index + 1},00</td><td>08:00</td><td>12/07/2026</td><td>CRECIENTE</td></tr>`).join('')
+  const extraRows = Array.from({ length: 280 }, (_, index) => `<tr><td>CORRIENTES</td><td>${index + 1},00</td><td>08:00</td><td>12/07/2026</td><td>CRECIENTE</td></tr>`).join('')
   const html = `<table><tr><th>Puerto</th><th>Altura</th></tr>${extraRows}</table>`
 
   const records = new PnaAdapter().parse(html, new Date('2026-07-12T15:00:00.000Z'))
 
-  assert.equal(records.length, 49)
+  assert.equal(records.length, 255)
   assert.equal(records[0]?.value, 1)
-  assert.equal(records.at(-1)?.value, 49)
+  assert.equal(records.at(-1)?.value, 255)
+})
+
+test('PnaAdapter parses an official monitored station after the first 50 table rows', () => {
+  const fillerRows = Array.from({ length: 55 }, (_, index) => `<tr><td>ESTACION ${index + 1}</td><td>S/D</td></tr>`).join('')
+  const html = `<table><tr><th>Puerto</th><th>Altura</th></tr>${fillerRows}<tr><td>MONTE CASEROS</td><td>4,75</td><td>08:00</td><td>12/07/2026</td></tr></table>`
+
+  const records = new PnaAdapter().parse(html, new Date('2026-07-12T15:00:00.000Z'))
+
+  assert.deepEqual(records.map((record) => [record.stationId, record.value]), [['monte_caseros', 4.75]])
 })
 
 test('PnaAdapter applies explicit cell bounds to official table parsing', () => {

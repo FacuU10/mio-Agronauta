@@ -481,7 +481,7 @@ export const hydrologyGovernmentIngestRequestSchema = z.object({
 export const hydrologyGovernmentIngestDiagnosticSchema = z.object({
   failureKind: hydrologyGovernmentIngestFailureKindSchema.optional(),
   reason: z.string().trim().min(1).max(160).optional(),
-  attempts: z.literal(1),
+  attempts: z.union([z.literal(1), z.literal(2)]),
   timeoutMs: z.number().int().positive().max(150_000).optional(),
   durationMs: z.number().int().nonnegative().max(150_000).optional(),
   elapsedMs: z.number().int().nonnegative().max(150_000).optional(),
@@ -495,7 +495,7 @@ export const hydrologyGovernmentHttpSummarySchema = z.object({
   path: z.string().trim().min(1).max(240).regex(/^\/[^?#]*$/),
   status: z.number().int().min(100).max(599).optional(),
   elapsedMs: z.number().int().nonnegative().max(150_000),
-  attempts: z.literal(1),
+  attempts: z.union([z.literal(1), z.literal(2)]),
   timeoutMs: z.number().int().positive().max(150_000),
   responseBytes: z.number().int().nonnegative().max(10_000_000).optional(),
   responseChars: z.number().int().nonnegative().max(10_000_000).optional(),

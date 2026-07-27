@@ -513,7 +513,7 @@ test('government HTTP clients abort official requests after configured timeout',
   assert.equal(typeof (timeoutFailure.ok ? undefined : timeoutFailure.diagnostic.elapsedMs), 'number')
 })
 
-test('PNA HTTP client uses env timeout and user-agent options with one network attempt', async () => {
+test('PNA HTTP client uses env timeout and user-agent options with two bounded retry attempts', async () => {
   const previousTimeout = process.env['HYDROLOGY_PNA_TIMEOUT_MS']
   const previousUserAgent = process.env['HYDROLOGY_PNA_USER_AGENT']
   const previousUrl = process.env['HYDROLOGY_PNA_URL']
@@ -530,10 +530,11 @@ test('PNA HTTP client uses env timeout and user-agent options with one network a
     }).fetchTelemetry()
 
     assert.equal(result.ok, false)
-    assert.equal(requests.length, 1)
+    assert.equal(requests.length, 2)
     assert.match(JSON.stringify(requests[0]?.headers), /AgronautasBot\/1\.0/)
     assert.equal(result.ok ? 0 : result.diagnostic.timeoutMs, 7)
     assert.equal(typeof (result.ok ? undefined : result.diagnostic.elapsedMs), 'number')
+    assert.equal(result.ok ? 0 : result.diagnostic.attempts, 2)
     assert.equal(result.ok ? '' : result.diagnostic.providerHost, 'pna.example')
     assert.equal(result.ok ? '' : result.diagnostic.providerPath, '/alturas')
   } finally {

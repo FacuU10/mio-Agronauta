@@ -24,7 +24,7 @@ async function withEnv<T>(values: Record<string, string | undefined>, run: () =>
   }
 }
 
-test('PnaHttpClient defaults to the fast official contenidosweb endpoint and bounded 60s provider timeout', async () => {
+test('PnaHttpClient defaults to the fast official contenidosweb endpoint and bounded 120s provider timeout', async () => {
   const requests: string[] = []
   const client = new PnaHttpClient({ fetch: async (input) => {
     requests.push(String(input))
@@ -33,10 +33,103 @@ test('PnaHttpClient defaults to the fast official contenidosweb endpoint and bou
 
   const result = await client.fetchTelemetry()
 
-  assert.equal(client.timeoutMs, 60_000)
+  assert.equal(client.timeoutMs, 120_000)
+  assert.equal(client.totalTimeoutMs, 145_000)
   assert.deepEqual(requests, ['https://contenidosweb.prefecturanaval.gob.ar/alturas/'])
   assert.equal(result.ok, true)
   assert.equal(result.ok ? result.records[0]?.stationId : '', 'corrientes')
+})
+
+test('PnaHttpClient retries a first network failure and returns the second successful response', async () => {
+  let calls = 0
+  const client = new PnaHttpClient({ timeoutMs: 50, totalTimeoutMs: 100, retryBackoffMs: 0, fetch: async () => {
+    calls += 1
+    if (calls === 1) throw new Error('socket reset')
+    return new Response('<table><tr><td>CORRIENTES</td><td>3,42</td></tr></table>', { status: 200, headers: { 'content-type': 'text/html' } })
+  } })
+
+  const result = await client.fetchTelemetry()
+
+  assert.equal(result.ok, true)
+  assert.equal(calls, 2)
+  assert.equal(result.httpSummary?.attempts, 2)
+  assert.equal(result.httpSummary?.status, 200)
+  assert.equal(result.ok ? result.records[0]?.stationId : '', 'corrientes')
+  assert.deepEqual(result.attemptLog?.map((attempt) => [attempt.attempt, attempt.outcome, attempt.failureKind]), [
+    [1, 'failure', 'network_failure'],
+    [2, 'success', undefined],
+  ])
+})
+
+test('PnaHttpClient retries upstream 429 and 5xx responses but preserves the final HTTP status', async () => {
+  let calls = 0
+  const result = await new PnaHttpClient({ timeoutMs: 50, totalTimeoutMs: 100, retryBackoffMs: 0, fetch: async () => {
+    calls += 1
+    return new Response('temporary upstream failure', { status: calls === 1 ? 503 : 429, statusText: calls === 1 ? 'Service Unavailable' : 'Too Many Requests' })
+  } }).fetchTelemetry()
+
+  assert.equal(result.ok, false)
+  assert.equal(calls, 2)
+  assert.equal(result.ok ? 0 : result.diagnostic.upstreamStatus, 429)
+  assert.equal(result.ok ? 0 : result.diagnostic.attempts, 2)
+  assert.equal(result.httpSummary?.status, 429)
+})
+
+test('PnaHttpClient stops after two retryable network failures and preserves the final cause and total duration', async () => {
+  let calls = 0
+  const result = await new PnaHttpClient({ timeoutMs: 50, totalTimeoutMs: 100, retryBackoffMs: 0, fetch: async () => {
+    calls += 1
+    throw new Error('connection refused')
+  } }).fetchTelemetry()
+
+  assert.equal(result.ok, false)
+  assert.equal(calls, 2)
+  assert.equal(result.ok ? '' : result.diagnostic.failureKind, 'network_failure')
+  assert.equal(result.ok ? 0 : result.diagnostic.attempts, 2)
+  assert.equal(result.httpSummary?.attempts, 2)
+  assert.equal(typeof (result.ok ? undefined : result.diagnostic.durationMs), 'number')
+  assert.deepEqual(result.attemptLog?.map((attempt) => [attempt.attempt, attempt.outcome, attempt.failureKind]), [
+    [1, 'failure', 'network_failure'],
+    [2, 'failure', 'network_failure'],
+  ])
+})
+
+test('PnaHttpClient does not retry parse failures or non-retryable 4xx responses', async () => {
+  let parseCalls = 0
+  const parseFailure = await new PnaHttpClient({ timeoutMs: 50, totalTimeoutMs: 100, retryBackoffMs: 0, fetch: async () => {
+    parseCalls += 1
+    return new Response('<html>invalid</html>', { status: 200, headers: { 'content-type': 'text/html' } })
+  } }).fetchTelemetry()
+  let clientCalls = 0
+  const clientFailure = await new PnaHttpClient({ timeoutMs: 50, totalTimeoutMs: 100, retryBackoffMs: 0, fetch: async () => {
+    clientCalls += 1
+    return new Response('forbidden', { status: 403, statusText: 'Forbidden' })
+  } }).fetchTelemetry()
+
+  assert.equal(parseFailure.ok, false)
+  assert.equal(parseCalls, 1)
+  assert.equal(parseFailure.ok ? '' : parseFailure.diagnostic.failureKind, 'parse_failure')
+  assert.equal(clientFailure.ok, false)
+  assert.equal(clientCalls, 1)
+  assert.equal(clientFailure.ok ? '' : clientFailure.diagnostic.upstreamStatus, 403)
+  assert.equal(clientFailure.ok ? 0 : clientFailure.diagnostic.attempts, 1)
+})
+
+test('PnaHttpClient enforces a finite total timeout budget across retry attempts', async () => {
+  let calls = 0
+  const result = await new PnaHttpClient({ timeoutMs: 10, totalTimeoutMs: 25, retryBackoffMs: 1, fetch: async (_input, init) => {
+    calls += 1
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    })
+  } }).fetchTelemetry()
+
+  assert.equal(result.ok, false)
+  assert.equal(calls, 2)
+  assert.equal(result.ok ? '' : result.diagnostic.failureKind, 'timeout')
+  assert.equal(result.ok ? 0 : result.diagnostic.attempts, 2)
+  assert.ok((result.ok ? 0 : result.diagnostic.durationMs ?? 0) <= 100)
+  assert.ok((result.httpSummary?.elapsedMs ?? 0) <= 100)
 })
 
 test('official clients read per-source timeouts and cap unsafe values', async () => {
@@ -56,13 +149,16 @@ test('official clients read per-source timeouts and cap unsafe values', async ()
 
 test('PnaHttpClient rejects oversized official HTML without unbounded text buffering', async () => {
   const maxResponseChars = 32
+  let calls = 0
   const result = await new PnaHttpClient({ maxResponseChars, fetch: async () => {
+    calls += 1
     return new Response(`<html>${'x'.repeat(maxResponseChars + 1)}</html>`, { status: 200, headers: { 'content-type': 'text/html' } })
   } }).fetchTelemetry()
 
   assert.equal(result.ok, false)
   assert.equal(result.ok ? '' : result.diagnostic.failureKind, 'response_too_large')
   assert.equal(result.ok ? 0 : result.diagnostic.attempts, 1)
+  assert.equal(calls, 1)
   assert.equal(result.ok ? '' : result.diagnostic.reason, 'PNA response exceeded safe size limit')
 })
 
@@ -222,7 +318,7 @@ test('government clients expose bounded safe HTTP summaries without query secret
     path: '/alturas',
     status: 200,
     attempts: 1,
-    timeoutMs: 60_000,
+    timeoutMs: 120_000,
   })
   assert.equal(result.httpSummary?.responseChars, body.length)
   assert.doesNotMatch(JSON.stringify(result), /should-not-leak|token=/i)

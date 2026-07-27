@@ -86,18 +86,18 @@ test('hydrology government ingest schema carries proof run id and safe http summ
         path: '/alerta/index.php',
         status: 200,
         elapsedMs: 321,
-        attempts: 1,
+        attempts: 2,
         timeoutMs: 15_000,
         responseBytes: 2048,
         responseChars: 1024,
       },
-      diagnostic: { failureKind: 'parse_failure', reason: 'INA payload parse failed', attempts: 1 },
+      diagnostic: { failureKind: 'parse_failure', reason: 'INA payload parse failed', attempts: 2, durationMs: 322 },
     }],
   })
 
   assert.equal(parsed.proofRunId, 'proof-20260714T000000Z')
   assert.equal(parsed.results[0]?.httpSummary?.host, 'www.ina.gob.ar')
-  assert.equal(parsed.results[0]?.httpSummary?.attempts, 1)
+  assert.equal(parsed.results[0]?.httpSummary?.attempts, 2)
 })
 
 test('hydrology operator receipt records redacted Cron, source, chat and row correlation evidence', () => {
@@ -191,7 +191,7 @@ test('hydrology ingest diagnostic schema rejects unsafe or unbounded public fiel
 
   assert.equal(withSecretField.success, false)
   assert.equal(withQueryString.success, false)
-  assert.equal(withRetryAttempt.success, false)
+  assert.equal(withRetryAttempt.success, true)
 })
 
 test('demo contact schema acepta payload válido y trimmea campos', () => {

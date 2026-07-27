@@ -1,7 +1,7 @@
 import { forecastConfidenceForHorizon, isForecastWithinPhase1Horizon, type NormalizedHydrologyTelemetry } from '../types.js'
 
 const PNA_URL = 'https://contenidosweb.prefecturanaval.gob.ar/alturas/'
-const MAX_OFFICIAL_TABLE_ROWS = 50
+const MAX_OFFICIAL_TABLE_ROWS = 256
 const MAX_OFFICIAL_TABLE_CELLS_PER_ROW = 12
 const MAX_OFFICIAL_TABLE_CELL_CHARS = 120
 
