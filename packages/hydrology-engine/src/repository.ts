@@ -24,6 +24,13 @@ export interface MunicipalityOfficialAlert {
   sourceUrl?: string
 }
 
+export interface HydrologySourceFreshness {
+  source: HydrologyTelemetry['source']
+  latestStatus: 'success' | 'failed' | 'partial' | 'excluded'
+  latestRecordsIngested: number
+  lastSuccessfulObservedAt: string | null
+}
+
 export interface MunicipalityTelemetryView {
   id: string
   localityId: string
@@ -106,7 +113,7 @@ export class HydrologyRepository {
            freshness = EXCLUDED.freshness,
            source_url = EXCLUDED.source_url,
            raw = EXCLUDED.raw`,
-        [record.stationId, record.source, record.metric, record.observedAt, record.ingestedAt ?? new Date(), record.lastSuccessfulObservedAt, record.metric === 'storm_alert' ? null : record.value, record.unit, record.tendency ?? null, record.forecastHorizonDays ?? null, record.confidence ?? forecastConfidenceForHorizon(record.forecastHorizonDays) ?? null, record.quality, record.freshness, record.sourceUrl ?? null, record.raw ?? {}],
+        [record.stationId, record.source, record.metric, record.observedAt, record.ingestedAt ?? new Date(), record.lastSuccessfulObservedAt, record.metric === 'storm_alert' ? null : record.value, record.unit, record.tendency ?? null, record.forecastHorizonDays ?? null, record.confidence ?? forecastConfidenceForHorizon(record.forecastHorizonDays) ?? null, record.quality, record.freshness, record.sourceUrl ?? null, { ...record.raw, ...(record.providerAlertId ? { providerAlertId: record.providerAlertId } : {}), ...(record.coverageKey ? { coverageKey: record.coverageKey } : {}) }],
       )
     }
   }
@@ -127,6 +134,41 @@ export class HydrologyRepository {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [run.source, run.proofRunId ?? null, run.stationId ?? null, run.status, run.startedAt, run.finishedAt ?? null, run.observedFrom ?? null, run.observedTo ?? null, run.lastSuccessfulObservedAt ?? null, run.recordsIngested, run.excludedMetrics ?? [], run.errorMessage ?? null, run.provenanceUrl ?? null],
     )
+  }
+
+  async getSourceFreshness(): Promise<HydrologySourceFreshness[]> {
+    const result = await this.db.query(
+      `SELECT source,
+              (array_agg(status ORDER BY started_at DESC))[1] AS latest_status,
+              (array_agg(records_ingested ORDER BY started_at DESC))[1] AS latest_records_ingested,
+              MAX(CASE WHEN status = 'success' THEN COALESCE(last_successful_observed_at, observed_to, finished_at, started_at) END) AS last_successful_observed_at
+         FROM hydrology_ingestion_runs
+        GROUP BY source
+        ORDER BY source`,
+    ) as QueryResult<{ source: HydrologyTelemetry['source']; latest_status: HydrologySourceFreshness['latestStatus']; latest_records_ingested: number | string | null; last_successful_observed_at: Date | string | null }>
+    return result.rows.map((row) => ({
+      source: row.source,
+      latestStatus: row.latest_status,
+      latestRecordsIngested: Number(row.latest_records_ingested ?? 0),
+      lastSuccessfulObservedAt: toIsoOrNull(row.last_successful_observed_at),
+    }))
+  }
+
+  async findUnmappedAlertCoverageKeys(source: Extract<HydrologyTelemetry['source'], 'SMN' | 'INMET'>, coverageKeys: string[]): Promise<string[]> {
+    const keys = [...new Set(coverageKeys.filter(Boolean))]
+    if (keys.length === 0) return []
+    const result = await this.db.query(
+      `SELECT DISTINCT requested.requested_key
+         FROM unnest($2::text[]) AS requested(requested_key)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM municipality_alert_coverage coverage
+           WHERE coverage.source = $1
+             AND coverage.official_coverage_key = requested.requested_key
+             AND coverage.active = true
+        )`,
+      [source, keys],
+    ) as QueryResult<{ requested_key: string }>
+    return result.rows.map((row) => row.requested_key)
   }
 
   async getIngestionProofRows(proofRunId: string, source?: string): Promise<Array<{ id: string; source: string; recordsIngested: number; status: string; startedAt: string; finishedAt: string | null }>> {
@@ -199,9 +241,9 @@ export class HydrologyRepository {
   }
 
   async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number }> {
-    const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000)
-    const telemetry = await this.db.query('DELETE FROM hydrology_telemetry WHERE observed_at < $1', [cutoff])
-    return { telemetryDeleted: telemetry.rowCount ?? 0, snapshotsDeleted: 0 }
+    void retentionDays
+    void now
+    return { telemetryDeleted: 0, snapshotsDeleted: 0 }
   }
 }
 
@@ -219,6 +261,7 @@ interface MunicipalityTelemetryRow extends Record<string, unknown> {
   inmet_station_ids: string[] | null
   station_id: string | null
   official_alerts: unknown
+  raw?: unknown
 }
 
 interface FieldHydrologyZoneRow extends Record<string, unknown> {
@@ -249,6 +292,7 @@ interface HydrologyTelemetryRow extends Record<string, unknown> {
   forecast_horizon_days: string | number | null
   confidence: HydrologyTelemetry['confidence']
   source_url: string | null
+  raw?: unknown
 }
 
 const municipalityTelemetrySql = (where: string) => `SELECT
@@ -282,6 +326,7 @@ const municipalityTelemetrySql = (where: string) => `SELECT
     latest.forecast_horizon_days,
     latest.confidence,
     latest.source_url,
+    latest.raw,
     COALESCE(official_alerts.official_alerts, '[]'::jsonb) AS official_alerts
   FROM agronautas_municipalities m
   LEFT JOIN municipality_gauge_mappings mgm ON mgm.municipality_id = m.id
@@ -300,7 +345,8 @@ const municipalityTelemetrySql = (where: string) => `SELECT
       ht.tendency,
       ht.forecast_horizon_days,
       ht.confidence,
-      ht.source_url
+      ht.source_url,
+      ht.raw
     FROM hydrology_telemetry ht
     WHERE ht.station_id = ANY(array_remove(
       ARRAY[mgm.primary_pna_port_id]::text[]
@@ -451,9 +497,14 @@ const toTelemetryOrNull = (row: Record<string, unknown>): HydrologyTelemetry | n
   const value = row['value'] === null ? null : Number(row['value'])
   if (value !== null && !Number.isFinite(value)) return null
   const forecastHorizonDays = asNumber(row['forecast_horizon_days'])
+  const raw = isRecord(row['raw']) ? row['raw'] : undefined
+  const providerAlertId = typeof raw?.['providerAlertId'] === 'string' ? raw['providerAlertId'] : undefined
+  const coverageKey = typeof raw?.['coverageKey'] === 'string' ? raw['coverageKey'] : undefined
   return {
     source: row['source'] as HydrologyTelemetry['source'],
     stationId: String(row['station_id']),
+    ...(providerAlertId ? { providerAlertId } : {}),
+    ...(coverageKey ? { coverageKey } : {}),
     observedAt,
     ingestedAt,
     lastSuccessfulObservedAt,

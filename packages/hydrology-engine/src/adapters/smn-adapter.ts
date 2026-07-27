@@ -13,7 +13,7 @@ export class SmnAdapter {
     const data = typeof payload === 'string' ? JSON.parse(payload) as { rainfall?: unknown[]; alerts?: unknown[]; data?: unknown[] } : payload
     const rows = readArray(data.rainfall ?? data.data).map(normalizeRainfall).filter((row): row is NonNullable<ReturnType<typeof normalizeRainfall>> => row !== null)
     const rainfall = rows.filter((row) => relevantProvinces.has(row.province)).map((row) => ({ source: 'SMN' as const, stationId: row.stationId, observedAt: new Date(row.observedAt), ingestedAt, lastSuccessfulObservedAt: new Date(row.observedAt), value: row.rainMm, unit: 'mm', metric: 'rain_mm' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: this.sourceUrl, raw: { province: row.province } }))
-    const alerts = readArray(data.alerts).map(normalizeAlert).filter((row): row is NonNullable<ReturnType<typeof normalizeAlert>> => row !== null).filter((row) => relevantProvinces.has(row.province)).map((row) => ({ source: 'SMN' as const, stationId: row.regionId, observedAt: new Date(row.observedAt), ingestedAt, lastSuccessfulObservedAt: new Date(row.observedAt), value: row.severity, unit: 'severity', metric: 'storm_alert' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: this.sourceUrl, raw: { province: row.province, title: row.title } }))
+    const alerts = readArray(data.alerts).map(normalizeAlert).filter((row): row is NonNullable<ReturnType<typeof normalizeAlert>> => row !== null).filter((row) => relevantProvinces.has(row.province)).map((row) => ({ source: 'SMN' as const, stationId: row.regionId, providerAlertId: row.regionId, observedAt: new Date(row.observedAt), ingestedAt, lastSuccessfulObservedAt: new Date(row.observedAt), value: row.severity, unit: 'severity', metric: 'storm_alert' as const, quality: 'ok' as const, freshness: 'fresh' as const, sourceUrl: this.sourceUrl, raw: { province: row.province, title: row.title, providerAlertId: row.regionId } }))
     return [...rainfall, ...alerts]
   }
 }
@@ -27,9 +27,12 @@ function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string):
     const description = xmlTag(item, 'description')
     if (!title || !link || !stationId || !observedAt || /no se han emitido/i.test(description ?? '')) return []
     const coverageKey = /corrientes/i.test(`${title} ${description ?? ''}`) ? 'smn-corrientes' : undefined
+    const stableStationId = coverageKey ?? 'smn-alerts'
     return [{
       source: 'SMN' as const,
-      stationId: `alert-${stationId}`,
+      stationId: stableStationId,
+      providerAlertId: stationId,
+      coverageKey,
       observedAt: new Date(observedAt),
       ingestedAt,
       lastSuccessfulObservedAt: new Date(observedAt),
@@ -39,7 +42,7 @@ function parseOfficialRss(payload: string, ingestedAt: Date, sourceUrl: string):
       quality: 'ok' as const,
       freshness: 'fresh' as const,
       sourceUrl,
-      raw: { title: title.slice(0, 256), description: (description ?? '').slice(0, 4096), link, ...(coverageKey ? { coverageKey } : {}) },
+      raw: { title: title.slice(0, 256), description: (description ?? '').slice(0, 4096), link, providerAlertId: stationId, ...(coverageKey ? { coverageKey } : {}) },
     }]
   })
 }

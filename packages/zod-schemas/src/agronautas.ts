@@ -28,6 +28,7 @@ export const hydrologyTargetZones = ['Mercedes', 'Ituzaingó', 'Virasoro'] as co
 export const hydrologyMetrics = ['river_height_m', 'rain_mm', 'storm_alert'] as const
 export const hydrologyForecastConfidence = ['normal', 'speculative'] as const
 export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure', 'response_too_large'] as const
+export const hydrologyGovernmentSourceRunStatuses = ['success', 'empty', 'failed'] as const
 export const hydrologyOperatorReceiptScopes = ['local', 'production'] as const
 export const hydrologyOperatorReceiptChatModes = ['groq', 'degraded-fallback', 'not_run'] as const
 export const hydrologyOperatorReceiptRunnerModes = ['direct', 'proxy'] as const
@@ -78,6 +79,7 @@ const hydrologyFreshnessSchema = z.enum(hydrologyFreshnessStates)
 const hydrologyQualitySchema = z.enum(hydrologyQualityStates)
 const hydrologyTargetZoneSchema = z.enum(hydrologyTargetZones)
 const hydrologyMetricSchema = z.enum(hydrologyMetrics)
+const hydrologyGovernmentSourceRunStatusSchema = z.enum(hydrologyGovernmentSourceRunStatuses)
 const hydrologyForecastConfidenceSchema = z.enum(hydrologyForecastConfidence)
 const hydrologyGovernmentIngestFailureKindSchema = z.enum(hydrologyGovernmentIngestFailureKinds)
 
@@ -352,6 +354,8 @@ export const hydrologyStationReferenceSchema = z.object({
 export const hydrologyTelemetrySchema = z.object({
   source: hydrologySourceSchema,
   stationId: z.string().min(1).max(80),
+  providerAlertId: z.string().min(1).max(160).optional(),
+  coverageKey: z.string().min(1).max(120).optional(),
   observedAt: z.string().datetime(),
   ingestedAt: z.string().datetime().optional(),
   lastSuccessfulObservedAt: z.string().datetime(),
@@ -407,6 +411,7 @@ export const hydrologyDenseContextV1Schema = z.object({
 
 export const hydrologyGovernmentFreshnessSchema = z.object({
   source: hydrologySourceSchema,
+  status: hydrologyGovernmentSourceRunStatusSchema.optional(),
   lastSuccessfulObservedAt: z.string().datetime().nullable(),
   freshness: hydrologyFreshnessSchema,
   label: z.string().min(1).max(120),
@@ -477,9 +482,9 @@ export const hydrologyGovernmentIngestDiagnosticSchema = z.object({
   failureKind: hydrologyGovernmentIngestFailureKindSchema.optional(),
   reason: z.string().trim().min(1).max(160).optional(),
   attempts: z.literal(1),
-  timeoutMs: z.number().int().positive().max(60_000).optional(),
-  durationMs: z.number().int().nonnegative().max(60_000).optional(),
-  elapsedMs: z.number().int().nonnegative().max(60_000).optional(),
+  timeoutMs: z.number().int().positive().max(150_000).optional(),
+  durationMs: z.number().int().nonnegative().max(150_000).optional(),
+  elapsedMs: z.number().int().nonnegative().max(150_000).optional(),
   providerHost: z.string().trim().min(1).max(120).regex(/^[a-z0-9.-]+(?::\d{1,5})?$/i).optional(),
   providerPath: z.string().trim().min(1).max(240).regex(/^\/[^?#]*$/).optional(),
   upstreamStatus: z.number().int().min(100).max(599).optional(),
@@ -489,9 +494,9 @@ export const hydrologyGovernmentHttpSummarySchema = z.object({
   host: z.string().trim().min(1).max(120).regex(/^[a-z0-9.-]+(?::\d{1,5})?$/i),
   path: z.string().trim().min(1).max(240).regex(/^\/[^?#]*$/),
   status: z.number().int().min(100).max(599).optional(),
-  elapsedMs: z.number().int().nonnegative().max(60_000),
+  elapsedMs: z.number().int().nonnegative().max(150_000),
   attempts: z.literal(1),
-  timeoutMs: z.number().int().positive().max(60_000),
+  timeoutMs: z.number().int().positive().max(150_000),
   responseBytes: z.number().int().nonnegative().max(10_000_000).optional(),
   responseChars: z.number().int().nonnegative().max(10_000_000).optional(),
 }).strict()

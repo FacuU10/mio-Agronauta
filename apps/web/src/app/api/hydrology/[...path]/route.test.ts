@@ -2,6 +2,22 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { NextRequest } from 'next/server'
 import { GET, POST, PUT } from './route'
+import { upstreamTimeoutMs } from './timeout'
+
+test('hydrology BFF uses a finite cold-start-aware timeout with an explicit cap', async () => {
+  const previous = process.env['AGRONAUTAS_BFF_TIMEOUT_MS']
+  try {
+    delete process.env['AGRONAUTAS_BFF_TIMEOUT_MS']
+    assert.equal(upstreamTimeoutMs(), 120_000)
+    process.env['AGRONAUTAS_BFF_TIMEOUT_MS'] = '999999'
+    assert.equal(upstreamTimeoutMs(), 150_000)
+    process.env['AGRONAUTAS_BFF_TIMEOUT_MS'] = '90000'
+    assert.equal(upstreamTimeoutMs(), 90_000)
+  } finally {
+    if (previous === undefined) delete process.env['AGRONAUTAS_BFF_TIMEOUT_MS']
+    else process.env['AGRONAUTAS_BFF_TIMEOUT_MS'] = previous
+  }
+})
 
 test('hydrology BFF forwards the token to verify only and preserves no-store response semantics', async () => {
   const previousFetch = globalThis.fetch

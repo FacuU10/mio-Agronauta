@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, runnerTimeoutFor, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -25,6 +25,28 @@ test('GET /api/hydrology/municipalities devuelve resumen provincial y municipios
   assert.equal(json.municipalities[0]?.name, 'Mercedes')
   assert.equal(json.sourceFreshness[0]?.label, 'Último dato obtenido: 23/06/2026 10:30')
   assert.equal(json.provinceAlerts[0]?.zone, 'Mercedes')
+})
+
+test('source freshness uses the last successful ingestion run and distinguishes failed and empty sources', async () => {
+  const response = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getSourceFreshness() {
+      return [
+        { source: 'INMET' as const, latestStatus: 'failed' as const, latestRecordsIngested: 0, lastSuccessfulObservedAt: '2026-07-01T10:00:00.000Z' },
+        { source: 'SMN' as const, latestStatus: 'success' as const, latestRecordsIngested: 0, lastSuccessfulObservedAt: '2026-07-02T10:00:00.000Z' },
+      ]
+    },
+  } }), '/api/hydrology/municipalities')
+  const json = hydrologyGovernmentMunicipalitiesResponseSchema.parse(await response.json())
+  assert.deepEqual(json.sourceFreshness.find((item) => item.source === 'INMET'), { source: 'INMET', status: 'failed', lastSuccessfulObservedAt: '2026-07-01T10:00:00.000Z', freshness: 'degraded', label: 'Última ejecución fallida o degradada; último dato exitoso: 01/07/2026 10:00' })
+  assert.deepEqual(json.sourceFreshness.find((item) => item.source === 'SMN'), { source: 'SMN', status: 'empty', lastSuccessfulObservedAt: '2026-07-02T10:00:00.000Z', freshness: 'degraded', label: 'Última ejecución exitosa sin alertas: 02/07/2026 10:00' })
+})
+
+test('source runner keeps provider timeout distinct from the bounded cold-start observation window', () => {
+  const client = { timeoutMs: 120_000, async fetchTelemetry() { return { ok: true as const, records: [] } } }
+  assert.equal(runnerTimeoutFor(client), 125_000)
+  assert.equal(runnerTimeoutFor({ ...client, timeoutMs: 999_999 }), 125_000)
 })
 
 test('GET /api/hydrology/municipalities returns canonical stable officialAlerts per municipality', async () => {

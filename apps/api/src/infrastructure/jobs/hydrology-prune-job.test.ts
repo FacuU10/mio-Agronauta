@@ -2,13 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HydrologyPruneJob } from './hydrology-prune-job'
 
-test('HydrologyPruneJob runs repository prune with 30-day retention', async () => {
+test('HydrologyPruneJob keeps the historical-retention compatibility hook non-destructive', async () => {
   const calls: Array<{ days: number; now: Date }> = []
-  const job = new HydrologyPruneJob({ async pruneOldData(days: number, now: Date) { calls.push({ days, now }); return { telemetryDeleted: 1, snapshotsDeleted: 2 } } } as never, { now: () => new Date('2026-06-23T03:00:00.000Z') })
+  const job = new HydrologyPruneJob({ async pruneOldData(days: number, now: Date) { calls.push({ days, now }); return { telemetryDeleted: 0, snapshotsDeleted: 0 } } } as never, { now: () => new Date('2026-06-23T03:00:00.000Z') })
 
   const result = await job.run()
 
-  assert.deepEqual(result, { telemetryDeleted: 1, snapshotsDeleted: 2 })
+  assert.deepEqual(result, { telemetryDeleted: 0, snapshotsDeleted: 0 })
   assert.equal(calls[0]?.days, 30)
   assert.equal(calls[0]?.now.toISOString(), '2026-06-23T03:00:00.000Z')
 })

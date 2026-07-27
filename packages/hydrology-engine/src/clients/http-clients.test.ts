@@ -6,7 +6,25 @@ import { InaHttpClient, InmetHttpClient, PnaHttpClient, SmnHttpClient } from './
 
 const readFixture = (name: string) => readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')
 
-test('PnaHttpClient defaults to the fast official contenidosweb endpoint and safe 25s timeout', async () => {
+async function withEnv<T>(values: Record<string, string | undefined>, run: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key])
+    const value = values[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+test('PnaHttpClient defaults to the fast official contenidosweb endpoint and bounded 60s provider timeout', async () => {
   const requests: string[] = []
   const client = new PnaHttpClient({ fetch: async (input) => {
     requests.push(String(input))
@@ -15,10 +33,25 @@ test('PnaHttpClient defaults to the fast official contenidosweb endpoint and saf
 
   const result = await client.fetchTelemetry()
 
-  assert.equal(client.timeoutMs, 25_000)
+  assert.equal(client.timeoutMs, 60_000)
   assert.deepEqual(requests, ['https://contenidosweb.prefecturanaval.gob.ar/alturas/'])
   assert.equal(result.ok, true)
   assert.equal(result.ok ? result.records[0]?.stationId : '', 'corrientes')
+})
+
+test('official clients read per-source timeouts and cap unsafe values', async () => {
+  await withEnv({
+    HYDROLOGY_PNA_TIMEOUT_MS: '90000',
+    HYDROLOGY_INA_TIMEOUT_MS: '121000',
+    HYDROLOGY_INMET_TIMEOUT_MS: 'bad',
+    HYDROLOGY_SMN_TIMEOUT_MS: '45000',
+  }, async () => {
+    const fetchEmpty = async () => new Response('', { status: 204 })
+    assert.equal(new PnaHttpClient({ fetch: fetchEmpty }).timeoutMs, 90_000)
+    assert.equal(new InaHttpClient({ fetch: fetchEmpty }).timeoutMs, 120_000)
+    assert.equal(new InmetHttpClient({ fetch: fetchEmpty }).timeoutMs, 60_000)
+    assert.equal(new SmnHttpClient({ fetch: fetchEmpty }).timeoutMs, 45_000)
+  })
 })
 
 test('PnaHttpClient rejects oversized official HTML without unbounded text buffering', async () => {
@@ -45,7 +78,7 @@ test('InmetHttpClient uses the current official RSS feed in one bounded request'
   assert.equal(calls, 1)
   assert.deepEqual(requests, ['https://apiprevmet3.inmet.gov.br/avisos/rss'])
   assert.equal(result.ok, true)
-  assert.deepEqual(result.ok ? result.records.map((record) => [record.stationId, record.metric, record.value]) : [], [['alert-54990', 'storm_alert', null]])
+  assert.deepEqual(result.ok ? result.records.map((record) => [record.stationId, record.providerAlertId, record.coverageKey, record.metric, record.value]) : [], [['inmet-alerts', '54990', undefined, 'storm_alert', null]])
   assert.equal(result.ok ? result.httpSummary?.attempts : 0, 1)
 })
 
@@ -163,7 +196,7 @@ test('SMN parses the current official CAP RSS feed as bounded alert telemetry', 
   const smn = await new SmnHttpClient({ fetch: async () => new Response('<rss><channel><item><title>Lluvias</title><link>https://ssl.smn.gob.ar/feeds/CAP/xml_generados/CAP_20260714204142_Lluvia_Patagonia_alertas_alertas_1.xml</link><pubDate>Wed, 15 Jul 2026 06:00:01 GMT</pubDate><description>Alerta oficial</description></item></channel></rss>', { status: 200, headers: { 'content-type': 'application/rss+xml' } }) }).fetchTelemetry()
 
   assert.equal(smn.ok, true)
-  assert.deepEqual(smn.ok ? smn.records.map((record) => [record.stationId, record.metric, record.value]) : [], [['alert-20260714204142', 'storm_alert', null]])
+  assert.deepEqual(smn.ok ? smn.records.map((record) => [record.stationId, record.providerAlertId, record.coverageKey, record.metric, record.value]) : [], [['smn-alerts', '20260714204142', undefined, 'storm_alert', null]])
   assert.ok(smn.ok && smn.records[0]?.sourceUrl?.startsWith('https://ssl.smn.gob.ar/feeds/'))
 })
 
@@ -189,7 +222,7 @@ test('government clients expose bounded safe HTTP summaries without query secret
     path: '/alturas',
     status: 200,
     attempts: 1,
-    timeoutMs: 25_000,
+    timeoutMs: 60_000,
   })
   assert.equal(result.httpSummary?.responseChars, body.length)
   assert.doesNotMatch(JSON.stringify(result), /should-not-leak|token=/i)

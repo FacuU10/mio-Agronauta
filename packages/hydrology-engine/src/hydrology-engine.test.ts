@@ -2,7 +2,16 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository } from './index'
+import { HYDROLOGY_BRAZIL_EXTENSION, InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository } from './index'
+
+test('Brazil remains an explicit data-free extension point until official sources and BR to Corrientes influence are verified', () => {
+  assert.deepEqual(HYDROLOGY_BRAZIL_EXTENSION, {
+    countryCode: 'BR',
+    stationIds: [],
+    municipalityIds: [],
+    upstreamInfluence: { fromCountryCode: 'BR', toProvinceCode: 'AR-W', relation: 'requires_official_source_and_verified_model' },
+  })
+})
 
 test('PNA and INA adapters parse heights, tendencies, and cap forecasts at 30 days', () => {
   const now = new Date('2026-06-23T12:00:00.000Z')
@@ -33,11 +42,11 @@ test('official RSS alerts retain approved coverage keys while dynamic alert IDs 
   const smn = new SmnAdapter().parse('<rss><channel><item><title>Alerta por tormentas en Corrientes</title><link>https://smn.example/CAP_20260714204142_alerta</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Corrientes</description></item><item><title>Alerta en Misiones</title><link>https://smn.example/CAP_20260714204143_alerta</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Misiones</description></item></channel></rss>')
   const inmet = new InmetAdapter().parse('<rss><channel><item><title>Aviso meteorológico A830</title><link>https://inmet.example/54990.xml</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Estação A830</description></item><item><title>Aviso meteorológico nacional</title><link>https://inmet.example/54991.xml</link><pubDate>2026-07-18T10:00:00Z</pubDate><description>Sem estação aprovada</description></item></channel></rss>')
 
-  assert.deepEqual(smn.map((record) => [record.stationId, record.raw?.['coverageKey']]), [['alert-20260714204142', 'smn-corrientes'], ['alert-20260714204143', undefined]])
-  assert.deepEqual(inmet.map((record) => [record.stationId, record.raw?.['coverageKey']]), [['alert-54990', 'A830'], ['alert-54991', undefined]])
+  assert.deepEqual(smn.map((record) => [record.stationId, record.providerAlertId, record.coverageKey]), [['smn-corrientes', '20260714204142', 'smn-corrientes'], ['smn-alerts', '20260714204143', undefined]])
+  assert.deepEqual(inmet.map((record) => [record.stationId, record.providerAlertId, record.coverageKey]), [['A830', '54990', 'A830'], ['inmet-alerts', '54991', undefined]])
 })
 
-test('HydrologyRepository maps zones using ST_Intersects and prunes 30-day operational data', async () => {
+test('HydrologyRepository maps zones using ST_Intersects without deleting historical telemetry', async () => {
   const calls: Array<{ sql: string; params: unknown[] }> = []
   const result = (rows: unknown[], rowCount: number) => ({ rows, rowCount, command: '', oid: 0, fields: [] })
   const db = { async query(sql: string, params: unknown[] = []) { calls.push({ sql, params }); return sql.includes('SELECT locality_name') ? result([{ locality_name: 'Mercedes' }], 1) : result([], 2) } }
@@ -48,8 +57,25 @@ test('HydrologyRepository maps zones using ST_Intersects and prunes 30-day opera
 
   assert.deepEqual(mapping.referencePorts, ['paso_de_la_patria', 'corrientes'])
   assert.match(calls[0]?.sql ?? '', /ST_Intersects/)
-  assert.equal((calls[1]?.params[0] as Date).toISOString(), '2026-05-24T00:00:00.000Z')
-  assert.deepEqual(pruned, { telemetryDeleted: 2, snapshotsDeleted: 0 })
+  assert.equal(calls.length, 1)
+  assert.deepEqual(pruned, { telemetryDeleted: 0, snapshotsDeleted: 0 })
+})
+
+test('HydrologyRepository returns source freshness from successful ingestion runs and exposes failed latest runs', async () => {
+  const db = { async query(sql: string) {
+    assert.match(sql, /hydrology_ingestion_runs/)
+    return {
+      rows: [
+        { source: 'INMET', latest_status: 'failed', latest_records_ingested: 0, last_successful_observed_at: '2026-07-01T10:00:00.000Z' },
+        { source: 'SMN', latest_status: 'success', latest_records_ingested: 0, last_successful_observed_at: '2026-07-02T10:00:00.000Z' },
+      ], rowCount: 2, command: 'SELECT', oid: 0, fields: [],
+    }
+  } }
+  const result = await new HydrologyRepository(db).getSourceFreshness()
+  assert.deepEqual(result, [
+    { source: 'INMET', latestStatus: 'failed', latestRecordsIngested: 0, lastSuccessfulObservedAt: '2026-07-01T10:00:00.000Z' },
+    { source: 'SMN', latestStatus: 'success', latestRecordsIngested: 0, lastSuccessfulObservedAt: '2026-07-02T10:00:00.000Z' },
+  ])
 })
 
 test('government municipality migration is additive and defines mapping indexes', async () => {
@@ -137,6 +163,20 @@ test('HydrologyRepository keeps INMET coverage alerts isolated from unrelated mu
   assert.equal(municipalities[0]?.name, 'Ituzaingó')
   assert.equal(municipalities[0]?.officialAlerts?.[0]?.source, 'INMET')
   assert.deepEqual(municipalities[1]?.officialAlerts, [])
+})
+
+test('HydrologyRepository keeps a mapped INMET alert visible when that municipality has no hydrology telemetry row', async () => {
+  const observedAt = new Date('2026-07-18T11:00:00.000Z')
+  const rows = [{
+    municipality_id: 'mun-ituzaingo', locality_id: 'ituzaingo-corrientes', municipality_name: 'Ituzaingó', province_code: 'AR-W',
+    alert_height_m: null, evacuation_height_m: null, primary_pna_port_id: 'ituzaingo', secondary_pna_port_ids: [], ina_station_ids: [], smn_region_ids: [], inmet_station_ids: ['A830'], source: null, station_id: null,
+    metric: null, value: null, unit: null, observed_at: null, ingested_at: null, last_successful_observed_at: null, quality: null, freshness: null, tendency: null, forecast_horizon_days: null, confidence: null, source_url: null,
+    official_alerts: [{ source: 'INMET', coverageKey: 'A830', message: 'Alerta regional', observedAt: observedAt.toISOString(), lastSuccessfulObservedAt: observedAt.toISOString(), freshness: 'degraded', sourceUrl: 'https://inmet.example' }],
+  }]
+  const db = { async query() { return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } } }
+  const municipality = (await new HydrologyRepository(db).getMunicipalityTelemetryOverview('AR-W'))[0]
+  assert.deepEqual(municipality?.latestTelemetry, [])
+  assert.equal(municipality?.officialAlerts?.[0]?.coverageKey, 'A830')
 })
 
 test('inactive alert coverage leaves station telemetry intact and returns no official alerts', async () => {

@@ -6,6 +6,8 @@ export type ForecastConfidence = 'normal' | 'speculative'
 export interface NormalizedHydrologyTelemetry {
   source: HydrologySource
   stationId: string
+  providerAlertId?: string
+  coverageKey?: string
   observedAt: Date
   ingestedAt?: Date
   lastSuccessfulObservedAt: Date
@@ -20,6 +22,19 @@ export interface NormalizedHydrologyTelemetry {
   sourceUrl?: string
   raw?: Record<string, unknown>
 }
+
+/**
+ * Brazil is an explicit future extension point only. No Brazilian stations,
+ * municipalities, or influence coefficients are production data until they
+ * are backed by verifiable official identifiers and a documented BR→Corrientes
+ * hydrological relationship.
+ */
+export const HYDROLOGY_BRAZIL_EXTENSION = {
+  countryCode: 'BR',
+  stationIds: [] as const,
+  municipalityIds: [] as const,
+  upstreamInfluence: { fromCountryCode: 'BR', toProvinceCode: 'AR-W', relation: 'requires_official_source_and_verified_model' },
+} as const
 
 export interface IngestionRunInput {
   source: HydrologySource

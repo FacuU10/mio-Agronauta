@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { upstreamTimeoutMs } from './timeout'
 
 const FORWARDED_HEADERS = ['accept', 'content-type', 'x-request-id'] as const
 const METHODS_WITH_BODY = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
-const DEFAULT_UPSTREAM_TIMEOUT_MS = 12_000
 const HYDROLOGY_INGEST_TOKEN_HEADER = 'x-hydrology-ingest-token'
 
 type RouteContext = { params: Promise<{ path?: string[] }> }
@@ -119,11 +119,6 @@ function hydrologyProxyError(status: 502 | 503, requestId: string, phase: 'upstr
     retryable: true,
     details: { requestId, phase, ...details },
   }, { status, headers: { 'x-request-id': requestId, 'Cache-Control': 'no-store' } })
-}
-
-function upstreamTimeoutMs(): number {
-  const parsed = Number.parseInt(process.env['AGRONAUTAS_BFF_TIMEOUT_MS'] ?? '', 10)
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= 60_000 ? parsed : DEFAULT_UPSTREAM_TIMEOUT_MS
 }
 
 function copyResponseHeader(source: Headers, target: Headers, name: string) {

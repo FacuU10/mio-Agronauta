@@ -14,18 +14,18 @@ import {
   type HydrologySource,
   type HydrologyTelemetry,
 } from '@repo/zod-schemas'
-import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperResult } from '@repo/hydrology-engine'
+import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, type HydrologySourceFreshness, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperResult } from '@repo/hydrology-engine'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
 interface HydrologyGovernmentRouterDeps {
-  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun'>>
+  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun' | 'getSourceFreshness' | 'findUnmappedAlertCoverageKeys'>>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
   ingestionRunner: (input: { source?: HydrologySource; reason?: string; proofRunId?: string; runId?: string }) => Promise<GovernmentIngestionResponse>
   ingestionCoordinator: HydrologyIngestionCoordinator
 }
 
-type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun'>>
+type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDeduped'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun' | 'findUnmappedAlertCoverageKeys'>>
 type GovernmentSourceClient = { fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult>; timeoutMs?: number }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; httpSummary?: HydrologyGovernmentHttpSummary; diagnostic?: HydrologyGovernmentIngestDiagnostic }
 export type GovernmentIngestionResponse = { contractVersion?: 'hydrology-government-ingest-v1'; runId?: string; proofRunId?: string; statusPath?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
@@ -49,12 +49,12 @@ interface GovernmentIngestionRunnerDeps {
 }
 
 const ALL_SOURCES: HydrologySource[] = ['PNA', 'INA', 'INMET', 'SMN']
-const DEFAULT_SOURCE_RUNNER_TIMEOUT_MS = 12_000
-const SOURCE_RUNNER_TIMEOUT_CUSHION_MS = 2_000
-const SOURCE_RUNNER_TIMEOUT_CAP_MS = 60_000
+const DEFAULT_SOURCE_RUNNER_TIMEOUT_MS = 120_000
+const SOURCE_RUNNER_TIMEOUT_CUSHION_MS = 5_000
+const SOURCE_RUNNER_TIMEOUT_CAP_MS = 125_000
 const INGEST_RATE_WINDOW_MS = 60_000
 const INGEST_RATE_LIMIT = 4
-const INGEST_OBSERVATION_WAIT_CAP_MS = 60_000
+const INGEST_OBSERVATION_WAIT_CAP_MS = 125_000
 const INGEST_OBSERVATION_TTL_MS = 15 * 60_000
 const INGEST_OBSERVATION_MAX = 32
 const PROVINCE = { provinceCode: 'AR-W', name: 'Corrientes' }
@@ -138,7 +138,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
     const payloadInput = {
       contractVersion: 'hydrology-government-municipalities-v1',
       province: PROVINCE,
-      sourceFreshness: sourceFreshnessFor(municipalities.flatMap((item) => item.latestTelemetry)),
+      sourceFreshness: await sourceFreshnessFromRepository(resolved.hydrologyRepository, municipalities.flatMap((item) => item.latestTelemetry)),
       provinceAlerts: municipalities.flatMap(toProvinceAlerts),
       municipalities,
     }
@@ -187,7 +187,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
       inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
       alerts: municipality.latestTelemetry.filter((item) => item.metric === 'storm_alert'),
-      provenance: sourceFreshnessFor(municipality.latestTelemetry),
+      provenance: await sourceFreshnessFromRepository(resolved.hydrologyRepository, municipality.latestTelemetry),
     })
     return res.json(payload)
   })
@@ -294,15 +294,29 @@ function sanitizeOfficialAlerts(alerts: MunicipalityTelemetryView['officialAlert
   })
 }
 
-function sourceFreshnessFor(telemetry: HydrologyTelemetry[]) {
+async function sourceFreshnessFromRepository(repository: HydrologyGovernmentRouterDeps['hydrologyRepository'], telemetry: HydrologyTelemetry[]) {
+  try {
+    const runs = await repository.getSourceFreshness?.()
+    return sourceFreshnessFor(telemetry, runs)
+  } catch (error) {
+    logger.warn({ phase: 'source_freshness', ...safeErrorLogFields(error) }, 'Government hydrology source freshness query failed; using telemetry fallback')
+    return sourceFreshnessFor(telemetry)
+  }
+}
+
+function sourceFreshnessFor(telemetry: HydrologyTelemetry[], runs?: HydrologySourceFreshness[]) {
   return ALL_SOURCES.map((source) => {
+    const run = runs?.find((item) => item.source === source)
     const rows = telemetry.filter((item) => item.source === source && !item.sourceUrl?.startsWith('offline-fixture://')).sort((a, b) => a.lastSuccessfulObservedAt.localeCompare(b.lastSuccessfulObservedAt))
     const latest = rows.at(-1)
+    const lastSuccessfulObservedAt = run?.lastSuccessfulObservedAt ?? latest?.lastSuccessfulObservedAt ?? null
+    const status = run?.latestStatus === 'failed' || run?.latestStatus === 'partial' || run?.latestStatus === 'excluded' ? 'failed' : run?.latestStatus === 'success' && run.latestRecordsIngested === 0 ? 'empty' : run ? 'success' : undefined
     return {
       source,
-      lastSuccessfulObservedAt: latest?.lastSuccessfulObservedAt ?? null,
-      freshness: latest?.freshness ?? 'degraded',
-      label: latest?.lastSuccessfulObservedAt ? `Último dato obtenido: ${formatArgentinaDateTime(latest.lastSuccessfulObservedAt)}` : 'Fuente oficial no disponible',
+      ...(status ? { status } : {}),
+      lastSuccessfulObservedAt,
+      freshness: status === 'failed' || status === 'empty' ? 'degraded' : latest?.freshness ?? (run ? 'fresh' : 'degraded'),
+      label: status === 'failed' && lastSuccessfulObservedAt ? `Última ejecución fallida o degradada; último dato exitoso: ${formatArgentinaDateTime(lastSuccessfulObservedAt)}` : status === 'failed' ? 'Última ejecución fallida o degradada; sin dato exitoso disponible' : status === 'empty' && lastSuccessfulObservedAt ? `Última ejecución exitosa sin alertas: ${formatArgentinaDateTime(lastSuccessfulObservedAt)}` : lastSuccessfulObservedAt ? `Último dato obtenido: ${formatArgentinaDateTime(lastSuccessfulObservedAt)}` : 'Fuente oficial no disponible',
     }
   })
 }
@@ -514,14 +528,14 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         const diagnostic = mergeIngestDiagnostic(result.ok ? emptyResponseDiagnostic(source, runnerTimeoutMs) : result.diagnostic ?? genericFailureDiagnostic(source, fallbackReason, runnerTimeoutMs), startedAt, finishedAt, runnerTimeoutMs)
         const persisted = await persistHydrologySourceRun(repository, {
           source,
-          status: result.ok ? 'partial' : 'failed',
+          status: result.ok ? 'success' : 'failed',
           startedAt,
           finishedAt,
           recordsIngested: 0,
-            proofRunId,
-            errorMessage,
-          }, [], runId, source)
-        logger.error({ runId, source, failureKind: diagnostic.failureKind, error: fallbackReason }, 'Government hydrology ingestion failed')
+          proofRunId,
+          errorMessage,
+        }, [], runId, source)
+        logSourceIngestion({ runId, proofRunId, source, recordsIngested: 0, httpSummary: result.httpSummary, diagnostic, error: fallbackReason })
         results.push({ source, status: result.ok ? 'empty' : 'failed', recordsIngested: 0, errorMessage: persisted ? errorMessage : `${errorMessage}; provider failure recorded; persistence write failed`, httpSummary: result.httpSummary, diagnostic })
         continue
       }
@@ -542,7 +556,10 @@ export function createGovernmentIngestionRunner(deps: GovernmentIngestionRunnerD
         errorMessage: fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined,
         provenanceUrl: records[0]?.sourceUrl,
       }, records, runId, source)
-      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, httpSummary: result.ok ? result.httpSummary : result.httpSummary, diagnostic: persisted ? undefined : genericFailureDiagnostic(source, `${source} persistence write failed`, runnerTimeoutMs) })
+      const diagnostic = persisted ? (fallbackReason ? emptyResponseDiagnostic(source, runnerTimeoutMs) : undefined) : genericFailureDiagnostic(source, `${source} persistence write failed`, runnerTimeoutMs)
+      results.push({ source, status: persisted ? records.length > 0 ? 'success' : 'empty' : 'failed', recordsIngested: persisted ? records.length : 0, provenanceUrl: records[0]?.sourceUrl, observedFrom: observedFrom?.toISOString(), observedTo: observedTo?.toISOString(), errorMessage: persisted ? fallbackReason ? `Fallback offline fixture used: ${fallbackReason}` : undefined : `${source} provider data fetched; persistence write failed`, httpSummary: result.httpSummary, diagnostic })
+      logSourceIngestion({ runId, proofRunId, source, recordsIngested: persisted ? records.length : 0, httpSummary: result.httpSummary, diagnostic, error: persisted ? fallbackReason : `${source} persistence write failed` })
+      await logUnmappedCoverageKeys(repository, runId, proofRunId, source, records)
     }
 
     return { runId, proofRunId, status: ingestionStatus(results), requestedSources: sources, results, sources, sourceResults: toSourceResults(results) }
@@ -619,6 +636,42 @@ async function fetchWithDeadline(client: GovernmentSourceClient, source: Hydrolo
   } finally {
     clearTimeout(timeout)
     if (deadlineTimer) clearTimeout(deadlineTimer)
+  }
+}
+
+function logSourceIngestion(input: { runId: string; proofRunId: string; source: HydrologySource; recordsIngested: number; httpSummary?: HydrologyGovernmentHttpSummary; diagnostic?: HydrologyGovernmentIngestDiagnostic; error?: string }): void {
+  const summary = input.httpSummary
+  const fields = {
+    runId: input.runId,
+    proofRunId: input.proofRunId,
+    source: input.source,
+    providerHost: summary?.host ?? input.diagnostic?.providerHost,
+    providerPath: summary?.path ?? input.diagnostic?.providerPath,
+    httpStatus: summary?.status ?? input.diagnostic?.upstreamStatus,
+    elapsedMs: summary?.elapsedMs ?? input.diagnostic?.elapsedMs,
+    attempts: summary?.attempts ?? input.diagnostic?.attempts ?? 1,
+    timeoutMs: summary?.timeoutMs ?? input.diagnostic?.timeoutMs,
+    bytes: summary?.responseBytes,
+    chars: summary?.responseChars,
+    failureKind: input.diagnostic?.failureKind,
+    recordsIngested: input.recordsIngested,
+    error: input.error ? safeErrorMessage(input.error) : undefined,
+  }
+  if (input.diagnostic?.failureKind || input.error) logger.error(fields, 'Government hydrology source ingestion failed')
+  else logger.info(fields, 'Government hydrology source ingestion succeeded')
+}
+
+async function logUnmappedCoverageKeys(repository: GovernmentIngestionRepository, runId: string, proofRunId: string, source: HydrologySource, records: NormalizedHydrologyTelemetry[]): Promise<void> {
+  if ((source !== 'INMET' && source !== 'SMN') || !repository.findUnmappedAlertCoverageKeys) return
+  const keys = records
+    .filter((record) => record.metric === 'storm_alert')
+    .map((record) => record.coverageKey ?? (typeof record.raw?.['coverageKey'] === 'string' ? record.raw['coverageKey'] : undefined))
+    .filter((key): key is string => Boolean(key))
+  try {
+    const unmapped = await repository.findUnmappedAlertCoverageKeys(source, keys)
+    if (unmapped.length > 0) logger.warn({ runId, proofRunId, source, unmappedCoverageKeys: unmapped.slice(0, 20), unmappedCount: unmapped.length }, 'Government hydrology official alert coverage key is not mapped to a municipality')
+  } catch (error) {
+    logger.warn({ runId, proofRunId, source, phase: 'coverage_mapping_diagnostic', ...safeErrorLogFields(error) }, 'Government hydrology alert coverage mapping diagnostic failed')
   }
 }
 

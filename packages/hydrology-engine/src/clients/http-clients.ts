@@ -18,8 +18,9 @@ interface ClientOptions {
   maxResponseChars?: number
 }
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
-const DEFAULT_PNA_REQUEST_TIMEOUT_MS = 25_000
+const MAX_REQUEST_TIMEOUT_MS = 120_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+const DEFAULT_PNA_REQUEST_TIMEOUT_MS = 60_000
 const DEFAULT_PNA_MAX_RESPONSE_BYTES = 1_000_000
 const DEFAULT_PNA_MAX_RESPONSE_CHARS = 1_000_000
 const DEFAULT_INA_MAX_RESPONSE_BYTES = 256_000
@@ -54,7 +55,7 @@ abstract class OfficialHttpClient {
   protected constructor(protected readonly source: string, protected readonly url: string, options: ClientOptions = {}) {
     this.fetchImpl = options.fetch ?? fetch
     this.userAgent = options.userAgent ?? CHROME_USER_AGENT
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.timeoutMs = clampTimeout(options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
     this.maxResponseBytes = options.maxResponseBytes
     this.maxResponseChars = options.maxResponseChars
   }
@@ -152,7 +153,7 @@ export class PnaHttpClient extends OfficialHttpClient {
 }
 
 export class SmnHttpClient extends OfficialHttpClient {
-  constructor(options: ClientOptions = {}) { super('SMN', options.url ?? process.env['HYDROLOGY_SMN_URL'] ?? SMN_ALERTS_URL, { ...options, maxResponseBytes: options.maxResponseBytes ?? DEFAULT_SMN_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_SMN_MAX_RESPONSE_CHARS }) }
+  constructor(options: ClientOptions = {}) { super('SMN', options.url ?? process.env['HYDROLOGY_SMN_URL'] ?? SMN_ALERTS_URL, { ...options, timeoutMs: options.timeoutMs ?? parsePositiveInt(process.env['HYDROLOGY_SMN_TIMEOUT_MS'], DEFAULT_REQUEST_TIMEOUT_MS), maxResponseBytes: options.maxResponseBytes ?? DEFAULT_SMN_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_SMN_MAX_RESPONSE_CHARS }) }
   async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
     const fetched = await this.fetchText('any', this.url, signal)
     return fetched.ok ? this.parseSafely(fetched.body, fetched.httpSummary, (body) => new SmnAdapter(this.url).parse(body)) : fetched
@@ -162,7 +163,7 @@ export class SmnHttpClient extends OfficialHttpClient {
 export class InmetHttpClient extends OfficialHttpClient {
   constructor(options: ClientOptions = {}) {
     const url = options.url ?? process.env['HYDROLOGY_INMET_URL'] ?? INMET_ALERTS_URL
-    super('INMET', url, { ...options, maxResponseBytes: options.maxResponseBytes ?? DEFAULT_INMET_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_INMET_MAX_RESPONSE_CHARS })
+    super('INMET', url, { ...options, timeoutMs: options.timeoutMs ?? parsePositiveInt(process.env['HYDROLOGY_INMET_TIMEOUT_MS'], DEFAULT_REQUEST_TIMEOUT_MS), maxResponseBytes: options.maxResponseBytes ?? DEFAULT_INMET_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_INMET_MAX_RESPONSE_CHARS })
   }
   async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
     const fetched = await this.fetchText('any', this.url, signal)
@@ -174,7 +175,7 @@ export class InaHttpClient extends OfficialHttpClient {
   private readonly urls: string[]
   constructor(options: ClientOptions = {}) {
     const url = options.url ?? process.env['HYDROLOGY_INA_URL'] ?? inaSeriesUrls()[0] ?? 'https://alerta.ina.gob.ar/a5/getObservaciones'
-    super('INA', url, { ...options, maxResponseBytes: options.maxResponseBytes ?? DEFAULT_INA_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_INA_MAX_RESPONSE_CHARS })
+    super('INA', url, { ...options, timeoutMs: options.timeoutMs ?? parsePositiveInt(process.env['HYDROLOGY_INA_TIMEOUT_MS'], DEFAULT_REQUEST_TIMEOUT_MS), maxResponseBytes: options.maxResponseBytes ?? DEFAULT_INA_MAX_RESPONSE_BYTES, maxResponseChars: options.maxResponseChars ?? DEFAULT_INA_MAX_RESPONSE_CHARS })
     this.urls = options.url || process.env['HYDROLOGY_INA_URL'] ? [url] : inaSeriesUrls()
   }
   async fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult> {
@@ -210,6 +211,10 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function clampTimeout(value: number): number {
+  return Math.min(MAX_REQUEST_TIMEOUT_MS, Math.max(1, Math.trunc(value)))
 }
 
 function inaSeriesUrls(now = new Date()): string[] {

@@ -7,7 +7,7 @@ import { AlertTriangle, ArrowUpRight, Clock3, MapPinned, ShieldCheck } from 'luc
 import { formatOfficialTime, riskLabel, statusLabel } from './format'
 import { municipalityTelemetrySummary, type OverviewTelemetry } from './overview-summary'
 
-type Freshness = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
+type Freshness = { source: string; status?: 'success' | 'empty' | 'failed'; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
 type Telemetry = OverviewTelemetry & { alertHeightM?: number; evacuationHeightM?: number }
 type Municipality = {
   id: string
