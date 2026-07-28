@@ -27,3 +27,20 @@ test('explicit TRUST_PROXY value overrides Render default', () => {
   assert.equal(getAgronautasRuntimeConfig({ RENDER: 'true', TRUST_PROXY: 'true' }).trustProxy, true)
   assert.equal(getAgronautasRuntimeConfig({ RENDER: 'true', TRUST_PROXY: '2' }).trustProxy, 2)
 })
+
+test('MongoDB readiness is disabled by default and supports explicit sentinel values', () => {
+  assert.deepEqual(getAgronautasRuntimeConfig({}).optionalReadinessServices, [])
+  assert.deepEqual(getAgronautasRuntimeConfig({ READINESS_OPTIONAL_SERVICES: 'none' }).optionalReadinessServices, [])
+  assert.deepEqual(getAgronautasRuntimeConfig({ READINESS_OPTIONAL_SERVICES: 'DISABLED' }).optionalReadinessServices, [])
+  assert.deepEqual(getAgronautasRuntimeConfig({ READINESS_OPTIONAL_SERVICES: ' off ' }).optionalReadinessServices, [])
+})
+
+test('MongoDB readiness can be explicitly enabled', () => {
+  assert.deepEqual(
+    getAgronautasRuntimeConfig({
+      READINESS_OPTIONAL_SERVICES: 'mongodb',
+      MONGODB_URL: 'mongodb+srv://configured.example/appdb',
+    }).optionalReadinessServices,
+    ['mongodb'],
+  )
+})

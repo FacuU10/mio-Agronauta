@@ -9,7 +9,7 @@ const baseConfig = {
   mode: 'real' as const,
   routePrefix: '/agronautas',
   trustProxy: false,
-  optionalReadinessServices: ['mongodb'],
+  optionalReadinessServices: [],
   runtimeRequired: false,
   workerHeartbeatMaxAgeSeconds: 180,
   readinessDependencyTimeoutMs: 2000,
@@ -67,20 +67,56 @@ test('GET /health returns liveness 200 without dependency checks', async () => {
 })
 
 test('GET /ready keeps Mongo optional when active deps are healthy', async () => {
+  let mongoChecks = 0
   const app = express()
   app.use('/agronautas', createHealthRouter({
     checkPostgres: async () => true,
-    checkMongoDB: async () => false,
+    checkMongoDB: async () => {
+      mongoChecks += 1
+      return false
+    },
+    checkRedis: async () => true,
+    getConfig: () => ({ ...baseConfig, optionalReadinessServices: ['mongodb'] }),
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  assert.equal(response.status, 200)
+  const body = await response.json() as { optionalChecks: string[]; capabilities?: { mongodb?: { required: boolean } }; degraded: string[] }
+  assert.equal(mongoChecks, 1)
+  assert.ok(body.optionalChecks.includes('mongodb'))
+  assert.ok(body.degraded.includes('mongodb'))
+  assert.equal(body.capabilities?.mongodb?.required, false)
+})
+
+test('GET /ready does not check Mongo when it is not explicitly enabled', async () => {
+  let mongoChecks = 0
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => {
+      mongoChecks += 1
+      throw new Error('MongoDB must not be checked when it is not configured')
+    },
     checkRedis: async () => true,
     getConfig: () => baseConfig,
   }))
 
   const response = await request(app, '/agronautas/ready')
   assert.equal(response.status, 200)
-  const body = await response.json() as { optionalChecks: string[]; capabilities?: { mongodb?: { required: boolean } }; degraded: string[] }
-  assert.ok(body.optionalChecks.includes('mongodb'))
-  assert.ok(body.degraded.includes('mongodb'))
+  const body = await response.json() as {
+    optionalChecks: string[]
+    degraded: string[]
+    capabilities?: { mongodb?: { status: string; required: boolean; healthy: boolean } }
+    checkDetails?: { mongodb?: { ok: boolean; error?: string } }
+  }
+  assert.equal(mongoChecks, 0)
+  assert.deepEqual(body.optionalChecks, [])
+  assert.deepEqual(body.degraded, [])
+  assert.equal(body.capabilities?.mongodb?.status, 'not_configured')
   assert.equal(body.capabilities?.mongodb?.required, false)
+  assert.equal(body.capabilities?.mongodb?.healthy, false)
+  assert.equal(body.checkDetails?.mongodb?.ok, false)
+  assert.equal(body.checkDetails?.mongodb?.error, 'mongodb readiness is not configured')
 })
 
 test('GET /ready uses the configured timeout and exposes only safe revision metadata', async () => {
@@ -145,8 +181,8 @@ test('GET /ready fails only on active dependencies and still reports Mongo as op
   }
   assert.equal(body.requiredChecks.redis, false)
   assert.deepEqual(body.failedRequiredChecks, ['redis'])
-  assert.ok(body.degraded.includes('mongodb'))
-  assert.equal(body.capabilities.mongodb.status, 'optional_degraded')
+  assert.deepEqual(body.degraded, [])
+  assert.equal(body.capabilities.mongodb.status, 'not_configured')
   assert.equal(body.capabilities.mongodb.required, false)
 })
 

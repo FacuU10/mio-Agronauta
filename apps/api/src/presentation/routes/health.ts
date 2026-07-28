@@ -73,16 +73,24 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
   router.get('/ready', async (req: Request, res: Response) => {
     try {
       const config = resolved.getConfig()
+      const optionalServices = new Set(config.optionalReadinessServices)
+      const mongoEnabled = optionalServices.has('mongodb')
       const [postgres, mongo, redis, worker] = await Promise.all([
         withReadinessTimeout('postgres', resolved.checkPostgres, resolved.readinessTimeoutMs),
-        withReadinessTimeout('mongodb', resolved.checkMongoDB, resolved.readinessTimeoutMs),
+        mongoEnabled
+          ? withReadinessTimeout('mongodb', resolved.checkMongoDB, resolved.readinessTimeoutMs)
+          : Promise.resolve({
+              service: 'mongodb',
+              ok: false,
+              timedOut: false,
+              error: 'mongodb readiness is not configured',
+            }),
         withReadinessTimeout('redis', resolved.checkRedis, resolved.readinessTimeoutMs),
         config.runtimeRequired
           ? resolved.getWorkerReadiness(config.workerHeartbeatMaxAgeSeconds)
           : Promise.resolve(null),
       ])
 
-      const optionalServices = new Set([...config.optionalReadinessServices, 'mongodb'])
       const dependencyChecks = {
         postgres: postgres.ok,
         redis: redis.ok,
@@ -140,10 +148,12 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
             },
         capabilities: {
           mongodb: {
-            required: !optionalServices.has('mongodb'),
+            required: false,
             healthy: mongo.ok,
-            status: mongo.ok ? 'available' : 'optional_degraded',
-            note: 'Mongo se preserva como capacidad futura y no bloquea el MVP Agronautas por defecto.',
+            status: mongo.ok ? 'available' : mongoEnabled ? 'optional_degraded' : 'not_configured',
+            note: mongoEnabled
+              ? 'MongoDB está habilitado explícitamente para readiness.'
+              : 'MongoDB no está habilitado para readiness; no se intentó conexión.',
           },
         },
         timestamp: new Date().toISOString(),

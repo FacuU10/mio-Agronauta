@@ -1,7 +1,8 @@
 type RuntimeMode = 'real' | 'demo'
 
 const DEFAULT_ROUTE_PREFIX = '/agronautas'
-const DEFAULT_OPTIONAL_READINESS_SERVICES = ['mongodb']
+const DEFAULT_OPTIONAL_READINESS_SERVICES: string[] = []
+const DISABLED_OPTIONAL_READINESS_SERVICES = new Set(['none', 'disabled', 'off'])
 export const DEFAULT_READINESS_DEPENDENCY_TIMEOUT_MS = 2000
 export const MAX_READINESS_DEPENDENCY_TIMEOUT_MS = 60_000
 
@@ -21,7 +22,7 @@ export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env)
     mode: parseRuntimeMode(env['AGRONAUTAS_RUNTIME_MODE']),
     routePrefix: normalizeRoutePrefix(env['AGRONAUTAS_ROUTE_PREFIX']),
     trustProxy: parseTrustProxy(env['TRUST_PROXY'], env['RENDER']),
-    optionalReadinessServices: parseCsv(env['READINESS_OPTIONAL_SERVICES'], DEFAULT_OPTIONAL_READINESS_SERVICES),
+    optionalReadinessServices: parseOptionalReadinessServices(env['READINESS_OPTIONAL_SERVICES']),
     runtimeRequired: parseBoolean(env['AGRONAUTAS_RUNTIME_REQUIRED'], false),
     workerHeartbeatMaxAgeSeconds: parsePositiveInteger(env['AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS'], 180),
     readinessDependencyTimeoutMs: parseBoundedPositiveInteger(env['AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS'], DEFAULT_READINESS_DEPENDENCY_TIMEOUT_MS, MAX_READINESS_DEPENDENCY_TIMEOUT_MS),
@@ -65,6 +66,15 @@ function parseCsv(value: string | undefined, fallback: string[]): string[] {
     .filter(Boolean)
 
   return items?.length ? items : fallback
+}
+
+function parseOptionalReadinessServices(value: string | undefined): string[] {
+  const normalized = value?.trim().toLowerCase()
+  if (!normalized || DISABLED_OPTIONAL_READINESS_SERVICES.has(normalized)) {
+    return DEFAULT_OPTIONAL_READINESS_SERVICES
+  }
+
+  return parseCsv(value, DEFAULT_OPTIONAL_READINESS_SERVICES)
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
