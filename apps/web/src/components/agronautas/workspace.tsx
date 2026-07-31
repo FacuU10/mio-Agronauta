@@ -1,10 +1,17 @@
 'use client'
 
-import { createElement, type InputHTMLAttributes } from 'react'
+import { createElement, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
+import { agronautasSupportedCrops } from '@repo/zod-schemas'
 import type { AlertsCurrent, DashboardSnapshot, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
+import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
+import { ProductShell } from '@/components/shell/product-shell'
+import { FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard } from '@/components/visibility/primitives'
+import { FutureCapabilities } from '@/components/visibility/future-capabilities'
+import { ChatEvidencePanel } from '@/components/visibility/chat-evidence'
+import type { ChatStreamState } from '@/lib/visibility/chat'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,8 +37,7 @@ interface WorkspaceProps {
   dashboardPayload?: DashboardSnapshot
   hydrologyDashboard?: HydrologyDashboard
   chatResponse?: GroundedChatResponse
-  hydrologyAnswer: string
-  hydrologyError: string | null
+  hydrologyChatState: ChatStreamState
   chatError: string | null
   isChatPending: boolean
   isHydrologyChatPending: boolean
@@ -41,16 +47,24 @@ interface WorkspaceProps {
   onSubmitIntake: (input: FieldIntake) => Promise<unknown>
   onRequestRecompute: () => Promise<unknown>
   onAskChat: (message: string) => Promise<unknown>
+  onRetryChat: () => Promise<unknown>
   onAskHydrologyChat: (message: string) => Promise<unknown>
+  onRetryHydrologyChat: () => Promise<unknown>
 }
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-8 md:px-8">
-      <section className="grid gap-4 rounded-[32px] border border-[var(--border)] bg-[linear-gradient(135deg,#173622_0%,#2c6f45_55%,#dbb369_100%)] px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
+    <ProductShell
+      product="agronautas"
+      title="Workspace Agronautas"
+      description="De la ubicación del lote a una decisión verificable: cobertura por punto, nivel de riesgo, siguiente acción y evidencia contratada."
+      navItems={[{ href: '#agronautas-intake', label: 'Nuevo lote' }, { href: '#agronautas-dashboard', label: 'Decisión' }, { href: '#agronautas-alerts', label: 'Alertas' }, { href: '#agronautas-timeline', label: 'Timeline' }]}
+    >
+    <main className="agronautas-canvas mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 rounded-[2rem] px-4 py-8 md:px-8">
+      <section className="grid gap-4 rounded-[32px] border border-emerald-950/20 bg-stone-950 px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
         <div className="space-y-4">
-          <Badge className="bg-white/15 text-white">Web MVP · Modo {props.runtimeMode === 'demo' ? 'demo' : 'real'}</Badge>
-          <h1 className="max-w-2xl text-3xl font-semibold leading-tight md:text-5xl">Agronautas: dashboard de riesgo para el campo argentino.</h1>
+          <Badge className="bg-amber-200 text-stone-950">Web MVP · Modo {props.runtimeMode === 'demo' ? 'demo' : 'real'}</Badge>
+          <h2 className="max-w-2xl font-serif text-3xl font-semibold leading-tight md:text-5xl">Agronautas: dashboard de riesgo para el campo argentino.</h2>
           <p className="max-w-2xl text-sm text-white/85 md:text-base">Riesgo, frescura, fuentes y evidencia persistida para lotes agrícolas de Corrientes, sin reglas de negocio calculadas en el cliente.</p>
         </div>
         <Card className="border-white/10 bg-white/10 text-white backdrop-blur">
@@ -67,29 +81,40 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
         </Card>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[420px,1fr]">
+      <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
         <IntakePanel {...props} />
         <DashboardPanel {...props} />
       </section>
+      <FutureCapabilities product="agronautas" />
     </main>
+    </ProductShell>
   )
 }
 
 function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspaceProps) {
-  async function handleSubmit(formData: FormData) {
+  const mapAdapter = createAgronautasMapAdapter()
+  const defaultPoint = { lat: -29.1846, lng: -58.0759 }
+  const [localityQuery, setLocalityQuery] = useState('Mercedes')
+  const [selectedLocality, setSelectedLocality] = useState(AGRONAUTAS_LOCALITIES[0])
+  const [point, setPoint] = useState(defaultPoint)
+  const coverage = previewAgronautasPoint(point)
+  const matches = mapAdapter.searchLocalities(localityQuery)
+
+  async function handleSubmit(form: HTMLFormElement) {
+    const valueFor = (name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? ''
     await onSubmitIntake({
       contractVersion: AGRONAUTAS_CONTRACT_VERSION,
-      fieldId: String(formData.get('fieldId') ?? ''),
+      fieldId: valueFor('fieldId'),
       cropCategory: 'cereal',
-      crop: 'rice',
+      crop: valueFor('crop') as FieldIntake['crop'],
       provinceCode: 'AR-W',
       countryCode: 'AR',
-      hectares: Number(formData.get('hectares') ?? 0),
-      locality: String(formData.get('locality') ?? ''),
-      growthStage: parseOptional(formData.get('growthStage')) as FieldIntake['growthStage'],
+      hectares: Number(valueFor('hectares') || 0),
+      locality: selectedLocality?.name ?? valueFor('locality'),
+      growthStage: parseOptional(valueFor('growthStage')) as FieldIntake['growthStage'],
       location: {
-        lat: Number(formData.get('lat') ?? 0),
-        lng: Number(formData.get('lng') ?? 0),
+        lat: Number(valueFor('lat') || point.lat),
+        lng: Number(valueFor('lng') || point.lng),
       },
     })
   }
@@ -97,8 +122,8 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Alta guiada del lote</CardTitle>
-        <CardDescription>Validación contract-first para `FieldIntake`, con rechazo explícito fuera del alcance agrícola inicial de Corrientes.</CardDescription>
+        <CardTitle>Nuevo lote · intake geográfico</CardTitle>
+        <CardDescription>Buscá una localidad o mové el pin textual. La previsualización orienta; el backend mantiene la decisión contractual de cobertura.</CardDescription>
       </CardHeader>
       <CardContent>
         <form
@@ -107,16 +132,22 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
           onSubmit={async (event) => {
             event.preventDefault()
             try {
-              await handleSubmit(new FormData(event.currentTarget))
+               await handleSubmit(event.currentTarget)
             } catch {
               // Error surface is handled in store state by the mutation.
             }
           }}
         >
           <Field label="ID externo" name="fieldId" placeholder="corrientes-lote-001" defaultValue="corrientes-lote-001" />
+          <div className="grid gap-2">
+            <Label htmlFor="locality-search">Buscar localidad</Label>
+            <Input id="locality-search" aria-label="Buscar localidad" value={localityQuery} onChange={(event) => setLocalityQuery(event.target.value)} placeholder="Mercedes" />
+            {localityQuery.trim() ? <div className="grid gap-2" role="listbox" aria-label="Localidades sugeridas">{matches.map((locality) => <button className="rounded-xl border border-stone-300 bg-stone-50 px-3 py-2 text-left text-sm hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" key={locality.id} type="button" role="option" aria-selected={selectedLocality?.id === locality.id} onClick={() => { setSelectedLocality(locality); setLocalityQuery(locality.name); if (locality.coordinates) setPoint(locality.coordinates) }}>{locality.name} · {locality.provinceCode}</button>)}</div> : null}
+            <input type="hidden" name="locality" value={selectedLocality?.name ?? localityQuery} />
+          </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Latitud" name="lat" type="number" step="0.0001" defaultValue="-29.1846" />
-            <Field label="Longitud" name="lng" type="number" step="0.0001" defaultValue="-58.0759" />
+            <Field label="Latitud" name="lat" type="number" step="0.0001" defaultValue={point.lat} onChange={(event) => setPoint((current) => ({ ...current, lat: Number(event.target.value) }))} />
+            <Field label="Longitud" name="lng" type="number" step="0.0001" defaultValue={point.lng} onChange={(event) => setPoint((current) => ({ ...current, lng: Number(event.target.value) }))} />
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Hectáreas" name="hectares" type="number" step="0.1" defaultValue="42.5" />
@@ -131,7 +162,18 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
               </Select>
             </div>
           </div>
-          <Field label="Localidad declarada" name="locality" defaultValue="Mercedes" />
+          <div className="grid gap-2">
+            <Label htmlFor="crop">Cultivo permitido</Label>
+            <Select id="crop" name="crop" defaultValue="rice">
+              {agronautasSupportedCrops.map((crop) => <option key={crop} value={crop}>{cropLabel(crop)}</option>)}
+            </Select>
+          </div>
+          <div className="grid gap-3">
+            <MapFrame title="Previsualización de cobertura" fallback={`${selectedLocality?.name ?? 'Localidad no seleccionada'} · ${coverage.provinceCode ?? 'sin provincia'} · ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`}>
+              <div className="flex flex-wrap items-center gap-2"><StatusBadge state={coverage.state === 'inside' ? 'success' : coverage.state === 'outside' ? 'missing' : 'degraded'} /><span className="text-sm text-stone-700">Cobertura por punto · {coverage.locality ?? 'fuera del alcance previsualizado'}</span></div>
+            </MapFrame>
+            <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-3 text-xs leading-5 text-stone-600">`polygonWkt` se conserva en el contrato, pero este MVP resuelve cobertura por punto y no promete análisis poligonal.</p>
+          </div>
           {intakeError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{intakeError}</p> : null}
           <Button type="submit" data-testid="agronautas-submit-intake" disabled={isSubmitting}>{isSubmitting ? 'Registrando...' : 'Registrar lote'}</Button>
         </form>
@@ -140,7 +182,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, chatResponse, hydrologyAnswer, hydrologyError, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onAskHydrologyChat }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -163,8 +205,28 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
     )
   }
 
+  const decisionLevel = risk?.snapshot.level ?? dashboardPayload?.risk.level ?? 'sin dato'
+  const nextAction = risk?.snapshot.level === 'high' ? 'Revisar drivers de lluvia y estrés antes de operar el lote.' : 'Confirmar la próxima lectura con evidencia vigente.'
+
   return (
-    <div className="grid gap-6">
+    <div id="agronautas-dashboard" className="grid gap-6">
+      <section className="grid gap-5 rounded-[2rem] border border-emerald-900/20 bg-emerald-950 p-5 text-white shadow-lg md:grid-cols-[1.15fr,0.85fr] md:p-7" aria-labelledby="decision-heading">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">Resumen · {field?.externalFieldId ?? selectedFieldId}</p>
+          <h2 id="decision-heading" className="mt-2 font-serif text-3xl font-semibold">Decisión del lote</h2>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-emerald-50/80">Primero la decisión y su límite; después el detalle de señales, alertas y procedencia.</p>
+          <div className="mt-5 flex flex-wrap gap-3"><a className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-100" href="#agronautas-alerts">Ver alertas</a><a className="rounded-full border border-white/30 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10" href="#agronautas-timeline">Ver timeline</a></div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <VisibilityMetricCard label="Nivel de riesgo" value={String(decisionLevel)} detail={`Lectura ${risk?.snapshot.score ?? dashboardPayload?.risk.score ?? 'sin dato'}/100`} />
+          <VisibilityMetricCard label="Confianza" value={risk ? `${Math.round(risk.snapshot.confidence * 100)}%` : 'Sin dato'} detail="Calculada por el backend" />
+          <VisibilityMetricCard label="Siguiente acción" value="Revisar" detail={nextAction} />
+          <VisibilityMetricCard label="Frescura" value={risk?.status ?? dashboardPayload?.freshness ?? 'missing'} detail={dashboardPayload?.lastDataFetchedAt ?? risk?.snapshot.computedAt ?? 'Sin fecha'} />
+        </div>
+      </section>
+
+      <FreshnessBanner state={risk?.status ?? dashboardPayload?.freshness ?? 'missing'} lastSuccessfulAt={dashboardPayload?.lastDataFetchedAt ?? risk?.snapshot.computedAt} />
+
       <div className="grid gap-4 md:grid-cols-4" data-testid="agronautas-dashboard-metrics">
         <MetricCard label="Lote" value={field?.externalFieldId ?? selectedFieldId} detail={field?.locality ?? 'Sin localidad'} />
         <MetricCard label="Score" value={risk ? String(risk.snapshot.score) : '—'} detail={risk?.snapshot.level ?? 'Sin snapshot'} />
@@ -201,7 +263,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         </Card>
       ) : null}
 
-      <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyAnswer={hydrologyAnswer} hydrologyError={hydrologyError} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} />
+      <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
 
       <NextFeaturesPanel dashboardPayload={dashboardPayload} />
 
@@ -212,7 +274,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
               <CardTitle>Agronautas · payload persistido</CardTitle>
               <CardDescription>La exportación PDF usa el mismo estado de dashboard servido por API.</CardDescription>
             </div>
-            <a className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white px-4 text-sm font-semibold text-[var(--foreground)]" href={`/api/agronautas/v1/fields/${selectedFieldId}/dashboard.pdf`}>Exportar PDF</a>
+            <div className="flex flex-wrap gap-2"><a className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white px-4 text-sm font-semibold text-[var(--foreground)]" href={`/demo/fields/${selectedFieldId}`}>Abrir detalle</a><a className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)]" href={`/api/agronautas/v1/fields/${selectedFieldId}/dashboard.pdf`}>Exportar PDF</a></div>
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 text-sm md:grid-cols-3">
@@ -239,7 +301,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
             <StatusRow label="Última actualización" value={status?.lastUpdatedAt ?? 'N/D'} />
           </CardContent>
         </Card>
-        <Card data-testid="agronautas-risk-timeline-card">
+        <Card id="agronautas-timeline" data-testid="agronautas-risk-timeline-card">
           <CardHeader>
             <CardTitle>Timeline de riesgo</CardTitle>
             <CardDescription>Snapshots persistidos para auditar score y vigencia.</CardDescription>
@@ -297,7 +359,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
           </CardContent>
         </Card>
 
-        <Card data-testid="agronautas-alerts-card">
+        <Card id="agronautas-alerts" data-testid="agronautas-alerts-card">
           <CardHeader>
             <CardTitle>Alertas actuales</CardTitle>
             <CardDescription>Se priorizan desde snapshots frescos o se etiquetan como stale si corresponde.</CardDescription>
@@ -339,20 +401,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
 
           {chatError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{chatError}</p> : null}
 
-          {chatResponse ? (
-            <div className="grid gap-3 rounded-2xl border border-[var(--border)] p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={chatResponse.degraded ? 'warning' : 'success'}>{chatResponse.degraded ? 'Degradado' : 'Grounded'}</Badge>
-                <Badge variant="outline">{chatResponse.executedAction}</Badge>
-              </div>
-              <p className="text-sm">{chatResponse.answer}</p>
-              {chatResponse.supportingFacts.length ? (
-                <ul className="space-y-1 text-sm text-[var(--muted-foreground)]">
-                  {chatResponse.supportingFacts.map((fact) => <li key={`${fact.label}-${fact.value}`}>• {fact.label}: {fact.value}</li>)}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
+          {chatResponse ? <ChatEvidencePanel response={chatResponse} onRetry={onRetryChat} /> : null}
         </CardContent>
       </Card>
     </div>
@@ -436,7 +485,7 @@ function NextFeaturesPanel({ dashboardPayload }: { dashboardPayload?: DashboardS
   )
 }
 
-function HydrologyPanel({ dashboard, locality, hydrologyAnswer, hydrologyError, isHydrologyChatPending, onAskHydrologyChat }: { dashboard?: HydrologyDashboard; locality: string | null; hydrologyAnswer: string; hydrologyError: string | null; isHydrologyChatPending: boolean; onAskHydrologyChat: (message: string) => Promise<unknown> }) {
+function HydrologyPanel({ dashboard, locality, hydrologyChatState, isHydrologyChatPending, onAskHydrologyChat, onRetryHydrologyChat }: { dashboard?: HydrologyDashboard; locality: string | null; hydrologyChatState: ChatStreamState; isHydrologyChatPending: boolean; onAskHydrologyChat: (message: string) => Promise<unknown>; onRetryHydrologyChat: () => Promise<unknown> }) {
   const zone = dashboard?.zone ?? locality ?? 'Zona no mapeada'
   const height = dashboard?.heights[0]
   const trend = dashboard?.trends[0] ?? height
@@ -494,8 +543,7 @@ function HydrologyPanel({ dashboard, locality, hydrologyAnswer, hydrologyError, 
             <Field label="Pregunta hidrológica" name="hydrologyMessage" placeholder="¿Qué riesgo de crecida tiene mi lote en los próximos 7 días?" />
             <Button type="submit" disabled={isHydrologyChatPending}>{isHydrologyChatPending ? 'Transmitiendo respuesta...' : 'Preguntar al Copilot Hidrológico'}</Button>
           </form>
-          {hydrologyError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{hydrologyError}</p> : null}
-          {hydrologyAnswer ? <p className="rounded-2xl border border-[var(--border)] bg-[var(--muted)]/40 p-4 text-sm">{hydrologyAnswer}</p> : null}
+          {hydrologyChatState.status !== 'idle' ? <ChatEvidencePanel stream={hydrologyChatState} onRetry={onRetryHydrologyChat} /> : null}
         </CardContent>
       </Card>
     </section>
@@ -599,6 +647,11 @@ function Field({ label, name, ...props }: { label: string; name: string } & Inpu
 function parseOptional(value: FormDataEntryValue | null) {
   const parsed = String(value ?? '').trim()
   return parsed.length ? parsed : undefined
+}
+
+function cropLabel(crop: string) {
+  const labels: Record<string, string> = { rice: 'Arroz', maize: 'Maíz', soybean: 'Soja', wheat: 'Trigo', sunflower: 'Girasol', pasture: 'Pastura', citrus: 'Cítricos', other: 'Otro' }
+  return labels[crop] ?? crop
 }
 
 function toAlertLabel(type: string) {

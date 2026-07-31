@@ -193,6 +193,32 @@ test('failed verification keeps ingest controls hidden and leaves browser storag
   assert.doesNotMatch(view.container.textContent ?? '', new RegExp(token))
 })
 
+test('accepts 202 admission, polls statusPath without treating queued as completed, and renders source ranges/http summary', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async (url, init) => {
+    requestCount += 1
+    if (requestCount === 1) return jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    if (requestCount === 2) return jsonResponse({ contractVersion: 'hydrology-government-ingest-v1', status: 'queued', runId: 'run-queued', statusPath: '/api/hydrology/ingest/run-queued', requestedSources: ['PNA'], results: [] }, 202)
+    assert.equal(String(url), '/api/hydrology/ingest/run-queued?waitMs=0')
+    assert.equal(init?.method, 'GET')
+    return jsonResponse({ contractVersion: 'hydrology-government-ingest-v1', status: 'partial', runId: 'run-queued', requestedSources: ['PNA', 'SMN'], results: [{ source: 'PNA', status: 'success', recordsIngested: 4, observedFrom: '2026-06-23T00:00:00.000Z', observedTo: '2026-06-23T01:00:00.000Z', httpSummary: { host: 'pna.gov.ar', path: '/api/river', status: 200, elapsedMs: 42, attempts: 1, timeoutMs: 1000 } }, { source: 'SMN', status: 'failed', recordsIngested: 0, diagnostic: { failureKind: 'timeout', attempts: 2, providerHost: 'smn.gob.ar', providerPath: '/api/alerts', timeoutMs: 1000 } }] })
+  }) as typeof fetch
+  try {
+    const view = render(<IngestPanel pollOptions={{ delayMs: 0, maxAttempts: 2 }} />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+    await waitFor(() => assert.equal(view.getByRole('status').textContent, 'Ingesta parcial'))
+    assert.match(view.container.textContent ?? '', /run-queued/)
+    assert.match(view.container.textContent ?? '', /00:00.*01:00/s)
+    assert.match(view.container.textContent ?? '', /200.*pna\.gov\.ar/s)
+    assert.match(view.container.textContent ?? '', /timeout.*smn\.gob\.ar/s)
+    assert.equal(view.queryByText('Ingesta completada'), null)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
 async function authorize(view: ReturnType<typeof render>, token = crypto.randomUUID()) {
   const input = view.getByLabelText('Token de ingesta') as HTMLInputElement
   fireEvent.input(input, { target: { value: token } })

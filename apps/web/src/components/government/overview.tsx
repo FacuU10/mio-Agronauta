@@ -1,11 +1,13 @@
 'use client'
 
 import Link from 'next/link'
-import React from 'react'
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowUpRight, Clock3, MapPinned, ShieldCheck } from 'lucide-react'
 import { formatOfficialTime, riskLabel, statusLabel } from './format'
 import { municipalityTelemetrySummary, type OverviewTelemetry } from './overview-summary'
+import { MapFrame } from '@/components/visibility/primitives'
+import { FutureCapabilities } from '@/components/visibility/future-capabilities'
+
 
 type Freshness = { source: string; status?: 'success' | 'empty' | 'failed'; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
 type Telemetry = OverviewTelemetry & { alertHeightM?: number; evacuationHeightM?: number }
@@ -28,9 +30,23 @@ type OverviewPayload = {
   municipalities: Municipality[]
 }
 
+type OverviewFilters = { query: string; source: string; status: string }
+const OFFICIAL_SOURCES = ['PNA', 'INA', 'INMET', 'SMN'] as const
+
+export function filterMunicipalities(municipalities: Municipality[], filters: OverviewFilters) {
+  const query = filters.query.trim().toLocaleLowerCase('es-AR')
+  return municipalities.filter((municipality) => {
+    const matchesQuery = !query || `${municipality.name} ${municipality.localityId}`.toLocaleLowerCase('es-AR').includes(query)
+    const matchesSource = filters.source === 'all' || municipality.latestTelemetry.some((item) => item.source === filters.source)
+    const matchesStatus = filters.status === 'all' || municipalityStatus(municipality) === filters.status
+    return matchesQuery && matchesSource && matchesStatus
+  })
+}
+
 export function GovernmentOverview({ initialData = null, initialError = null }: { initialData?: OverviewPayload | null; initialError?: string | null } = {}) {
   const [data, setData] = useState<OverviewPayload | null>(initialData)
   const [error, setError] = useState<string | null>(initialError)
+  const [filters, setFilters] = useState<OverviewFilters>({ query: '', source: 'all', status: 'all' })
 
   useEffect(() => {
     let active = true
@@ -69,12 +85,14 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
           {error ? <div role="alert" className="mt-8 rounded-3xl border border-red-300/40 bg-red-950/60 p-5 text-red-100">{error}. Reintentá desde la red oficial.</div> : null}
 
           <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {(data?.sourceFreshness ?? []).map((source) => (
-              <article key={source.source} className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 shadow-xl backdrop-blur">
-                <div className="flex items-center justify-between gap-3"><h2 className="text-lg font-black">{source.source}</h2><span className="rounded-full bg-teal-300/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-teal-100">{source.lastSuccessfulObservedAt ? statusLabel(source.freshness) : 'No disponible'}</span></div>
-                <p className="mt-4 text-sm text-slate-300">{source.label || formatOfficialTime(source.lastSuccessfulObservedAt)}</p>
+            {OFFICIAL_SOURCES.map((sourceName) => {
+              const source = data?.sourceFreshness.find((item) => item.source === sourceName)
+              return <article key={sourceName} className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 shadow-xl backdrop-blur">
+                <div className="flex items-center justify-between gap-3"><h2 className="text-lg font-black">{sourceName}</h2><span className="rounded-full bg-teal-300/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-teal-100">{source?.lastSuccessfulObservedAt ? statusLabel(source.freshness) : 'No disponible'}</span></div>
+                <p className="mt-4 text-sm text-slate-300">{source?.label || 'La fuente no informó datos recientes.'}</p>
+                <p className="mt-2 text-xs text-slate-400">{formatOfficialTime(source?.lastSuccessfulObservedAt)}</p>
               </article>
-            ))}
+            })}
           </div>
 
           <section aria-labelledby="province-alerts" className="mt-8 grid gap-4 lg:grid-cols-2">
@@ -86,9 +104,20 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
           </section>
 
           <section id="municipalities-list" aria-labelledby="municipalities-heading" className="mt-10">
-            <h2 id="municipalities-heading" className="text-2xl font-black">Localidades bajo monitoreo</h2>
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div><h2 id="municipalities-heading" className="text-2xl font-black">Localidades bajo monitoreo</h2><p className="mt-2 text-sm text-slate-300">Lista verificable equivalente al mapa; los filtros no modifican el contrato oficial.</p></div>
+              <div className="flex flex-wrap gap-2 text-sm">
+                <label className="sr-only" htmlFor="municipality-query">Filtrar localidades</label>
+                <input id="municipality-query" value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="Buscar localidad" className="rounded-full border border-white/15 bg-white px-4 py-2 text-slate-950 outline-none focus-visible:ring-4 focus-visible:ring-amber-200" />
+                <label className="sr-only" htmlFor="municipality-source">Fuente</label>
+                <select id="municipality-source" value={filters.source} onChange={(event) => setFilters({ ...filters, source: event.target.value })} className="rounded-full border border-white/15 bg-white px-3 py-2 text-slate-950 outline-none focus-visible:ring-4 focus-visible:ring-amber-200"><option value="all">Todas las fuentes</option>{OFFICIAL_SOURCES.map((source) => <option key={source} value={source}>{source}</option>)}</select>
+                <label className="sr-only" htmlFor="municipality-status">Estado</label>
+                <select id="municipality-status" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} className="rounded-full border border-white/15 bg-white px-3 py-2 text-slate-950 outline-none focus-visible:ring-4 focus-visible:ring-amber-200"><option value="all">Todos los estados</option><option value="observed">Observado</option><option value="forecast">Pronóstico</option><option value="missing">Sin datos</option><option value="degraded">Degradado</option></select>
+              </div>
+            </div>
+            <MapFrame title="Vista territorial" fallback="Cada localidad, provincia y estado queda disponible en la lista accesible siguiente; el mapa no es requisito para operar."><ul className="grid gap-2 text-sm text-stone-700 sm:grid-cols-2">{(data?.municipalities ?? []).map((municipality) => <li key={municipality.id}><Link className="font-semibold underline" href={`/municipalities/${municipality.id}`}>{municipality.name}</Link> · {municipality.provinceCode}</li>)}</ul></MapFrame>
             <div className="mt-5 grid gap-4 md:grid-cols-2">
-              {(data?.municipalities ?? []).map((municipality) => {
+              {filterMunicipalities(data?.municipalities ?? [], filters).map((municipality) => {
                 const summary = municipalitySummary(municipality)
                 return (
                 <article key={municipality.id} className="group rounded-[2rem] border border-white/10 bg-slate-900/80 p-5 shadow-xl transition-transform duration-300 hover:-translate-y-1">
@@ -116,8 +145,12 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
                   <Link href={`/municipalities/${municipality.id}`} className="mt-5 inline-flex items-center gap-2 rounded-full bg-amber-300 px-4 py-2 font-black text-slate-950 transition-colors duration-200 hover:bg-amber-200 focus-visible:ring-4 focus-visible:ring-amber-100">Abrir tablero de {municipality.name}<ArrowUpRight size={18} aria-hidden="true" /></Link>
                 </article>
               )})}
+              {data && filterMunicipalities(data.municipalities, filters).length === 0 ? <p className="rounded-3xl border border-white/10 bg-slate-900/80 p-5 text-slate-300">No hay localidades que coincidan con estos filtros.</p> : null}
             </div>
           </section>
+          <div className="mt-10">
+            <FutureCapabilities product="ibera-alerta" />
+          </div>
         </div>
       </section>
     </main>
@@ -134,4 +167,11 @@ function municipalitySummary(municipality: Municipality) {
   const riskLevel = height == null ? 'unknown' : municipality.evacuationHeightM != null && height >= municipality.evacuationHeightM ? 'high' : municipality.alertHeightM != null && height >= municipality.alertHeightM ? 'moderate' : 'low'
   const warning = height == null ? 'Sin datos oficiales recientes' : riskLevel === 'high' ? 'Altura sobre umbral de evacuación informado por PNA.' : riskLevel === 'moderate' ? 'Altura sobre umbral de alerta informado por PNA.' : 'Sin alerta hidrométrica oficial para este municipio.'
   return { ...summary, riskLevel, warning }
+}
+
+function municipalityStatus(municipality: Municipality) {
+  if (municipality.latestTelemetry.length === 0) return 'missing'
+  if (municipality.latestTelemetry.some((item) => item.freshness === 'degraded' || item.freshness === 'stale')) return 'degraded'
+  if (municipality.latestTelemetry.some((item) => item.forecastHorizonDays != null)) return 'forecast'
+  return 'observed'
 }

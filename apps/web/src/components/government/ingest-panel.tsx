@@ -1,23 +1,9 @@
 'use client'
 
 import React, { useEffect, useRef, useState, type FormEvent } from 'react'
+import { pollStatusPath, sanitizeIngestResponse, type IngestStatus, type PollOptions, type SafeIngestView } from '@/lib/visibility/polling'
+export type { SafeIngestView } from '@/lib/visibility/polling'
 
-type IngestStatus = 'queued' | 'started' | 'completed' | 'partial' | 'failed'
-type SourceStatus = 'success' | 'failed' | 'empty' | 'skipped'
-
-type SafeIngestResult = {
-  source: string
-  status: SourceStatus
-  recordsIngested: number
-}
-
-export type SafeIngestView = {
-  status: IngestStatus
-  runId?: string
-  proofRunId?: string
-  requestedSources: string[]
-  results: SafeIngestResult[]
-}
 
 const INGEST_BODY = JSON.stringify({ contractVersion: '1.0.0', reason: 'operator_browser' })
 const VERIFY_BODY = JSON.stringify({ contractVersion: '1.0.0' })
@@ -30,14 +16,14 @@ const statusLabels: Record<IngestStatus, string> = {
   failed: 'Ingesta fallida',
 }
 
-const sourceStatusLabels: Record<SourceStatus, string> = {
+const sourceStatusLabels: Record<SafeIngestView['results'][number]['status'], string> = {
   success: 'Completó',
   failed: 'Falló',
   empty: 'Sin registros',
   skipped: 'Omitida',
 }
 
-export function IngestPanel() {
+export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } = {}) {
   const [token, setToken] = useState('')
   const [authorized, setAuthorized] = useState(false)
   const [pending, setPending] = useState(false)
@@ -112,7 +98,8 @@ export function IngestPanel() {
         throw new IngestRequestError(safeErrorForStatus(response.status))
       }
 
-      const view = sanitizeIngestView(await response.json())
+      const admission = sanitizeIngestResponse(await response.json())
+      const view = admission?.statusPath ? await pollStatusPath(admission.statusPath, pollOptions) : admission
       if (!view) throw new IngestRequestError('La respuesta de ingesta no tiene un formato válido.')
       if (mountedRef.current) setResult(view)
     } catch (cause) {
@@ -181,13 +168,13 @@ export function IngestPanel() {
         </p>
 
         {error ? <p className="mt-4 rounded-2xl border border-red-300/30 bg-red-950/60 px-4 py-3 text-red-100" role="alert">{error}</p> : null}
-        {result ? <SafeResultView result={result} /> : null}
+        {result ? <SafeResultView result={result} onRetry={() => { setResult(null); setError(null); setAuthorized(false) }} /> : null}
       </div>
     </main>
   )
 }
 
-function SafeResultView({ result }: { result: SafeIngestView }) {
+function SafeResultView({ result, onRetry }: { result: SafeIngestView; onRetry: () => void }) {
   return (
     <section aria-labelledby="ingest-result-heading" className="mt-6 rounded-[2rem] border border-white/10 bg-slate-900/80 p-6">
       <h2 id="ingest-result-heading" className="text-2xl font-black">Resultado de la ingesta</h2>
@@ -195,6 +182,7 @@ function SafeResultView({ result }: { result: SafeIngestView }) {
         <div><dt className="text-slate-400">Estado</dt><dd className="font-bold text-white">{statusLabels[result.status]}</dd></div>
         {result.runId ? <div><dt className="text-slate-400">Run ID</dt><dd className="break-all font-mono text-white">{result.runId}</dd></div> : null}
         {result.proofRunId ? <div><dt className="text-slate-400">Proof run ID</dt><dd className="break-all font-mono text-white">{result.proofRunId}</dd></div> : null}
+        {result.statusPath ? <div><dt className="text-slate-400">Ruta de estado</dt><dd className="break-all font-mono text-white">{result.statusPath}</dd></div> : null}
       </dl>
 
       <div className="mt-5">
@@ -208,10 +196,14 @@ function SafeResultView({ result }: { result: SafeIngestView }) {
             <li key={source.source} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/5 px-4 py-3">
               <span className="font-bold text-white">{source.source}</span>
               <span className="text-sm text-slate-300">{sourceStatusLabels[source.status]} · {source.recordsIngested} registros</span>
+              {source.observedFrom || source.observedTo ? <span className="basis-full text-xs text-slate-400">Rango: {source.observedFrom ?? '—'} → {source.observedTo ?? '—'}</span> : null}
+              {source.httpSummary ? <span className="basis-full text-xs text-slate-400">HTTP: {source.httpSummary.status ?? '—'} · {source.httpSummary.host}{source.httpSummary.path} · {source.httpSummary.elapsedMs} ms · {source.httpSummary.attempts} intento(s)</span> : null}
+              {source.diagnostic ? <span className="basis-full text-xs text-amber-100">Diagnóstico: {source.diagnostic.failureKind ?? 'degradación'}{source.diagnostic.providerHost ? ` · ${source.diagnostic.providerHost}` : ''}{source.diagnostic.upstreamStatus ? ` · HTTP ${source.diagnostic.upstreamStatus}` : ''}</span> : null}
             </li>
           ))}
         </ul>
       ) : null}
+      {result.status === 'partial' || result.status === 'failed' || result.status === 'queued' || result.status === 'started' ? <button type="button" onClick={onRetry} className="mt-5 rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button> : null}
     </section>
   )
 }
@@ -223,43 +215,4 @@ function safeErrorForStatus(status: number) {
   if (status === 429) return 'La ingesta está temporalmente limitada. Intentá nuevamente más tarde.'
   if (status >= 500) return 'El servicio de ingesta no está disponible. Intentá nuevamente más tarde.'
   return 'No se pudo completar la ingesta.'
-}
-
-function sanitizeIngestView(value: unknown): SafeIngestView | null {
-  if (!isRecord(value) || !isIngestStatus(value['status'])) return null
-
-  const requestedSources = safeStringArray(value['requestedSources'])
-  const results = Array.isArray(value['results']) ? value['results'].flatMap((item) => {
-    if (!isRecord(item) || typeof item['source'] !== 'string' || !isSourceStatus(item['status'])) return []
-    const recordsIngested = typeof item['recordsIngested'] === 'number' && Number.isFinite(item['recordsIngested']) && item['recordsIngested'] >= 0 ? Math.floor(item['recordsIngested']) : 0
-    return [{ source: item['source'].slice(0, 80), status: item['status'], recordsIngested }]
-  }).slice(0, 20) : []
-
-  return {
-    status: value['status'],
-    runId: safeOptionalString(value['runId']),
-    proofRunId: safeOptionalString(value['proofRunId']),
-    requestedSources,
-    results,
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function safeStringArray(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 80)).slice(0, 20) : []
-}
-
-function safeOptionalString(value: unknown) {
-  return typeof value === 'string' ? value.slice(0, 120) : undefined
-}
-
-function isIngestStatus(value: unknown): value is IngestStatus {
-  return value === 'queued' || value === 'started' || value === 'completed' || value === 'partial' || value === 'failed'
-}
-
-function isSourceStatus(value: unknown): value is SourceStatus {
-  return value === 'success' || value === 'failed' || value === 'empty' || value === 'skipped'
 }

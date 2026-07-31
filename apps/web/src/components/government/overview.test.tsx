@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import React from 'react'
 import { JSDOM } from 'jsdom'
 import { render, cleanup } from '@testing-library/react'
-import { GovernmentOverview } from './overview'
+import { GovernmentOverview, filterMunicipalities } from './overview'
 
 beforeEach(() => setupDom())
 afterEach(() => cleanup())
@@ -19,8 +19,8 @@ test('GovernmentOverview renders canonical telemetry and empty latestTelemetry s
     ],
   }
   const view = render(<GovernmentOverview initialData={payload} />)
-    assert.ok(await view.findByText('Corrientes Capital'))
-    assert.ok(await view.findByText('Goya'))
+    assert.equal((await view.findAllByText('Corrientes Capital')).length, 2)
+    assert.equal((await view.findAllByText('Goya')).length, 2)
     assert.match(view.container.textContent ?? '', /3\.2\s*m/)
     assert.match(view.container.textContent ?? '', /3\.11\s*m/)
   assert.ok(view.getByRole('link', { name: 'Ver fuente oficial' }))
@@ -35,6 +35,31 @@ test('GovernmentOverview renders canonical telemetry and empty latestTelemetry s
 test('GovernmentOverview renders explicit fetch error state', async () => {
   const view = render(<GovernmentOverview initialError="No se pudo cargar el monitoreo provincial" />)
   assert.ok(await view.findByRole('alert'))
+})
+
+test('GovernmentOverview keeps an accessible list fallback and renders all official source cards with filters', async () => {
+  const payload = {
+    province: { provinceCode: 'AR-W', name: 'Corrientes' },
+    sourceFreshness: [{ source: 'PNA', freshness: 'fresh', label: 'PNA actualizado', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }],
+    provinceAlerts: [],
+    municipalities: [
+      { id: 'mercedes', localityId: 'mercedes-corrientes', name: 'Mercedes', provinceCode: 'AR-W', gaugeMappings: { primaryPnaPortId: 'mercedes', secondaryPnaPortIds: [], inaStationIds: [], smnRegionIds: [], inmetStationIds: [] }, officialAlerts: [], latestTelemetry: [] },
+      { id: 'ituzaingo', localityId: 'ituzaingo-corrientes', name: 'Ituzaingó', provinceCode: 'AR-W', gaugeMappings: { primaryPnaPortId: 'ituzaingo', secondaryPnaPortIds: [], inaStationIds: [], smnRegionIds: [], inmetStationIds: [] }, officialAlerts: [], latestTelemetry: [] },
+    ],
+  }
+  const view = render(<GovernmentOverview initialData={payload} />)
+
+  assert.ok(await view.findByLabelText('Filtrar localidades'))
+  assert.ok(view.getByRole('region', { name: 'Alternativa no cartográfica' }))
+  assert.ok(view.getAllByText('PNA').length >= 1)
+  assert.ok(view.getAllByText('INA').length >= 1)
+  assert.ok(view.getAllByText('INMET').length >= 1)
+  assert.ok(view.getAllByText('SMN').length >= 1)
+  assert.equal(filterMunicipalities(payload.municipalities, { query: 'itu', source: 'all', status: 'all' }).map((item) => item.id).join(','), 'ituzaingo')
+  const future = view.getByTestId('ibera-alerta-future-capabilities')
+  assert.ok(view.getByRole('heading', { level: 2, name: /Expansión institucional pendiente/i }))
+  assert.ok(view.getByRole('article', { name: 'Integraciones institucionales' }))
+  assert.equal(future.querySelectorAll('button, a, input, select, form').length, 0)
 })
 
 function setupDom() {

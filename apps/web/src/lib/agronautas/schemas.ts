@@ -64,6 +64,11 @@ export const alertsCurrentSchema = z.object({
   recompute: z.object({ status: z.enum(['enqueued', 'already_in_progress']) }).optional(),
 })
 
+export const alertsTimelineResponseSchema = z.object({
+  fieldId: z.string().min(1),
+  items: z.array(alertSnapshotSchema),
+})
+
 export const contractErrorSchema = z.object({
   contractVersion: z.literal(AGRONAUTAS_CONTRACT_VERSION),
   code: z.string(),
@@ -129,6 +134,7 @@ export type FieldCreated = z.infer<typeof fieldCreatedSchema>
 export type FieldOverview = z.infer<typeof fieldOverviewSchema>
 export type RiskCurrent = z.infer<typeof riskCurrentSchema>
 export type AlertsCurrent = z.infer<typeof alertsCurrentSchema>
+export type AlertsTimelineResponse = z.infer<typeof alertsTimelineResponseSchema>
 export type ContractError = z.infer<typeof contractErrorSchema>
 export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>
 export type HydrologyDashboard = z.infer<typeof hydrologyDashboardSchema>

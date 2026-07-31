@@ -34,6 +34,7 @@ const overviewPayload = {
 const dashboardPayload = {
   contractVersion: 'hydrology-government-dashboard-v1',
   municipality: { id: 'ituzaingo', localityId: 'ituzaingo', name: 'Ituzaingó', alertHeightM: 4.8, evacuationHeightM: 5.4, officialAlerts: [] },
+  gaugeMappings: overviewPayload.municipalities[0].gaugeMappings,
   telemetryCards: [
     { source: 'PNA', stationId: 'PNA-ITU', metric: 'river_height_m', value: 4.92, unit: 'm', observedAt: '2026-06-23T13:40:00.000Z', lastSuccessfulObservedAt: '2026-06-23T13:40:00.000Z', label: 'Altura del río' },
     { source: 'INMET', stationId: 'INMET-URU', metric: 'rain_mm', value: null, unit: 'mm', observedAt: '2026-06-22T09:15:00.000Z', lastSuccessfulObservedAt: '2026-06-22T09:15:00.000Z', label: 'Lluvia fronteriza' },
@@ -58,7 +59,7 @@ test('government hierarchy navigates from province overview to locality detail',
   await expect(page.getByRole('heading', { name: /Centro de Monitoreo Hídrico/i })).toBeVisible()
   await expect(page.getByRole('link', { name: /Abrir tablero de Ituzaingó/i })).toBeVisible()
   await expect(page.getByText('Último dato obtenido: 23/06/2026 13:40').first()).toBeVisible()
-  await expect(page.getByText('INMET')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'INMET', exact: true })).toBeVisible()
   await expect(page.getByText('Estación sin respuesta')).toBeVisible()
 
   await Promise.all([
@@ -91,7 +92,7 @@ test('government detail keeps degraded partial-source states explicit', async ({
   await page.goto('/municipalities/ituzaingo')
 
   await expect(page.getByText('Pronóstico INA')).toBeVisible()
-  await expect(page.getByText('Último dato obtenido: no disponible')).toBeVisible()
+  await expect(page.getByText('Último dato INA: no disponible')).toBeVisible()
   await expect(page.getByText('Pronóstico no disponible')).toBeVisible()
   await expect(page.getByText('Tablero usable con fuentes degradadas')).toBeVisible()
 })

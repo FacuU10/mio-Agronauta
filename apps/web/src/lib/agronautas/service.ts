@@ -10,6 +10,7 @@ import {
   weatherTimelineResponseSchema,
   AGRONAUTAS_CONTRACT_VERSION,
   alertsCurrentSchema,
+  alertsTimelineResponseSchema,
   contractErrorSchema,
   fieldCreatedSchema,
   fieldOverviewSchema,
@@ -18,7 +19,8 @@ import {
   riskCurrentSchema,
   runtimeInfoSchema,
 } from './schemas'
-import type { AlertsCurrent, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { SseEvent } from '@/lib/visibility/sse'
 
 export async function submitDemoContact(input: DemoContactSubmission): Promise<DemoContactSubmissionResponse> {
   demoContactSubmissionSchema.parse(input)
@@ -35,6 +37,7 @@ export interface AgronautasService {
   getField(fieldId: string): Promise<FieldOverview>
   getCurrentRisk(fieldId: string): Promise<RiskCurrent>
   getCurrentAlerts(fieldId: string): Promise<AlertsCurrent>
+  getAlertsTimeline(fieldId: string): Promise<AlertsTimelineResponse>
   getRiskTimeline(fieldId: string): Promise<RiskTimelineResponse>
   getWeatherTimeline(fieldId: string): Promise<WeatherTimelineResponse>
   getMonitoringStatus(fieldId: string): Promise<MonitoringStatus>
@@ -42,7 +45,7 @@ export interface AgronautasService {
   getHydrologyDashboard(fieldId: string): Promise<HydrologyDashboard>
   requestRecompute(fieldId: string): Promise<RecomputeRequestResult>
   askFieldChat(fieldId: string, input: GroundedChatRequest): Promise<GroundedChatResponse>
-  askHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onToken: (token: string) => void): Promise<void>
+  askHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onEvent: (event: SseEvent) => void): Promise<void>
 }
 
 export function createAgronautasApiService(): AgronautasService {
@@ -52,6 +55,7 @@ export function createAgronautasApiService(): AgronautasService {
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/fields/${fieldId}`)),
     getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/fields/${fieldId}/risk/current`)),
     getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(`/fields/${fieldId}/alerts/current`)),
+    getAlertsTimeline: async (fieldId) => alertsTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/alerts/timeline`)),
     getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/risk/timeline`)),
     getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/weather/timeline`)),
     getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(`/fields/${fieldId}/status`)),
@@ -122,7 +126,7 @@ export function createAgronautasMockService(): AgronautasService {
         recompute: { status: 'enqueued' },
       })
     },
-    async getCurrentAlerts(fieldId) {
+     async getCurrentAlerts(fieldId) {
       const snapshot = (await this.getCurrentRisk(fieldId)).snapshot
       const alerts = [
         alertSnapshotSchema.parse({
@@ -144,6 +148,10 @@ export function createAgronautasMockService(): AgronautasService {
         alerts,
         recompute: { status: 'enqueued' },
       })
+    },
+    async getAlertsTimeline(fieldId) {
+      const alerts = await this.getCurrentAlerts(fieldId)
+      return alertsTimelineResponseSchema.parse({ fieldId, items: alerts.alerts })
     },
     async getRiskTimeline(fieldId) {
       return riskTimelineResponseSchema.parse({
@@ -257,17 +265,20 @@ export function createAgronautasMockService(): AgronautasService {
         unavailableReason: isDisabled ? 'groq_disabled' : isFailure ? 'groq_temporarily_unavailable' : undefined,
       })
     },
-    async askHydrologyCopilot(fieldId, input, onToken) {
+    async askHydrologyCopilot(fieldId, input, onEvent) {
       const dashboard = await this.getHydrologyDashboard(fieldId)
       const answer = input.message.toLowerCase().includes('patria')
         ? 'Paso de la Patria se referencia dentro de la tarjeta Mercedes. No se mezclan alertas fuera de su zona.'
         : `Copilot Hidrológico: ${dashboard.zone ?? 'zona sin mapear'} tiene ${dashboard.alerts.length} alerta(s) activas y pronóstico INA hasta ${Math.max(...dashboard.forecasts.map((item) => item.forecastHorizonDays ?? 0))} días. Revisá los días 15 a 30 como planificación especulativa, no certeza operativa.`
-      for (const token of answer.split(' ')) onToken(`${token} `)
+      const receivedAt = '2026-06-23T13:35:00.000-03:00'
+      onEvent({ type: 'metadata', sequence: 1, receivedAt, metadata: { fieldId, model: 'demo-copilot', sources: dashboard.sources, observedAt: dashboard.status.lastSuccessfulObservedAt, limits: ['Pronóstico INA de 15 a 30 días: planificación especulativa'] } })
+      answer.split(' ').forEach((token, index) => onEvent({ type: 'token', sequence: index + 2, receivedAt, token: `${token} ` }))
+      onEvent({ type: 'done', sequence: answer.split(' ').length + 2, receivedAt })
     },
   }
 }
 
-async function streamHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onToken: (token: string) => void): Promise<void> {
+async function streamHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onEvent: (event: SseEvent) => void): Promise<void> {
   const response = await fetch(`/api/agronautas/v1/fields/${fieldId}/copilot/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -278,6 +289,7 @@ async function streamHydrologyCopilot(fieldId: string, input: GroundedChatReques
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sequence = 0
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
@@ -287,9 +299,21 @@ async function streamHydrologyCopilot(fieldId: string, input: GroundedChatReques
     for (const event of events) {
       const dataLine = event.split('\n').find((line) => line.startsWith('data:'))
       if (!dataLine) continue
-      const parsed = JSON.parse(dataLine.replace(/^data:\s*/, '')) as { type?: string; token?: string; error?: string }
-      if (parsed.type === 'token' && parsed.token) onToken(parsed.token)
-      if (parsed.type === 'error') throw new Error(parsed.error ?? 'Error del Copilot Hidrológico')
+      const eventName = event.split('\n').find((line) => line.startsWith('event:'))?.replace(/^event:\s*/, '')
+      const payload = JSON.parse(dataLine.replace(/^data:\s*/, '')) as unknown
+      const receivedAt = new Date().toISOString()
+      sequence += 1
+      if (eventName === 'token') {
+        const token = typeof payload === 'string' ? payload : (payload as { token?: unknown }).token
+        if (typeof token === 'string') onEvent({ type: 'token', sequence, receivedAt, token })
+      } else if (eventName === 'metadata') {
+        onEvent({ type: 'metadata', sequence, receivedAt, metadata: payload && typeof payload === 'object' ? payload as Record<string, unknown> : {} })
+      } else if (eventName === 'done') {
+        onEvent({ type: 'done', sequence, receivedAt })
+      } else if (eventName === 'error') {
+        const error = payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string' ? (payload as { message: string }).message : 'El Copilot Hidrológico no está disponible'
+        onEvent({ type: 'error', sequence, receivedAt, error })
+      }
     }
   }
 }

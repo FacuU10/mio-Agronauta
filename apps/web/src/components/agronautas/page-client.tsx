@@ -7,6 +7,8 @@ import { ApiError } from '@/lib/api-client'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
 import { AGRONAUTAS_CONTRACT_VERSION, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
+import { applyChatEvent, createChatStreamState, type ChatStreamState } from '@/lib/visibility/chat'
+import type { SseEvent } from '@/lib/visibility/sse'
 import { AgronautasWorkspace } from './workspace'
 
 const React = { createElement }
@@ -24,9 +26,10 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const setLastCreatedFieldId = useAgronautasStore((state) => state.setLastCreatedFieldId)
   const setIntakeError = useAgronautasStore((state) => state.setIntakeError)
   const [chatResponse, setChatResponse] = useState<GroundedChatResponse | undefined>(undefined)
-  const [hydrologyAnswer, setHydrologyAnswer] = useState('')
-  const [hydrologyError, setHydrologyError] = useState<string | null>(null)
+  const [hydrologyChatState, setHydrologyChatState] = useState<ChatStreamState>(createChatStreamState())
   const [chatError, setChatError] = useState<string | null>(null)
+  const [lastChatMessage, setLastChatMessage] = useState<string | null>(null)
+  const [lastHydrologyMessage, setLastHydrologyMessage] = useState<string | null>(null)
 
   const intakeMutation = useMutation({
     mutationFn: (input: FieldIntake) => resolvedService.createFieldIntake(input),
@@ -55,6 +58,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const chatMutation = useMutation({
     mutationFn: (message: string) => {
       if (!selectedFieldId) throw new Error('Seleccioná un lote antes de usar el chat')
+      setLastChatMessage(message)
       return resolvedService.askFieldChat(selectedFieldId, {
         contractVersion: AGRONAUTAS_CONTRACT_VERSION,
         message,
@@ -73,15 +77,16 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const hydrologyChatMutation = useMutation({
     mutationFn: async (message: string) => {
       if (!selectedFieldId) throw new Error('Seleccioná un lote antes de usar el Copilot Hidrológico')
-      setHydrologyAnswer('')
-      setHydrologyError(null)
+      setLastHydrologyMessage(message)
+      setHydrologyChatState(createChatStreamState())
       await resolvedService.askHydrologyCopilot(selectedFieldId, {
         contractVersion: AGRONAUTAS_CONTRACT_VERSION,
         message,
-      }, (token) => setHydrologyAnswer((current) => `${current}${token}`))
+      }, (event: SseEvent) => setHydrologyChatState((current) => applyChatEvent(current, event)))
     },
     onError: (error) => {
-      setHydrologyError(error instanceof Error ? error.message : 'No se pudo abrir el Copilot Hidrológico')
+      const message = error instanceof Error ? error.message : 'No se pudo abrir el Copilot Hidrológico'
+      setHydrologyChatState((current) => ({ ...current, status: current.answer ? 'partial' : 'error', error: message, retryable: true }))
     },
   })
 
@@ -149,8 +154,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       dashboardPayload={dashboardQuery.data}
       hydrologyDashboard={hydrologyQuery.data}
       chatResponse={chatResponse}
-      hydrologyAnswer={hydrologyAnswer}
-      hydrologyError={hydrologyError}
+       hydrologyChatState={hydrologyChatState}
       chatError={chatError}
       isChatPending={chatMutation.isPending}
       isHydrologyChatPending={hydrologyChatMutation.isPending}
@@ -160,8 +164,10 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}
       onRequestRecompute={() => (selectedFieldId ? recomputeMutation.mutateAsync(selectedFieldId) : Promise.resolve(undefined))}
-      onAskChat={(message) => chatMutation.mutateAsync(message)}
-      onAskHydrologyChat={(message) => hydrologyChatMutation.mutateAsync(message)}
+       onAskChat={(message) => chatMutation.mutateAsync(message)}
+       onRetryChat={() => lastChatMessage ? chatMutation.mutateAsync(lastChatMessage) : Promise.resolve()}
+       onAskHydrologyChat={(message) => hydrologyChatMutation.mutateAsync(message)}
+       onRetryHydrologyChat={() => lastHydrologyMessage ? hydrologyChatMutation.mutateAsync(lastHydrologyMessage) : Promise.resolve()}
     />
   )
 }

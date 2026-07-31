@@ -174,17 +174,21 @@ test('field overview acepta cultivos no-arroz dentro del alcance Corrientes', ()
 })
 
 test('rechazo fuera de alcance expone error explícito', async () => {
+  const base = createAgronautasMockService()
+  const submitted: unknown[] = []
   const view = render(
     <QueryProvider>
-      <AgronautasPageClient service={createAgronautasMockService()} />
+      <AgronautasPageClient service={{ ...base, async createFieldIntake(input) { submitted.push(input); return base.createFieldIntake(input) } }} />
     </QueryProvider>,
   )
 
   fireEvent.change(view.getByLabelText('Latitud'), { target: { value: '-34.6037' } })
   fireEvent.change(view.getByLabelText('Longitud'), { target: { value: '-58.3816' } })
+  assert.equal((view.getByLabelText('Latitud') as HTMLInputElement).value, '-34.6037')
   fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
 
   await waitFor(() => {
+    assert.deepEqual((submitted[0] as { location: unknown }).location, { lat: -34.6037, lng: -58.3816 })
     assert.ok(view.getByRole('alert').textContent?.includes('fuera del alcance'))
   })
 })

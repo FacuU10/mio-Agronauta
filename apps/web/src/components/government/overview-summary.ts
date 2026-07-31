@@ -6,6 +6,8 @@ export interface OverviewTelemetry {
   observedAt: string
   lastSuccessfulObservedAt: string
   sourceUrl?: string
+  freshness?: 'fresh' | 'stale' | 'degraded'
+  forecastHorizonDays?: number | null
 }
 
 export interface MunicipalityTelemetrySummary {
