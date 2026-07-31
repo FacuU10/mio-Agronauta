@@ -38,7 +38,7 @@ import { RedisRecomputeLockRepository } from '../../infrastructure/database/redi
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import { createGroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import { RedisAgronautasRuntimeDispatcher } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
-import { createDemoAlerts, createDemoCopilotContext, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
+import { createDemoAlerts, createDemoCopilotContext, createDemoDashboardSnapshot, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
 import { getAgronautasAuthConfig, requireAgronautasScope } from '../middleware/agronautas-auth'
 import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
@@ -168,7 +168,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json(createDemoFieldOverview(fieldId))
     }
 
@@ -190,7 +190,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json({ status: 'stale', snapshot: createDemoRiskSnapshot(fieldId), recompute: { status: 'enqueued' } })
     }
 
@@ -233,7 +233,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json({ fieldId, items: [createDemoRiskSnapshot(fieldId)] })
     }
 
@@ -246,7 +246,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       const snapshot = createDemoRiskSnapshot(fieldId)
       const alerts = createDemoAlerts(fieldId)
 
@@ -291,6 +291,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/fields/:fieldId/dashboard', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) return res.json(createDemoDashboardSnapshot(fieldId))
     const dashboard = await buildDashboardPayload(fieldId)
     if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
     return res.json(dashboard)
@@ -299,6 +300,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/fields/:fieldId/dashboard.pdf', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
+      const dashboard = createDemoDashboardSnapshot(fieldId)
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Content-Disposition', `attachment; filename="agronautas-${fieldId}.pdf"`)
+      return res.send(Buffer.from(renderDashboardPdfText(dashboard), 'utf8'))
+    }
     const dashboard = await buildDashboardPayload(fieldId)
     if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
     res.setHeader('Content-Type', 'application/pdf')
@@ -310,7 +317,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json({
         fieldId,
         items: [{
@@ -347,7 +354,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.status(202).json({
         status: 'stale',
         snapshot: createDemoRiskSnapshot(fieldId),
@@ -382,7 +389,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json({ fieldId, items: createDemoAlerts(fieldId) })
     }
 
@@ -395,7 +402,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.status(202).json({ status: 'enqueued', mode: 'demo' })
     }
 
@@ -408,7 +415,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    if (runtimeConfig.mode === 'demo') {
+    if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json(createDemoCopilotContext(fieldId))
     }
 
@@ -748,6 +755,12 @@ function requireFieldId(req: Request, res: Response): string | undefined {
 
   respondContractError(res, 400, 'INVALID_CONTRACT', 'Field id is required')
   return undefined
+}
+
+const CANONICAL_DEMO_FIELD_ID = 'field-demo-1'
+
+function shouldUseDemoData(req: Request, fieldId: string, runtimeMode: ReturnType<typeof getAgronautasRuntimeConfig>['mode']): boolean {
+  return runtimeMode === 'demo' || (req.query['mode'] === 'demo' && fieldId === CANONICAL_DEMO_FIELD_ID)
 }
 
 export type { AgronautasRouterDeps }

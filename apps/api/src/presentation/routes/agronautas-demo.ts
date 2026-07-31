@@ -1,4 +1,4 @@
-import { alertSnapshotSchema, copilotContextSchema, fieldIntakeSchema, riskSnapshotSchema, type FieldIntake } from '@repo/zod-schemas'
+import { alertSnapshotSchema, copilotContextSchema, dashboardSnapshotSchema, fieldIntakeSchema, riskSnapshotSchema, type FieldIntake } from '@repo/zod-schemas'
 
 const AGRONAUTAS_CONTRACT_VERSION = '1.0.0'
 
@@ -18,7 +18,8 @@ export function createDemoField(input: FieldIntake) {
 }
 
 export function createDemoFieldOverview(fieldId: string) {
-  return createDemoField({
+  return {
+    ...createDemoField({
     contractVersion: AGRONAUTAS_CONTRACT_VERSION,
     fieldId: fieldId.replace(/^demo-/, ''),
     cropCategory: 'cereal',
@@ -28,7 +29,9 @@ export function createDemoFieldOverview(fieldId: string) {
     provinceCode: 'AR-W',
     countryCode: 'AR',
     location: { lat: -29.1846, lng: -58.0759 },
-  })
+    }),
+    fieldId,
+  }
 }
 
 export function createDemoFieldCreated(input: FieldIntake) {
@@ -113,6 +116,49 @@ export function createDemoCopilotContext(fieldId: string) {
       freshness: alert.freshness,
       degradationReasons: alert.degradationReasons,
     })),
+  })
+}
+
+export function createDemoDashboardSnapshot(fieldId: string) {
+  const field = createDemoFieldOverview(fieldId)
+  const snapshot = createDemoRiskSnapshot(fieldId)
+  const alerts = createDemoAlerts(fieldId)
+  const observedAt = '2026-06-03T00:00:00.000Z'
+
+  return dashboardSnapshotSchema.parse({
+    contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+    snapshotId: snapshot.snapshotId,
+    field: { fieldId, cropCategory: 'cereal', crop: field.crop, provinceCode: field.provinceCode, locality: field.locality },
+    status: 'degraded',
+    freshness: 'degraded',
+    signals: [{ signalType: 'weather', status: 'degraded', evidenceRefs: snapshot.evidenceRefs, confidence: 0.64, degradationReasons: ['weather_data_stale'] }],
+    risk: { score: snapshot.score, level: snapshot.level, confidence: snapshot.confidence, drivers: snapshot.drivers },
+    alerts,
+    provenance: [{
+      evidenceId: 'open-meteo:weather:2026-06-03T00:00:00.000Z',
+      provider: 'open-meteo',
+      signalType: 'weather',
+      observedAt,
+      ingestedAt: snapshot.computedAt,
+      sourceUrl: 'https://api.open-meteo.com/',
+      rawHash: 'demo-open-meteo',
+      confidence: 0.64,
+      freshness: 'degraded',
+      providerMode: 'mock',
+      lastSuccessfulObservedAt: observedAt,
+      nextDueAt: snapshot.validUntil,
+      failureReason: 'demo_mode',
+      degradationReasons: ['weather_data_stale'],
+    }],
+    scheduler: { lastRunAt: snapshot.computedAt, nextRunAt: snapshot.validUntil, lockStatus: 'available', failures: [], nextDueBySource: [] },
+    generatedAt: '2026-06-03T00:05:00.000Z',
+    lastDataFetchedAt: observedAt,
+    presentation: {
+      disclaimer: 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.',
+      confidenceLabel: 'media',
+      sourcesUnavailable: true,
+      staleFlags: ['satellite_data_stale', 'weather_data_stale'],
+    },
   })
 }
 

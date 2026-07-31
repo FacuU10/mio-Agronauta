@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 const React = { createElement }
+const CANONICAL_DEMO_FIELD_ID = 'field-demo-1'
 
 export interface AgronautasFieldDetailProps {
   field: FieldOverview
@@ -30,7 +31,7 @@ export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
   const nextAction = props.risk.snapshot.level === 'high'
     ? 'Revisar drivers de lluvia y estrés antes de operar el lote.'
     : 'Confirmar la próxima lectura con evidencia vigente.'
-  const reportHref = `/api/agronautas/v1/fields/${props.field.fieldId}/dashboard.pdf`
+  const reportHref = `/api/agronautas/v1/fields/${props.field.fieldId}/dashboard.pdf${props.field.fieldId === CANONICAL_DEMO_FIELD_ID ? '?mode=demo' : ''}`
 
   return (
     <ProductShell
@@ -108,18 +109,19 @@ export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
   )
 }
 
-export function AgronautasFieldDetailPageClient({ fieldId, service = resolveAgronautasService() }: { fieldId: string; service?: AgronautasService }) {
+export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId: string; service?: AgronautasService }) {
+  const resolvedService = service ?? resolveAgronautasService({ mode: fieldId === CANONICAL_DEMO_FIELD_ID ? 'demo' : undefined })
   const queries = useQueries({ queries: [
-    { queryKey: ['agronautas', 'detail-field', fieldId], queryFn: () => service.getField(fieldId) },
-    { queryKey: ['agronautas', 'detail-risk', fieldId], queryFn: () => service.getCurrentRisk(fieldId) },
-    { queryKey: ['agronautas', 'detail-alerts', fieldId], queryFn: () => service.getCurrentAlerts(fieldId) },
-    { queryKey: ['agronautas', 'detail-status', fieldId], queryFn: () => service.getMonitoringStatus(fieldId) },
-    { queryKey: ['agronautas', 'detail-risk-timeline', fieldId], queryFn: () => service.getRiskTimeline(fieldId) },
-    { queryKey: ['agronautas', 'detail-weather-timeline', fieldId], queryFn: () => service.getWeatherTimeline(fieldId) },
-    { queryKey: ['agronautas', 'detail-dashboard', fieldId], queryFn: () => service.getDashboard(fieldId) },
-    { queryKey: ['agronautas', 'detail-alerts-timeline', fieldId], queryFn: () => service.getAlertsTimeline(fieldId) },
+    { queryKey: ['agronautas', 'detail-field', fieldId], queryFn: () => resolvedService.getField(fieldId) },
+    { queryKey: ['agronautas', 'detail-risk', fieldId], queryFn: () => resolvedService.getCurrentRisk(fieldId) },
+    { queryKey: ['agronautas', 'detail-alerts', fieldId], queryFn: () => resolvedService.getCurrentAlerts(fieldId) },
+    { queryKey: ['agronautas', 'detail-status', fieldId], queryFn: () => resolvedService.getMonitoringStatus(fieldId) },
+    { queryKey: ['agronautas', 'detail-risk-timeline', fieldId], queryFn: () => resolvedService.getRiskTimeline(fieldId) },
+    { queryKey: ['agronautas', 'detail-weather-timeline', fieldId], queryFn: () => resolvedService.getWeatherTimeline(fieldId) },
+    { queryKey: ['agronautas', 'detail-dashboard', fieldId], queryFn: () => resolvedService.getDashboard(fieldId) },
+    { queryKey: ['agronautas', 'detail-alerts-timeline', fieldId], queryFn: () => resolvedService.getAlertsTimeline(fieldId) },
   ] })
-  const recompute = useMutation({ mutationFn: () => service.requestRecompute(fieldId) })
+  const recompute = useMutation({ mutationFn: () => resolvedService.requestRecompute(fieldId) })
   const hasError = queries.find((query) => query.error)
   const isLoading = queries.some((query) => query.isLoading)
   const field = queries[0]?.data as FieldOverview | undefined

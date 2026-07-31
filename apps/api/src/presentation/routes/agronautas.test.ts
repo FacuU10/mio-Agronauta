@@ -82,6 +82,78 @@ test('GET /agronautas/v1/runtime preserva compatibilidad versionada', async () =
   delete process.env['AGRONAUTAS_ROUTE_PREFIX']
 })
 
+test('GET /fields/:id?mode=demo queda limitado al lote canónico y no evita 404 reales', async () => {
+  const previousMode = process.env['AGRONAUTAS_RUNTIME_MODE']
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
+
+  try {
+    const app = createTestApp()
+    const demo = await request(app, '/agronautas/fields/field-demo-1?mode=demo')
+    const wrongField = await request(app, '/agronautas/fields/field-1?mode=demo')
+    const realCanonical = await request(app, '/agronautas/fields/field-demo-1')
+
+    assert.equal(demo.status, 200)
+    const demoJson = await demo.json() as { fieldId: string; locality: string }
+    assert.equal(demoJson.fieldId, 'field-demo-1')
+    assert.equal(demoJson.locality, 'Mercedes')
+    assert.equal(wrongField.status, 404)
+    assert.equal(realCanonical.status, 404)
+  } finally {
+    if (previousMode === undefined) delete process.env['AGRONAUTAS_RUNTIME_MODE']
+    else process.env['AGRONAUTAS_RUNTIME_MODE'] = previousMode
+  }
+})
+
+test('GET /fields/:id?mode=demo conserva el scope de lectura', async () => {
+  const previousMode = process.env['AGRONAUTAS_RUNTIME_MODE']
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  try {
+    const app = createTestApp()
+    const unauthorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo')
+    const authorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo', { headers: { authorization: 'Bearer reader-token' } })
+
+    assert.equal(unauthorized.status, 401)
+    assert.equal(authorized.status, 200)
+  } finally {
+    if (previousMode === undefined) delete process.env['AGRONAUTAS_RUNTIME_MODE']
+    else process.env['AGRONAUTAS_RUNTIME_MODE'] = previousMode
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
+test('GET /fields/field-demo-1?mode=demo devuelve todos los contratos del detalle', async () => {
+  const previousMode = process.env['AGRONAUTAS_RUNTIME_MODE']
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
+
+  try {
+    const app = createTestApp()
+    const responses = await Promise.all([
+      request(app, '/agronautas/fields/field-demo-1?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/risk/current?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/alerts/current?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/status?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/risk/timeline?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/weather/timeline?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/dashboard?mode=demo'),
+      request(app, '/agronautas/fields/field-demo-1/alerts/timeline?mode=demo'),
+    ])
+
+    assert.deepEqual(responses.map((response) => response.status), [200, 200, 202, 200, 200, 200, 200, 200])
+    assert.equal((await responses[6]?.json() as { field: { fieldId: string } }).field.fieldId, 'field-demo-1')
+  } finally {
+    if (previousMode === undefined) delete process.env['AGRONAUTAS_RUNTIME_MODE']
+    else process.env['AGRONAUTAS_RUNTIME_MODE'] = previousMode
+  }
+})
+
 test('POST /fields acepta alta válida en Corrientes', async () => {
   const fieldStore = new Map<string, Field>()
   const contextStore = new Map<string, FieldContext>()

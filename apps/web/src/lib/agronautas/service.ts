@@ -22,6 +22,16 @@ import {
 import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
+const AGRONAUTAS_REQUEST_MODES = {
+  DEMO: 'demo',
+} as const
+
+type AgronautasRequestMode = (typeof AGRONAUTAS_REQUEST_MODES)[keyof typeof AGRONAUTAS_REQUEST_MODES]
+
+export interface AgronautasApiServiceOptions {
+  mode?: AgronautasRequestMode
+}
+
 export async function submitDemoContact(input: DemoContactSubmission): Promise<DemoContactSubmissionResponse> {
   demoContactSubmissionSchema.parse(input)
   return demoContactSubmissionResponseSchema.parse(await apiClient('/contact/demo', {
@@ -48,20 +58,22 @@ export interface AgronautasService {
   askHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onEvent: (event: SseEvent) => void): Promise<void>
 }
 
-export function createAgronautasApiService(): AgronautasService {
+export function createAgronautasApiService(options: AgronautasApiServiceOptions = {}): AgronautasService {
+  const fieldEndpoint = (fieldId: string, suffix: string) => withRequestMode(`/fields/${fieldId}${suffix}`, options.mode)
+
   return {
     getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
     createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
-    getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(`/fields/${fieldId}`)),
-    getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(`/fields/${fieldId}/risk/current`)),
-    getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(`/fields/${fieldId}/alerts/current`)),
-    getAlertsTimeline: async (fieldId) => alertsTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/alerts/timeline`)),
-    getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/risk/timeline`)),
-    getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(`/fields/${fieldId}/weather/timeline`)),
-    getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(`/fields/${fieldId}/status`)),
-    getDashboard: async (fieldId) => dashboardSnapshotSchema.parse(await apiClient(`/fields/${fieldId}/dashboard`)),
+    getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
+    getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(fieldEndpoint(fieldId, '/risk/current'))),
+    getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(fieldEndpoint(fieldId, '/alerts/current'))),
+    getAlertsTimeline: async (fieldId) => alertsTimelineResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/alerts/timeline'))),
+    getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/risk/timeline'))),
+    getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/weather/timeline'))),
+    getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(fieldEndpoint(fieldId, '/status'))),
+    getDashboard: async (fieldId) => dashboardSnapshotSchema.parse(await apiClient(fieldEndpoint(fieldId, '/dashboard'))),
     getHydrologyDashboard: async (fieldId) => hydrologyDashboardSchema.parse(await apiClient(`/fields/${fieldId}/hydrology/dashboard`)),
-    requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(`/fields/${fieldId}/recompute`, { method: 'POST' })),
+    requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(fieldEndpoint(fieldId, '/recompute'), { method: 'POST' })),
     askFieldChat: async (fieldId, input) => groundedChatResponseSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
     askHydrologyCopilot: (fieldId, input, onToken) => streamHydrologyCopilot(fieldId, input, onToken),
   }
@@ -363,6 +375,11 @@ function confidenceLabel(confidence: number): 'alta' | 'media' | 'baja' {
   return 'baja'
 }
 
-export function resolveAgronautasService(): AgronautasService {
-  return createAgronautasApiService()
+export function resolveAgronautasService(options: AgronautasApiServiceOptions = {}): AgronautasService {
+  return createAgronautasApiService(options)
+}
+
+function withRequestMode(endpoint: string, mode?: AgronautasRequestMode): string {
+  if (mode !== AGRONAUTAS_REQUEST_MODES.DEMO) return endpoint
+  return `${endpoint}?mode=${encodeURIComponent(AGRONAUTAS_REQUEST_MODES.DEMO)}`
 }

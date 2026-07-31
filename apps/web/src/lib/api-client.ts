@@ -81,7 +81,11 @@ export async function apiClient<T>(
   }
 }
 
-function resolveApiBaseUrl(): string {
+export function resolveApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    return DEFAULT_API_BASE_URL
+  }
+
   const configured = process.env['NEXT_PUBLIC_API_URL']?.trim()
   if (configured) {
     return configured.replace(/\/+$/, '')
