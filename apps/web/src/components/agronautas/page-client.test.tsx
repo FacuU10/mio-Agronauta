@@ -64,6 +64,12 @@ test('alta válida muestra dashboard con alertas y evidencia', async () => {
     assert.ok(view.getByText('Riesgo de anegamiento'))
     assert.ok(view.getByText(/weather:open-meteo/i))
     assert.ok(view.getByText('Timeline climático'))
+    const evidenceStates = view.getByRole('region', { name: 'Estados de evidencia Agronautas' })
+    assert.match(evidenceStates.textContent ?? '', /observed/i)
+    assert.match(evidenceStates.textContent ?? '', /forecast/i)
+    assert.match(evidenceStates.textContent ?? '', /stale/i)
+    assert.match(evidenceStates.textContent ?? '', /mock\/seam/i)
+    assert.match(evidenceStates.textContent ?? '', /missing/i)
   })
 })
 

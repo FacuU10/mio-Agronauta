@@ -23,6 +23,8 @@ import {
 } from '../../zod-schemas/src/agronautas.js'
 
 const contractsRoot = join(import.meta.dirname, '..')
+const repositoryRoot = join(contractsRoot, '..', '..')
+const changeRoot = join(repositoryRoot, 'openspec', 'changes', 'agronautas-ibera-data-first-ux-ondemand')
 const schema = JSON.parse(readFileSync(join(contractsRoot, 'schemas', 'agronautas-contracts.v1.schema.json'), 'utf8'))
 const matrix = JSON.parse(readFileSync(join(contractsRoot, 'fixtures', 'agronautas', 'validation-matrix.v1.json'), 'utf8'))
 
@@ -58,4 +60,67 @@ test('acepta y rechaza fixtures de contratos de forma consistente en TypeScript'
     const result = validator.safeParse(contractCase.payload)
     assert.equal(result.success, contractCase.valid, contractCase.name)
   }
+})
+
+test('mantiene el límite ejecutable del plan on-demand en una sola fuente y un solo centroide', () => {
+  const spec = readFileSync(join(changeRoot, 'specs', 'agronautas-evidence-visibility', 'spec.md'), 'utf8')
+  const matrixDocument = readFileSync(join(changeRoot, 'contract-to-screen-matrix.md'), 'utf8')
+  const requiredProof = [
+    'one centroid',
+    'one source',
+    'request/run IDs',
+    'timeout/rate behavior',
+    'latest-good/cache',
+    'persistence/history',
+    'freshness',
+    'Copilot trace',
+  ]
+
+  assert.match(spec, /SHALL document, but MUST NOT implement/)
+  for (const requirement of requiredProof) {
+    assert.match(matrixDocument, new RegExp(requirement.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), requirement)
+  }
+  assert.match(matrixDocument, /external Postgres\/Redis prerequisites/i)
+  assert.match(matrixDocument, /must not infer Corrientes-wide feasibility/i)
+})
+
+test('keeps explicit non-goals aligned with the actual evidence and map boundaries', () => {
+  const proposal = readFileSync(join(changeRoot, 'proposal.md'), 'utf8')
+  const design = readFileSync(join(changeRoot, 'design.md'), 'utf8')
+  const tasks = readFileSync(join(changeRoot, 'tasks.md'), 'utf8')
+  const mapSource = readFileSync(join(repositoryRoot, 'apps', 'web', 'src', 'lib', 'visibility', 'map.ts'), 'utf8')
+  const webPackage = JSON.parse(readFileSync(join(repositoryRoot, 'apps', 'web', 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }
+  const fieldRepository = readFileSync(join(repositoryRoot, 'apps', 'api', 'src', 'infrastructure', 'database', 'postgres', 'agronautas-field-repository.ts'), 'utf8')
+  const workspace = readFileSync(join(repositoryRoot, 'apps', 'web', 'src', 'components', 'agronautas', 'workspace.tsx'), 'utf8')
+  const municipalDetail = readFileSync(join(repositoryRoot, 'apps', 'web', 'src', 'components', 'government', 'detail.tsx'), 'utf8')
+  const scopeDocuments = `${proposal}\n${design}\n${tasks}`
+  const nonGoals = [
+    'Docker',
+    'Google Maps',
+    'WhatsApp',
+    'durable/editable polygons',
+    'scheduler rewrite',
+    'Risk Engine',
+    'hydraulic simulation',
+  ]
+
+  for (const nonGoal of nonGoals) {
+    assert.match(scopeDocuments, new RegExp(nonGoal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), nonGoal)
+  }
+
+  assert.match(mapSource, /provider: 'unconfigured'/)
+  assert.match(mapSource, /pointOnly: true/)
+  assert.equal(Object.keys(webPackage.dependencies ?? {}).some((name) => /google.?maps/i.test(name)), false)
+  const persistedFieldColumns = fieldRepository.match(/`INSERT INTO fields \(([\s\S]*?)\)\s+VALUES/i)?.[1]
+  const persistedFieldReads = [...fieldRepository.matchAll(/`(SELECT[\s\S]*?FROM fields[\s\S]*?)`/gi)].map((match) => match[1])
+
+  assert.ok(persistedFieldColumns)
+  assert.ok(persistedFieldReads.length >= 2)
+  assert.doesNotMatch(persistedFieldColumns, /\bboundary\b(?!_source|_version)/i)
+  for (const query of persistedFieldReads) {
+    assert.doesNotMatch(query, /\bboundary\b(?!_source|_version)/i)
+  }
+  assert.match(workspace, /no promete análisis poligonal/i)
+  assert.match(workspace, /evita controles hidráulicos personalizados/i)
+  assert.match(municipalDetail, /sin convertir mapeos en impacto hidráulico/i)
 })

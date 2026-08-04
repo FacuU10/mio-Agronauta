@@ -45,6 +45,8 @@ test('operator must verify before submitting one sanitized same-origin hydrology
   await page.getByRole('button', { name: 'Iniciar ingesta' }).click()
 
   await expect(page.getByRole('status')).toHaveText('Ingesta parcial')
+  await expect(page.getByRole('region', { name: 'Diagnósticos de ingesta' })).toContainText('degraded')
+  await expect(page.getByRole('region', { name: 'Diagnósticos de ingesta' })).toContainText('partial')
   await expect(page.getByText('PNA').first()).toBeVisible()
   await expect(page.getByText('SMN').first()).toBeVisible()
   await expect(page.locator('body')).not.toContainText('private diagnostic')

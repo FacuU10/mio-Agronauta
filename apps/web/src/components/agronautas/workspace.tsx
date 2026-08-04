@@ -8,7 +8,7 @@ import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
 import { ProductShell } from '@/components/shell/product-shell'
-import { FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard } from '@/components/visibility/primitives'
+import { EvidenceStateBadge, FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard } from '@/components/visibility/primitives'
 import { FutureCapabilities } from '@/components/visibility/future-capabilities'
 import { ChatEvidencePanel } from '@/components/visibility/chat-evidence'
 import type { ChatStreamState } from '@/lib/visibility/chat'
@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
+import { EVIDENCE_STATE, normalizeEvidence, type EvidenceViewModel } from '@/lib/visibility/evidence-state'
 
 const React = { createElement }
 
@@ -264,6 +265,8 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
       ) : null}
 
       <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
+
+      <AgronautasEvidenceStatePanel dashboardPayload={dashboardPayload} hydrologyDashboard={hydrologyDashboard} risk={risk} />
 
       <NextFeaturesPanel dashboardPayload={dashboardPayload} />
 
@@ -647,6 +650,31 @@ function Field({ label, name, ...props }: { label: string; name: string } & Inpu
 function parseOptional(value: FormDataEntryValue | null) {
   const parsed = String(value ?? '').trim()
   return parsed.length ? parsed : undefined
+}
+
+function AgronautasEvidenceStatePanel({ dashboardPayload, hydrologyDashboard, risk }: { dashboardPayload?: DashboardSnapshot; hydrologyDashboard?: HydrologyDashboard; risk?: RiskCurrent }) {
+  const weather = dashboardPayload?.provenance.find((item) => item.signalType === 'weather')
+  const missingSignal = dashboardPayload?.signals.find((item) => item.status === 'missing')
+  const forecast = hydrologyDashboard?.forecasts[0]
+  const items: Array<{ label: string; evidence: EvidenceViewModel }> = [
+    { label: 'Risk snapshot', evidence: normalizeEvidence({ state: EVIDENCE_STATE.OBSERVED, source: 'Agronautas risk snapshot', observedAt: risk?.snapshot.computedAt }) },
+    { label: 'INA forecast', evidence: normalizeEvidence({ source: forecast?.source, observedAt: forecast?.observedAt, forecast: true }) },
+    { label: 'Latest-good cache', evidence: normalizeEvidence({ state: EVIDENCE_STATE.CACHED, source: weather?.provider, lastSuccessfulObservedAt: weather?.lastSuccessfulObservedAt }) },
+    { label: 'Risk freshness', evidence: normalizeEvidence({ state: risk?.status === 'stale' ? EVIDENCE_STATE.STALE : EVIDENCE_STATE.DEGRADED, source: 'Agronautas risk snapshot', lastSuccessfulObservedAt: risk?.snapshot.computedAt }) },
+    { label: 'Dashboard availability', evidence: normalizeEvidence({ state: dashboardPayload?.freshness === 'degraded' ? EVIDENCE_STATE.DEGRADED : EVIDENCE_STATE.MISSING, detail: dashboardPayload?.presentation.staleFlags.join(', ') }) },
+    { label: 'Provider mode', evidence: normalizeEvidence({ source: weather?.provider, observedAt: weather?.observedAt, mode: weather?.providerMode === 'mock' ? 'mock' : weather?.providerMode === 'seam' ? 'seam' : 'unavailable' }) },
+    { label: 'Satellite signal', evidence: normalizeEvidence({ state: missingSignal ? EVIDENCE_STATE.MISSING : EVIDENCE_STATE.OBSERVED, source: 'satellite-vegetation', observedAt: missingSignal ? undefined : dashboardPayload?.generatedAt, detail: missingSignal?.degradationReasons.join(', ') }) },
+  ]
+
+  return (
+    <section className="rounded-2xl border border-[var(--border)] bg-white p-5" aria-label="Estados de evidencia Agronautas">
+      <h2 className="text-xl font-semibold">Estados de evidencia</h2>
+      <p className="mt-2 text-sm text-[var(--muted-foreground)]">Cada estado conserva la diferencia entre dato observado, pronóstico, cacheado y seam sin afirmar una adquisición nueva.</p>
+      <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+        {items.map((item) => <li key={item.label} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] p-3"><span className="text-sm font-medium">{item.label}</span><EvidenceStateBadge state={item.evidence.state} /></li>)}
+      </ul>
+    </section>
+  )
 }
 
 function cropLabel(crop: string) {

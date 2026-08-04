@@ -5,7 +5,8 @@ import { useMutation, useQueries } from '@tanstack/react-query'
 import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, FieldOverview, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
 import { ProductShell } from '@/components/shell/product-shell'
-import { EvidenceDrawer, FreshnessBanner, MapFrame, MetricCard, ReportAction, SourceCard, StatusBadge, Timeline, VisibilityState } from '@/components/visibility/primitives'
+import { EvidenceDrawer, EvidenceStateBadge, FreshnessBanner, MapFrame, MetricCard, ReportAction, SourceCard, StatusBadge, Timeline, VisibilityState } from '@/components/visibility/primitives'
+import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -69,6 +70,7 @@ export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
 
         <FreshnessBanner state={props.dashboard.freshness} lastSuccessfulAt={props.dashboard.lastDataFetchedAt} />
         {props.dashboard.presentation.staleFlags.length ? <VisibilityState state="degraded" title="Fuentes degradadas o vencidas" description={`El dashboard conserva el estado disponible y marca: ${props.dashboard.presentation.staleFlags.join(', ')}.`} /> : null}
+        <FieldEvidenceStatePanel {...props} />
 
         <section className="grid gap-5 lg:grid-cols-[1.1fr,0.9fr]">
           <Card>
@@ -106,6 +108,27 @@ export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
         </Card>
       </main>
     </ProductShell>
+  )
+}
+
+function FieldEvidenceStatePanel(props: AgronautasFieldDetailProps) {
+  const weather = props.weatherTimeline.items[0]
+  const missing = props.dashboard.provenance.find((item) => item.freshness === 'missing')
+  const items = [
+    { label: 'Risk snapshot', evidence: normalizeEvidence({ state: EVIDENCE_STATE.OBSERVED, source: 'Agronautas risk snapshot', observedAt: props.risk.snapshot.computedAt }) },
+    { label: 'Risk freshness', evidence: normalizeEvidence({ state: props.risk.status === 'stale' ? EVIDENCE_STATE.STALE : EVIDENCE_STATE.DEGRADED, source: 'Agronautas risk snapshot', lastSuccessfulObservedAt: props.risk.snapshot.computedAt }) },
+    { label: 'Weather provider', evidence: normalizeEvidence({ state: weather?.staleCause ? EVIDENCE_STATE.STALE : EVIDENCE_STATE.OBSERVED, source: weather?.provider, observedAt: weather?.observedAt }) },
+    { label: 'Unavailable source', evidence: normalizeEvidence({ state: EVIDENCE_STATE.MISSING, source: missing?.provider, detail: missing?.failureReason ?? 'No verified source returned.' }) },
+  ]
+
+  return (
+    <section className="rounded-2xl border border-stone-200 bg-white p-5" aria-label="Estados de evidencia del lote">
+      <h2 className="text-xl font-semibold">Estados de evidencia</h2>
+      <p className="mt-2 text-sm text-stone-600">La vista conserva los límites del contrato y distingue snapshot observado, frescura vencida y fuentes ausentes.</p>
+      <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+        {items.map((item) => <li key={item.label} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-stone-200 p-3"><span className="text-sm font-medium">{item.label}</span><EvidenceStateBadge state={item.evidence.state} /></li>)}
+      </ul>
+    </section>
   )
 }
 

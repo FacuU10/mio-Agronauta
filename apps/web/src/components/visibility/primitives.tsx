@@ -1,4 +1,5 @@
 import { createElement, type ReactNode } from 'react'
+import type { EvidenceState } from '@/lib/visibility/evidence-state'
 
 const React = { createElement }
 
@@ -22,6 +23,11 @@ const stateLabels: Record<VisibilityStateName, string> = {
 
 export function StatusBadge({ state }: { state: VisibilityStateName }) {
   return <span role="status" aria-live="polite" className="inline-flex items-center rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-stone-700">{stateLabels[state]}</span>
+}
+
+export function EvidenceStateBadge({ state, label }: { state: EvidenceState; label?: string }) {
+  const name = label ? `${label}: ${state}` : state
+  return <span aria-label={`Estado de evidencia ${name}`} className="inline-flex items-center rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 text-xs font-semibold tracking-wide text-stone-700">{name}</span>
 }
 
 export function VisibilityState({ state, title, description, retryLabel = 'Reintentar', onRetry }: { state: VisibilityStateName; title: string; description: string; retryLabel?: string; onRetry?: () => void }) {

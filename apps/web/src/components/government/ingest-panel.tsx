@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef, useState, type FormEvent } from 'react'
 import { pollStatusPath, sanitizeIngestResponse, type IngestStatus, type PollOptions, type SafeIngestView } from '@/lib/visibility/polling'
+import { EvidenceStateBadge } from '@/components/visibility/primitives'
+import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-state'
 export type { SafeIngestView } from '@/lib/visibility/polling'
 
 
@@ -203,7 +205,28 @@ function SafeResultView({ result, onRetry }: { result: SafeIngestView; onRetry: 
           ))}
         </ul>
       ) : null}
+      <IngestEvidenceStatePanel result={result} />
       {result.status === 'partial' || result.status === 'failed' || result.status === 'queued' || result.status === 'started' ? <button type="button" onClick={onRetry} className="mt-5 rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button> : null}
+    </section>
+  )
+}
+
+function IngestEvidenceStatePanel({ result }: { result: SafeIngestView }) {
+  const overallState = result.status === 'partial' || result.status === 'failed' ? EVIDENCE_STATE.DEGRADED : result.status === 'completed' ? EVIDENCE_STATE.OBSERVED : EVIDENCE_STATE.MISSING
+  const overall = normalizeEvidence({ state: overallState, source: 'Iberá-Alerta ingest', observedAt: result.results.find((item) => item.observedFrom)?.observedFrom, detail: `Ingest status: ${result.status}` })
+
+  return (
+    <section className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4" aria-label="Diagnósticos de ingesta">
+      <h3 className="font-bold text-slate-100">Estados y diagnósticos seguros</h3>
+      <p className="mt-2 text-sm text-slate-300">Resultado contractual: {result.status} · los detalles privados del proveedor permanecen ocultos.</p>
+      <ul className="mt-3 grid gap-2 text-sm">
+        <li className="flex flex-wrap items-center justify-between gap-2"><span>Estado general</span><EvidenceStateBadge state={overall.state} /></li>
+        {result.results.map((item) => {
+          const state = item.status === 'success' && item.observedFrom ? EVIDENCE_STATE.OBSERVED : item.status === 'failed' ? EVIDENCE_STATE.DEGRADED : EVIDENCE_STATE.MISSING
+          const evidence = normalizeEvidence({ state, source: item.source, observedAt: item.observedFrom, detail: item.status })
+          return <li key={`diagnostic-${item.source}`} className="flex flex-wrap items-center justify-between gap-2"><span>{item.source} · {item.status}</span><EvidenceStateBadge state={evidence.state} /></li>
+        })}
+      </ul>
     </section>
   )
 }

@@ -57,6 +57,10 @@ test('field detail renders decision evidence, timelines, honest point coverage a
   assert.ok(view.getByText(/already_in_progress/i))
   assert.ok(view.getByRole('link', { name: /Descargar reporte PDF/i }))
   assert.ok(view.getByText(/no reemplazan criterio agronómico local/i))
+  const evidenceStates = view.getByRole('region', { name: 'Estados de evidencia del lote' })
+  assert.match(evidenceStates.textContent ?? '', /observed/i)
+  assert.match(evidenceStates.textContent ?? '', /stale/i)
+  assert.match(evidenceStates.textContent ?? '', /missing/i)
 })
 
 test('field detail recompute keeps the backend state visible for both request outcomes', async () => {

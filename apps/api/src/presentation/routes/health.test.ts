@@ -205,6 +205,32 @@ test('GET /ready returns 503 when a required dependency times out', async () => 
   assert.equal(body.checkDetails?.postgres?.timedOut, true)
 })
 
+test('GET /ready stays a dependency-readiness boundary, not on-demand acquisition readiness', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => true,
+    checkRedis: async () => true,
+    getConfig: () => baseConfig,
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as {
+    ready: boolean
+    requiredChecks: { postgres: boolean; redis: boolean; worker: boolean }
+    [key: string]: unknown
+  }
+
+  assert.equal(response.status, 200)
+  assert.equal(body.ready, true)
+  assert.deepEqual(body.requiredChecks, { postgres: true, redis: true, worker: true })
+  assert.equal('requestId' in body, false)
+  assert.equal('runId' in body, false)
+  assert.equal('source' in body, false)
+  assert.equal('centroid' in body, false)
+  assert.equal('persistence' in body, false)
+})
+
 async function request(app: express.Express, path: string) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))

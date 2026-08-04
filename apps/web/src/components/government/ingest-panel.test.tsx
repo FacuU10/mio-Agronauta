@@ -110,6 +110,9 @@ test('identifies partial source outcomes without rendering upstream diagnostics'
     assert.match(view.container.textContent ?? '', /PNA.*2 registros/s)
     assert.match(view.container.textContent ?? '', /SMN.*Falló/s)
     assert.doesNotMatch(view.container.textContent ?? '', /provider secret and stack/)
+    const diagnostics = view.getByRole('region', { name: 'Diagnósticos de ingesta' })
+    assert.match(diagnostics.textContent ?? '', /degraded/i)
+    assert.match(diagnostics.textContent ?? '', /partial/i)
   } finally {
     globalThis.fetch = previousFetch
   }

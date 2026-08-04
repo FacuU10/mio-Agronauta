@@ -30,6 +30,9 @@ test('GovernmentOverview renders canonical telemetry and empty latestTelemetry s
   assert.ok(view.getByText('Cobertura smn-corrientes'))
   assert.ok(view.getByText('Vigente'))
   assert.ok(view.getByText('Sin alertas oficiales recientes'))
+  const evidenceStates = view.getByRole('region', { name: 'Estados de evidencia provincial' })
+  assert.match(evidenceStates.textContent ?? '', /observed/i)
+  assert.match(evidenceStates.textContent ?? '', /missing/i)
 })
 
 test('GovernmentOverview renders explicit fetch error state', async () => {

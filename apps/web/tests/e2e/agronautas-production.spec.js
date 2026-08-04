@@ -127,3 +127,14 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
   await expect(page.getByText('signal_ingestion_runs:weather-api:climate:run-prod-1')).toBeVisible()
   await expect(page.getByText(/recompute already_in_progress/i)).toBeVisible()
 })
+
+test('agronautas detalle de lote muestra evidencia de frescura y límites contractuales', async ({ page }) => {
+  await page.goto('/demo/fields/field-demo-1')
+
+  await expect(page.locator('header').filter({ hasText: 'Agronautas · field-demo-1' }).getByRole('heading', { name: 'Detalle del lote', exact: true })).toBeVisible()
+  await expect(page.getByText('field-demo-1', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Estados de evidencia del lote' })).toContainText('observed')
+  await expect(page.getByRole('region', { name: 'Estados de evidencia del lote' })).toContainText('stale')
+  await expect(page.getByRole('region', { name: 'Estados de evidencia del lote' })).toContainText('missing')
+  await expect(page.getByText(/no promete análisis poligonal/i)).toBeVisible()
+})

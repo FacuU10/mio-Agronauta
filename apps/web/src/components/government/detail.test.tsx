@@ -47,6 +47,11 @@ test('GovernmentDetail renders mappings, observed/forecast/missing labels and Co
   assert.ok(view.getAllByText('Pronóstico').length >= 1)
   assert.ok(view.getByText('Sin datos'))
   assert.ok(view.getByText('Días 15–30: planificación especulativa o de baja confianza.'))
+  const evidenceStates = view.getByRole('region', { name: 'Estados de evidencia municipal' })
+  assert.match(evidenceStates.textContent ?? '', /observed/i)
+  assert.match(evidenceStates.textContent ?? '', /forecast/i)
+  assert.match(evidenceStates.textContent ?? '', /degraded/i)
+  assert.match(evidenceStates.textContent ?? '', /missing/i)
 })
 
 test('GovernmentDetail preserves partial Copilot tokens, metadata and retry after stream error', async () => {

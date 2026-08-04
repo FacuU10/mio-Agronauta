@@ -6,6 +6,8 @@ import { ArrowLeft, Bot, DatabaseZap, Send, ShieldAlert } from 'lucide-react'
 import { formatOfficialTime, statusLabel } from './format'
 import { applyChatEvent, createChatStreamState, createChatViewModelFromStream, type ChatStreamState } from '@/lib/visibility/chat'
 import { parseSseText } from '@/lib/visibility/chat'
+import { EvidenceStateBadge } from '@/components/visibility/primitives'
+import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-state'
 
 
 type TelemetryCard = { source: string; stationId: string; metric: string; value: number | null; unit: string; observedAt?: string | null; lastSuccessfulObservedAt?: string | null; label: string; freshness?: 'fresh' | 'stale' | 'degraded' | 'missing'; forecastHorizonDays?: number | null }
@@ -106,6 +108,7 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
               {data && data.telemetryCards.length === 0 ? <p className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 text-stone-300">Sin telemetría oficial reciente para este municipio.</p> : null}
             </div>
           </section>
+          <MunicipalEvidenceStatePanel data={data} />
 
           <section aria-labelledby="mappings-heading" className="mt-10 rounded-[2rem] border border-white/10 bg-white/[0.07] p-5 shadow-2xl">
             <h2 id="mappings-heading" className="text-2xl font-black">Mapeos de estaciones</h2>
@@ -168,6 +171,29 @@ function CopilotPanel(props: { message: string; view: ReturnType<typeof createCh
          <input id="government-copilot-message" name="government-copilot-message" autoComplete="off" value={props.message} onChange={(event) => props.onMessageChange(event.target.value)} onInput={(event) => props.onMessageChange(event.currentTarget.value)} placeholder="Ej.: resumí el estado oficial de Ituzaingó…" className="min-w-0 flex-1 rounded-full border border-white/10 bg-white px-4 py-3 text-stone-950 placeholder:text-stone-500 focus-visible:ring-4 focus-visible:ring-teal-200" />
         <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-full bg-lime-200 px-5 py-3 font-black text-stone-950 transition-colors duration-200 hover:bg-lime-100 focus-visible:ring-4 focus-visible:ring-lime-100"><Send size={18} aria-hidden="true" /> Enviar Consulta</button>
       </form>
+    </section>
+  )
+}
+
+function MunicipalEvidenceStatePanel({ data }: { data: DashboardPayload | null }) {
+  const telemetry = data?.telemetryCards[0]
+  const forecast = data?.inaPredictions30d[0]
+  const missing = data?.telemetryCards.find((item) => item.value == null || item.freshness === 'missing')
+  const degraded = data?.provenance.find((item) => item.freshness !== 'fresh')
+  const items = [
+    { label: 'Telemetría PNA', evidence: normalizeEvidence({ state: telemetry?.forecastHorizonDays != null ? EVIDENCE_STATE.FORECAST : telemetry?.freshness === 'stale' ? EVIDENCE_STATE.STALE : telemetry?.freshness === 'degraded' ? EVIDENCE_STATE.DEGRADED : telemetry?.value != null ? EVIDENCE_STATE.OBSERVED : EVIDENCE_STATE.MISSING, source: telemetry?.source, observedAt: telemetry?.observedAt, lastSuccessfulObservedAt: telemetry?.lastSuccessfulObservedAt }) },
+    { label: 'INA', evidence: normalizeEvidence({ source: forecast?.source, observedAt: forecast?.observedAt, forecast: true }) },
+    { label: 'Missing telemetry', evidence: normalizeEvidence({ state: EVIDENCE_STATE.MISSING, source: missing?.source, detail: 'No verified telemetry returned for this metric.' }) },
+    { label: 'Source provenance', evidence: normalizeEvidence({ state: degraded ? EVIDENCE_STATE.DEGRADED : EVIDENCE_STATE.OBSERVED, source: degraded?.source ?? data?.provenance[0]?.source, lastSuccessfulObservedAt: degraded?.lastSuccessfulObservedAt ?? data?.provenance[0]?.lastSuccessfulObservedAt }) },
+  ]
+
+  return (
+    <section className="mt-10 rounded-2xl border border-white/10 bg-white/[0.07] p-5" aria-label="Estados de evidencia municipal">
+      <h2 className="text-xl font-black">Estados de evidencia municipal</h2>
+      <p className="mt-2 text-sm text-stone-300">La telemetría, INA, procedencia y ausencia de datos se muestran sin convertir mapeos en impacto hidráulico.</p>
+      <ul className="mt-4 grid gap-3 md:grid-cols-2">
+        {items.map((item) => <li key={item.label} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-stone-950/50 p-3"><span className="text-sm font-semibold">{item.label}</span><EvidenceStateBadge state={item.evidence.state} /></li>)}
+      </ul>
     </section>
   )
 }

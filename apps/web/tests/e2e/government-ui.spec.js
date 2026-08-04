@@ -72,6 +72,7 @@ test('government hierarchy navigates from province overview to locality detail',
   await expect(page.getByText('Altura del río')).toBeVisible()
   await expect(page.getByText('Último dato obtenido: 23/06/2026 13:40').first()).toBeVisible()
   await expect(page.getByRole('table', { name: /Predicción INA a 30 días/i })).toContainText('Día 30')
+  await expect(page.getByRole('region', { name: 'Estados de evidencia municipal' })).toContainText('forecast')
   await expect(page.getByRole('heading', { name: /Copilot Advisor/i })).toBeVisible()
 })
 

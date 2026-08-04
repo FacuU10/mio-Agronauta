@@ -5,8 +5,9 @@ import React, { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowUpRight, Clock3, MapPinned, ShieldCheck } from 'lucide-react'
 import { formatOfficialTime, riskLabel, statusLabel } from './format'
 import { municipalityTelemetrySummary, type OverviewTelemetry } from './overview-summary'
-import { MapFrame } from '@/components/visibility/primitives'
+import { EvidenceStateBadge, MapFrame } from '@/components/visibility/primitives'
 import { FutureCapabilities } from '@/components/visibility/future-capabilities'
+import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-state'
 
 
 type Freshness = { source: string; status?: 'success' | 'empty' | 'failed'; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
@@ -94,6 +95,7 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
               </article>
             })}
           </div>
+          <OverviewEvidenceStatePanel data={data} />
 
           <section aria-labelledby="province-alerts" className="mt-8 grid gap-4 lg:grid-cols-2">
             {(data?.provinceAlerts ?? []).map((alert) => (
@@ -167,6 +169,27 @@ function municipalitySummary(municipality: Municipality) {
   const riskLevel = height == null ? 'unknown' : municipality.evacuationHeightM != null && height >= municipality.evacuationHeightM ? 'high' : municipality.alertHeightM != null && height >= municipality.alertHeightM ? 'moderate' : 'low'
   const warning = height == null ? 'Sin datos oficiales recientes' : riskLevel === 'high' ? 'Altura sobre umbral de evacuación informado por PNA.' : riskLevel === 'moderate' ? 'Altura sobre umbral de alerta informado por PNA.' : 'Sin alerta hidrométrica oficial para este municipio.'
   return { ...summary, riskLevel, warning }
+}
+
+function OverviewEvidenceStatePanel({ data }: { data: OverviewPayload | null }) {
+  const source = data?.sourceFreshness.find((item) => item.source === 'PNA')
+  const forecast = data?.municipalities.flatMap((item) => item.latestTelemetry).find((item) => item.forecastHorizonDays != null)
+  const emptyMunicipality = data?.municipalities.find((item) => item.latestTelemetry.length === 0)
+  const items = [
+    { label: 'PNA provincial', evidence: normalizeEvidence({ state: source?.freshness === 'stale' ? EVIDENCE_STATE.STALE : source?.freshness === 'degraded' ? EVIDENCE_STATE.DEGRADED : source?.lastSuccessfulObservedAt ? EVIDENCE_STATE.OBSERVED : EVIDENCE_STATE.MISSING, source: source?.source, observedAt: source?.lastSuccessfulObservedAt }) },
+    { label: 'INA forecast', evidence: normalizeEvidence({ source: forecast?.source, observedAt: forecast?.observedAt, forecast: true }) },
+    { label: 'Municipality telemetry', evidence: normalizeEvidence({ state: emptyMunicipality ? EVIDENCE_STATE.MISSING : EVIDENCE_STATE.OBSERVED, source: emptyMunicipality ? undefined : 'municipal telemetry', observedAt: emptyMunicipality ? undefined : data?.sourceFreshness[0]?.lastSuccessfulObservedAt }) },
+  ]
+
+  return (
+    <section className="mt-8 rounded-2xl border border-white/10 bg-white/[0.08] p-5" aria-label="Estados de evidencia provincial">
+      <h2 className="text-xl font-black">Estados de evidencia provincial</h2>
+      <p className="mt-2 text-sm text-slate-300">La lista distingue datos observados, pronósticos y municipios sin evidencia reciente.</p>
+      <ul className="mt-4 grid gap-3 md:grid-cols-3">
+        {items.map((item) => <li key={item.label} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-slate-900/60 p-3"><span className="text-sm font-semibold">{item.label}</span><EvidenceStateBadge state={item.evidence.state} /></li>)}
+      </ul>
+    </section>
+  )
 }
 
 function municipalityStatus(municipality: Municipality) {

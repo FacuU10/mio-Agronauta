@@ -176,4 +176,5 @@ test('agronautas muestra snapshot stale con evidencia persistida', async ({ page
   await expect(page.getByText('Snapshot stale detectado')).toBeVisible()
   await expect(page.getByText('signal_ingestion_runs:weather-api:climate:run-e2e-1')).toBeVisible()
   await expect(page.getByText('Riesgo de anegamiento')).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Estados de evidencia Agronautas' })).toContainText('stale')
 })
