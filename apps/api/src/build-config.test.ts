@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 interface PackageJson {
+  packageManager?: string
   scripts?: Record<string, string>
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
@@ -17,34 +18,68 @@ interface TurboJson {
   tasks?: Record<string, { cache?: boolean; dependsOn?: string[]; outputs?: string[] }>
 }
 
+const API_RENDER_ENV_NAMES = [
+  'PORT',
+  'API_PORT',
+  'DATABASE_URL',
+  'REDIS_URL',
+  'TRUST_PROXY',
+  'RENDER',
+  'HYDROLOGY_INGEST_TOKEN',
+  'HYDROLOGY_SCHEDULER_ENABLED',
+  'AGRONAUTAS_SCHEDULER_ENABLED',
+  'GROQ_API_KEY',
+  'GROQ_MODEL',
+  'GROQ_TIMEOUT_MS',
+] as const
+
+const WEB_RENDER_ENV_NAMES = [
+  'PORT',
+  'AGRONAUTAS_API_INTERNAL_URL',
+  'AGRONAUTAS_BFF_BEARER_TOKEN',
+  'AGRONAUTAS_BFF_TIMEOUT_MS',
+] as const
+
 const ENV_IGNORE_PATTERNS = ['.env', '.env.*', '*.env', '*.env.*', '!*.env.example'] as const
 const IGNORED_ENV_PATHS = ['.env', '.env.production', 'service.env', 'service.env.local', 'nested/service.env.local'] as const
 const TRACKABLE_ENV_PATHS = ['.env.example', 'service.env.example', 'nested/service.env.example'] as const
 
+function repositoryRoot(): string {
+  return join(__dirname, '..', '..', '..')
+}
+
+async function readRootText(pathFromRoot: string): Promise<string> {
+  return readFile(join(repositoryRoot(), pathFromRoot), 'utf8')
+}
+
+async function readPackage(pathFromRoot: string): Promise<PackageJson> {
+  return JSON.parse(await readRootText(pathFromRoot)) as PackageJson
+}
+
 async function readPackageJson(pathFromRoot: string): Promise<PackageJson> {
-  const root = join(__dirname, '..', '..', '..')
-  return JSON.parse(await readFile(join(root, pathFromRoot), 'utf8')) as PackageJson
+  return readPackage(pathFromRoot)
 }
 
 async function readTurboJson(): Promise<TurboJson> {
-  const root = join(__dirname, '..', '..', '..')
-  return JSON.parse(await readFile(join(root, 'turbo.json'), 'utf8')) as TurboJson
+  return JSON.parse(await readRootText('turbo.json')) as TurboJson
 }
 
 async function readRootTextFile(pathFromRoot: string): Promise<string> {
-  const root = join(__dirname, '..', '..', '..')
-  return readFile(join(root, pathFromRoot), 'utf8')
+  return readRootText(pathFromRoot)
 }
 
 function isIgnoredByGit(pathFromRoot: string): boolean {
-  const root = join(__dirname, '..', '..', '..')
   const result = spawnSync('git', ['check-ignore', '--no-index', '--quiet', '--', pathFromRoot], {
-    cwd: root,
+    cwd: repositoryRoot(),
     encoding: 'utf8',
   })
 
   assert.equal(result.error, undefined, `git check-ignore failed for ${pathFromRoot}`)
   return result.status === 0
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 test('api production build keeps TypeScript declaration packages installable', async () => {
@@ -124,7 +159,7 @@ test('release provenance ignores generated cache and test-output artifacts', asy
     'apps/web/playwright-report/',
     'playwright-report/',
   ]) {
-    assert.match(gitignore, new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))
+    assert.match(gitignore, new RegExp(`^${escapeRegExp(pattern)}$`, 'm'))
   }
 })
 
@@ -134,7 +169,7 @@ test('environment policy ignores secret variants while preserving safe examples'
   for (const pattern of ENV_IGNORE_PATTERNS) {
     assert.match(
       gitignore,
-      new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      new RegExp(`^${escapeRegExp(pattern)}$`, 'm'),
       `${pattern} must be explicit in the root ignore policy`,
     )
   }
@@ -152,4 +187,68 @@ test('api environment template uses a secret-manager placeholder for ingest', as
   const envExample = await readRootTextFile('apps/api/.env.example')
 
   assert.match(envExample, /^HYDROLOGY_INGEST_TOKEN=replace-with-secret-manager-reference$/m)
+})
+
+test('Render manifest declares exactly two current Native Node services', async () => {
+  const renderYaml = await readRootText('render.yaml')
+  const serviceNames = [...renderYaml.matchAll(/^\s+name: ([a-z0-9-]+)$/gm)].map((match) => match[1])
+
+  assert.equal((renderYaml.match(/^\s+- type: web$/gm) ?? []).length, 2)
+  assert.equal((renderYaml.match(/^\s+runtime: node$/gm) ?? []).length, 2)
+  assert.deepEqual(serviceNames, ['agronautas-api', 'agronautas-web'])
+  assert.doesNotMatch(renderYaml, /docker|python|type:\s*worker|worker:/i)
+  assert.doesNotMatch(renderYaml, /\$\{|\{\{|\}\}|<%/)
+})
+
+test('Render commands match current workspace scripts and preserve separate routes', async () => {
+  const [renderYaml, rootPackage, apiPackage, webPackage, hydrologyPackage, server] = await Promise.all([
+    readRootText('render.yaml'),
+    readPackage('package.json'),
+    readPackage('apps/api/package.json'),
+    readPackage('apps/web/package.json'),
+    readPackage('packages/hydrology-engine/package.json'),
+    readRootText('apps/api/src/server.ts'),
+  ])
+
+  assert.equal(rootPackage.packageManager, 'pnpm@9.0.0')
+  assert.equal(apiPackage.scripts?.['build'], 'tsc')
+  assert.equal(apiPackage.scripts?.['start'], 'node dist/index.js')
+  assert.equal(webPackage.scripts?.['build'], 'pnpm --dir ../../packages/zod-schemas build:ensure && next build')
+  assert.equal(webPackage.scripts?.['start'], 'next start .')
+  assert.equal(hydrologyPackage.scripts?.['build'], 'tsc')
+
+  assert.match(renderYaml, /buildCommand: pnpm install --frozen-lockfile && pnpm --dir packages\/zod-schemas build && pnpm --dir packages\/hydrology-engine build && pnpm --dir apps\/api build/)
+  assert.match(renderYaml, /startCommand: pnpm --dir apps\/api start/)
+  assert.match(renderYaml, /buildCommand: pnpm install --frozen-lockfile && pnpm --dir apps\/web build/)
+  assert.match(renderYaml, /startCommand: pnpm --dir apps\/web start/)
+  assert.match(server, /app\.use\('\/api\/hydrology'/)
+  assert.match(server, /app\.use\(runtimeConfig\.routePrefix, createAgronautasRouter\(\)\)/)
+  assert.match(server, /app\.use\(`\$\{runtimeConfig\.routePrefix\}\/v1`/)
+})
+
+test('Render manifest declares current environment names and disables both schedulers', async () => {
+  const renderYaml = await readRootText('render.yaml')
+
+  for (const envName of [...API_RENDER_ENV_NAMES, ...WEB_RENDER_ENV_NAMES]) {
+    assert.match(renderYaml, new RegExp(`^\\s+- key: ${envName}$`, 'm'), `${envName} must be declared by name`)
+  }
+
+  for (const schedulerName of ['HYDROLOGY_SCHEDULER_ENABLED', 'AGRONAUTAS_SCHEDULER_ENABLED']) {
+    assert.match(renderYaml, new RegExp(`- key: ${schedulerName}\\r?\\n\\s+value: false`))
+  }
+
+  for (const secretName of ['DATABASE_URL', 'REDIS_URL', 'HYDROLOGY_INGEST_TOKEN', 'GROQ_API_KEY', 'AGRONAUTAS_BFF_BEARER_TOKEN']) {
+    assert.match(renderYaml, new RegExp(`- key: ${secretName}\\r?\\n\\s+sync: false`))
+  }
+})
+
+test('canonical package and lock state remains Next.js 15.5.19', async () => {
+  const [webPackage, lockfile] = await Promise.all([
+    readPackage('apps/web/package.json'),
+    readRootText('pnpm-lock.yaml'),
+  ])
+
+  assert.equal(webPackage.dependencies?.['next'], '^15.0.0')
+  assert.match(lockfile, /^\s+next@15\.5\.19:/m)
+  assert.doesNotMatch(lockfile, /next@15\.5\.20/)
 })

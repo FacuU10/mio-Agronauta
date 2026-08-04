@@ -1,0 +1,46 @@
+services:
+  - type: web
+    runtime: node
+    name: agronautas-api
+    buildCommand: pnpm install --frozen-lockfile && pnpm --dir packages/zod-schemas build && pnpm --dir packages/hydrology-engine build && pnpm --dir apps/api build
+    startCommand: pnpm --dir apps/api start
+    envVars:
+      - key: PORT
+        sync: false
+      - key: API_PORT
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: TRUST_PROXY
+        sync: false
+      - key: RENDER
+        sync: false
+      - key: HYDROLOGY_INGEST_TOKEN
+        sync: false
+      - key: HYDROLOGY_SCHEDULER_ENABLED
+        value: false
+      - key: AGRONAUTAS_SCHEDULER_ENABLED
+        value: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false
+      - key: GROQ_TIMEOUT_MS
+        sync: false
+
+  - type: web
+    runtime: node
+    name: agronautas-web
+    buildCommand: pnpm install --frozen-lockfile && pnpm --dir apps/web build
+    startCommand: pnpm --dir apps/web start
+    envVars:
+      - key: PORT
+        sync: false
+      - key: AGRONAUTAS_API_INTERNAL_URL
+        sync: false
+      - key: AGRONAUTAS_BFF_BEARER_TOKEN
+        sync: false
+      - key: AGRONAUTAS_BFF_TIMEOUT_MS
+        sync: false

@@ -21,7 +21,25 @@ import { ProductionEnvValidatorPort } from './infrastructure/config/validator'
 
 dotenv.config()
 
-const PORT = process.env['API_PORT'] || 3001
+function parseApiPort(name: 'PORT' | 'API_PORT', value: string | undefined): number | undefined {
+  const normalized = value?.trim()
+  if (!normalized) return undefined
+
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`Invalid API port configured by ${name}: ${JSON.stringify(value)}`)
+  }
+
+  const port = Number(normalized)
+  if (!Number.isSafeInteger(port) || port <= 0) {
+    throw new Error(`Invalid API port configured by ${name}: ${JSON.stringify(value)}`)
+  }
+
+  return port
+}
+
+export function resolveApiPort(env: NodeJS.ProcessEnv = process.env): number {
+  return parseApiPort('PORT', env['PORT']) ?? parseApiPort('API_PORT', env['API_PORT']) ?? 3001
+}
 
 interface HydrologySchedulerStartupDeps {
   ingestionRunner?: (input: HydrologyIngestionInput) => Promise<GovernmentIngestionResponse>
@@ -62,12 +80,13 @@ export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyInges
 
 export function startServer(): void {
   ProductionEnvValidatorPort.validate()
+  const port = resolveApiPort()
 
   const hydrologyIngestionCoordinator = createHydrologyIngestionCoordinator()
   const app = createApp({ hydrologyIngestionCoordinator })
 
-  app.listen(PORT, () => {
-    logger.info({ port: PORT }, 'API server listening')
+  app.listen(port, () => {
+    logger.info({ port }, 'API server listening')
   })
 
   startAgronautasSchedulerFromEnv()
