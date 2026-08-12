@@ -1,5 +1,6 @@
 import type { Pool } from 'pg'
 import type { AgronautasSignalType, SignalIngestionRepository, SignalIngestionRunRecord } from '../../../domain/repositories/agronautas'
+import type { DegradationReason } from '../../../domain/entities/agronautas'
 import { getPostgresPool } from './pool'
 
 export class PostgresSignalIngestionRepository implements SignalIngestionRepository {
@@ -28,7 +29,13 @@ export class PostgresSignalIngestionRepository implements SignalIngestionReposit
         record.startedAt,
         record.finishedAt ?? null,
         record.observedAt ?? null,
-        JSON.stringify(record.evidencePayload),
+        JSON.stringify({
+          ...record.evidencePayload,
+          ...(record.sourceRunId ? { sourceRunId: record.sourceRunId } : {}),
+          ...(record.acquiredAt ? { acquiredAt: record.acquiredAt.toISOString() } : {}),
+          ...(record.freshness ? { freshness: record.freshness } : {}),
+          ...(record.degradationReasons ? { degradationReasons: record.degradationReasons } : {}),
+        }),
         record.degradationReason ?? null,
       ],
     )
@@ -48,6 +55,7 @@ export class PostgresSignalIngestionRepository implements SignalIngestionReposit
     const row = result.rows[0]
     if (!row) return null
 
+    const evidencePayload = (row.evidence_payload as Record<string, unknown>) ?? {}
     return {
       fieldId: row.field_id,
       provider: row.provider,
@@ -58,7 +66,11 @@ export class PostgresSignalIngestionRepository implements SignalIngestionReposit
       startedAt: new Date(row.started_at),
       finishedAt: row.finished_at ? new Date(row.finished_at) : undefined,
       observedAt: row.observed_at ? new Date(row.observed_at) : undefined,
-      evidencePayload: (row.evidence_payload as Record<string, unknown>) ?? {},
+      sourceRunId: typeof evidencePayload['sourceRunId'] === 'string' ? evidencePayload['sourceRunId'] : row.run_id,
+      acquiredAt: parseDate(evidencePayload['acquiredAt']),
+      freshness: normalizeFreshness(evidencePayload['freshness'], row.status, row.stale_cause, row.degradation_reason),
+      degradationReasons: normalizeDegradationReasons(evidencePayload['degradationReasons'], row.degradation_reason),
+      evidencePayload,
       degradationReason: row.degradation_reason ?? undefined,
     }
   }
@@ -77,4 +89,24 @@ export class PostgresSignalIngestionRepository implements SignalIngestionReposit
         .map((row) => [`${row.provider}:${row.signal_type}`, new Date(row.last_success_at)]),
     )
   }
+}
+
+function parseDate(value: unknown): Date | undefined {
+  if (typeof value !== 'string') return undefined
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+function normalizeFreshness(value: unknown, status: string, staleCause: unknown, degradationReason: unknown): SignalIngestionRunRecord['freshness'] {
+  if (value === 'fresh' || value === 'degraded' || value === 'stale' || value === 'missing') return value
+  if (status !== 'succeeded') return 'missing'
+  return staleCause || degradationReason ? 'degraded' : 'fresh'
+}
+
+function normalizeDegradationReasons(value: unknown, degradationReason: unknown): DegradationReason[] {
+  const reasons = Array.isArray(value) ? value.filter((item): item is DegradationReason => typeof item === 'string') : []
+  if (degradationReason && typeof degradationReason === 'string' && !reasons.includes(degradationReason as DegradationReason)) {
+    reasons.push(degradationReason as DegradationReason)
+  }
+  return reasons
 }

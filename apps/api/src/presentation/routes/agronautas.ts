@@ -39,12 +39,14 @@ import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronaut
 import { createGroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import { RedisAgronautasRuntimeDispatcher } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
 import { createDemoAlerts, createDemoCopilotContext, createDemoDashboardSnapshot, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
-import { getAgronautasAuthConfig, requireAgronautasScope } from '../middleware/agronautas-auth'
+import { requireAgronautasScope } from '../middleware/agronautas-auth'
 import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import type { Field } from '../../domain/entities/agronautas'
 import { ProviderEvidencePort, RealProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
+import { UpdateFieldGeometryUseCase } from '../../application/usecases/update-field-geometry-usecase'
+import type { FieldGeometryRepository } from '../../domain/repositories/agronautas'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -63,11 +65,13 @@ interface AgronautasRouterDeps {
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
   isVersionedNamespace: boolean
   providerEvidencePort: ProviderEvidencePort
+  geometryRepository: FieldGeometryRepository
 }
 
 export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {}): Router {
+  const fieldRepository = deps.fieldRepository ?? new PostgresFieldRepository()
   const resolved: AgronautasRouterDeps = {
-    fieldRepository: deps.fieldRepository ?? new PostgresFieldRepository(),
+    fieldRepository,
     fieldContextRepository: deps.fieldContextRepository ?? new PostgresFieldContextRepository(),
     riskSnapshotRepository: deps.riskSnapshotRepository ?? new PostgresRiskSnapshotRepository(),
     signalSummaryRepository: deps.signalSummaryRepository ?? new PostgresSignalSummaryRepository(),
@@ -80,10 +84,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     hydrologyCopilotService: deps.hydrologyCopilotService ?? new HydrologyCopilotService(),
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
     providerEvidencePort: deps.providerEvidencePort ?? new RealProviderEvidencePort(),
+    geometryRepository: deps.geometryRepository ?? (fieldRepository as unknown as FieldGeometryRepository),
   }
 
   const router = Router()
   const createFieldIntake = new CreateFieldIntakeUseCase(resolved.fieldRepository, resolved.fieldContextRepository)
+  const updateFieldGeometry = new UpdateFieldGeometryUseCase(resolved.fieldRepository, resolved.geometryRepository)
   const generateAlerts = new GenerateAlertsUseCase(resolved.riskSnapshotRepository, resolved.alertSnapshotRepository)
   const requestRecompute = new RequestRiskRecomputeUseCase(resolved.recomputeLockRepository, resolved.runtimeDispatcher, resolved.jobRunRepository)
   const groundedChat = new GroundedChatUseCase({
@@ -93,11 +99,10 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     groqProvider: createGroqChatProvider(),
   })
   const runtimeConfig = getAgronautasRuntimeConfig()
-  const authConfig = getAgronautasAuthConfig()
   const chatRateLimitMiddleware = createChatRateLimitMiddleware()
-  const requireRead = requireAgronautasScope('read', authConfig)
-  const requireWrite = requireAgronautasScope('write', authConfig)
-  const requireRecompute = requireAgronautasScope('recompute', authConfig)
+  const requireRead = requireAgronautasScope('read')
+  const requireWrite = requireAgronautasScope('write')
+  const requireRecompute = requireAgronautasScope('recompute')
 
   router.use((req, res, next) => {
     res.setHeader('X-Agronautas-Mode', runtimeConfig.mode)
@@ -156,7 +161,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       return res.status(201).json(result)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown_error'
-      if (message.includes('outside') || message.includes('coverage')) {
+      if (message.includes('outside') || message.includes('coverage') || message.includes('locality')) {
         return respondContractError(res, 422, 'OUT_OF_SUPPORTED_AREA', 'El lote queda fuera del alcance Corrientes arroz', { reason: message })
       }
 
@@ -183,7 +188,33 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       locality: field.props.localityName,
       provinceCode: field.props.provinceCode,
       centroid: field.props.centroid,
+      polygonWkt: field.props.polygonWkt,
     })
+  })
+
+  router.get('/fields/:fieldId/geometry', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    const field = await resolved.fieldRepository.findById(fieldId)
+    if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+    const geometry = await updateFieldGeometry.get(fieldId)
+    if (!geometry) return res.status(404).json({ fieldId, status: 'point_only', source: field.props.geometrySource ?? 'fallback' })
+    return res.json({ fieldId, ...geometry, updatedAt: geometry.updatedAt?.toISOString() ?? null })
+  })
+
+  router.patch('/fields/:fieldId/geometry', requireWrite, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    try {
+      const geometry = await updateFieldGeometry.execute(fieldId, req.body)
+      return res.json({ fieldId, ...geometry, updatedAt: geometry.updatedAt?.toISOString() ?? null })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'geometry_update_failed'
+      if (message === 'FIELD_NOT_FOUND') return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+      if (message === 'STALE_GEOMETRY_VERSION') return respondContractError(res, 409, 'INVALID_CONTRACT', 'Geometry changed; reload before saving', { reason: message })
+      if (message.includes('outside') || message.includes('coverage') || message.includes('locality')) return respondContractError(res, 422, 'OUT_OF_SUPPORTED_AREA', 'The polygon is outside supported coverage', { reason: message })
+      return respondContractError(res, 422, 'INVALID_CONTRACT', 'Invalid field geometry', { reason: message })
+    }
   })
 
   router.get('/fields/:fieldId/risk/current', requireRead, async (req, res) => {
@@ -339,10 +370,15 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       fieldId,
       items: timeline.map((item) => ({
         provider: item.provider,
+        runId: item.runId,
+        sourceRunId: item.sourceRunId,
         observedAt: item.observedAt.toISOString(),
+        acquiredAt: (item.acquiredAt ?? item.observedAt).toISOString(),
         freshnessHours: item.freshnessHours,
+        freshness: item.freshness,
         confidence: item.confidence,
         staleCause: item.staleCause,
+        degradationReasons: item.degradationReasons ?? [],
         temperatureC: item.temperatureC,
         rainfallMm7d: item.rainfallMm7d,
         humidityPct: item.humidityPct,
@@ -366,15 +402,16 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const result = await generateAlerts.execute({ fieldId, triggeredBy: 'api' })
     if (result.status === 'missing-snapshot') return res.status(404).json({ error: 'Risk snapshot not found' })
 
-    if (result.status === 'stale-snapshot') {
+    if (result.status === 'stale-snapshot' || result.status === 'degraded-snapshot') {
       const recompute = await safeRequestRecompute(fieldId, 'alert-refresh', req, res)
       if (!recompute) return
       const latestAlerts = await resolved.alertSnapshotRepository.getLatestForField(fieldId)
       return res.status(202).json({
-        status: 'stale',
+        status: result.status === 'degraded-snapshot' ? 'degraded' : 'stale',
         snapshot: result.snapshot ? riskSnapshotSchema.parse(result.snapshot.toContract()) : null,
         alerts: toStaleAlertContracts(latestAlerts),
         recompute,
+        lineage: result.lineage,
       })
     }
 
@@ -382,6 +419,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       status: result.snapshot?.freshness ?? 'fresh',
       snapshot: result.snapshot ? riskSnapshotSchema.parse(result.snapshot.toContract()) : null,
       alerts: toAlertContracts(result.alerts),
+      lineage: result.lineage,
     })
   })
 
@@ -554,14 +592,16 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
         signalType: 'weather' as const,
         observedAt: item.observedAt.toISOString(),
         ingestedAt: snapshotContract.computedAt,
-        sourceUrl: item.provenance[0]?.startsWith('http') ? item.provenance[0] : 'https://api.open-meteo.com/',
-        rawHash: createHash('sha256').update(JSON.stringify(item)).digest('hex'),
-        confidence: item.confidence,
-        freshness: item.staleCause ? 'degraded' as const : 'fresh' as const,
+         sourceUrl: item.provenance[0]?.startsWith('http') ? item.provenance[0] : 'https://api.open-meteo.com/',
+         rawHash: createHash('sha256').update(JSON.stringify(item)).digest('hex'),
+         confidence: item.confidence,
+         sourceRunId: item.sourceRunId,
+         acquiredAt: (item.acquiredAt ?? item.observedAt).toISOString(),
+         freshness: item.freshness ?? (item.staleCause ? 'degraded' as const : 'fresh' as const),
         providerMode: evidence.mode,
         lastSuccessfulObservedAt: evidence.observedAt.toISOString(),
         nextDueAt: snapshotContract.validUntil,
-        degradationReasons: item.staleCause ? ['weather_data_stale' as const] : []
+         degradationReasons: item.degradationReasons ?? (item.staleCause ? ['weather_data_stale' as const] : [])
       }
     }))
 
@@ -569,11 +609,19 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       contractVersion: '1.0.0',
       snapshotId: snapshotContract.snapshotId,
       field: { fieldId: field.props.id, cropCategory: field.props.cropCategory ?? 'other', crop: field.props.crop, locality: field.props.localityName, provinceCode: field.props.provinceCode },
-      status: degraded ? 'degraded' : snapshot.freshness,
-      freshness: degraded ? 'degraded' : snapshot.freshness,
-      signals: climate.map((item) => ({ signalType: 'weather' as const, status: item.staleCause ? 'degraded' : 'fresh', evidenceRefs: item.provenance, confidence: item.confidence, degradationReasons: item.staleCause ? ['weather_data_stale'] : [] })),
+       status: degraded ? 'degraded' : snapshot.freshness,
+       freshness: degraded ? 'degraded' : snapshot.freshness,
+       signals: climate.map((item) => ({ signalType: 'weather' as const, status: item.freshness ?? (item.staleCause ? 'degraded' : 'fresh'), evidenceRefs: item.provenance, sourceRunId: item.sourceRunId, acquisitionTimes: item.acquiredAt ? [item.acquiredAt.toISOString()] : [], confidence: item.confidence, degradationReasons: item.degradationReasons ?? (item.staleCause ? ['weather_data_stale'] : []) })),
       risk: { score: snapshotContract.score, level: snapshotContract.level, confidence: snapshotContract.confidence, drivers: snapshotContract.drivers },
-      alerts: toStoredAlertContracts(alerts),
+       alerts: toStoredAlertContracts(alerts),
+       lineage: {
+         riskSnapshotId: snapshotContract.snapshotId,
+         sourceRunIds: snapshotContract.sourceRunIds ?? [snapshot.props.runId],
+         acquisitionTimes: snapshotContract.acquisitionTimes ?? [],
+         engineId: snapshotContract.engineId ?? snapshotContract.ruleVersion,
+         engineVersion: snapshotContract.engineVersion ?? snapshotContract.ruleVersion,
+         alertSnapshotIds: alerts.map((alert) => alert.alertId),
+       },
       provenance,
       scheduler: { lastRunAt: snapshotContract.computedAt, nextRunAt: snapshotContract.validUntil, lockStatus: 'unknown' as const, failures: degraded ? [{ provider: 'agronautas', signalType: 'weather' as const, reason: snapshotContract.degradationReasons.join(',') || 'degraded_evidence' }] : [], nextDueBySource: [] },
       generatedAt: new Date().toISOString(),

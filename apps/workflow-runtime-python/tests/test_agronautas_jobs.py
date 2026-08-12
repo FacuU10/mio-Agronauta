@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ os.environ.setdefault(
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from worker.runtime.agronautas_jobs import compute_risk_snapshot, handle_agronautas_job
+from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job
 
 
 class FakeRedis:
@@ -30,6 +31,131 @@ class FakeLogger:
 
     def info(self, message: str, *, extra: dict) -> None:
         self.entries.append((message, extra))
+
+
+class CapturingCursor:
+    def __init__(self, queries: list[str]) -> None:
+        self.queries = queries
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def execute(self, sql, _params):
+        self.queries.append(sql)
+
+    async def fetchone(self):
+        return ("job-1",)
+
+
+class CapturingConnection:
+    def __init__(self, queries: list[str]) -> None:
+        self.queries = queries
+
+    def cursor(self):
+        return CapturingCursor(self.queries)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def commit(self):
+        return None
+
+
+def _parse_test_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+@pytest.mark.asyncio
+async def test_durable_job_store_uses_prisma_managed_legacy_identifier_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fake_connect(_dsn: str):
+        return CapturingConnection(queries)
+
+    monkeypatch.setattr(
+        "worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect",
+        fake_connect,
+    )
+    store = PostgresAgronautasJobStore("postgres://test", "worker-1")
+
+    assert await store.claim("job-1", _parse_test_timestamp("2026-08-04T00:00:00Z")) is True
+    await store.heartbeat("job-1", "run-1", _parse_test_timestamp("2026-08-04T00:01:00Z"))
+
+    assert '"jobId"' in queries[0]
+    assert '"runId"' in queries[1]
+    assert "job_id" not in queries[0]
+    assert "run_id" not in queries[1]
+
+
+@pytest.mark.asyncio
+async def test_durable_job_store_keeps_run_identity_for_terminal_transitions(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[str] = []
+
+    async def fake_connect(_dsn: str):
+        return CapturingConnection(queries)
+
+    monkeypatch.setattr(
+        "worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect",
+        fake_connect,
+    )
+    store = PostgresAgronautasJobStore("postgres://test", "worker-1")
+    timestamp = _parse_test_timestamp("2026-08-04T00:00:00Z")
+
+    await store.complete("job-1", "run-1", timestamp, {"status": "succeeded"})
+    await store.schedule_retry("job-1", "run-1", timestamp, "provider_retryable", "temporary")
+    await store.dead_letter("job-1", "run-1", timestamp, "provider_exhausted", "unavailable")
+
+    assert all('"jobId"' in query and '"runId"' in query for query in queries)
+    assert all("job_id" not in query and "run_id" not in query for query in queries)
+
+
+@pytest.mark.asyncio
+async def test_fetch_field_coordinates_uses_prisma_field_identifier_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[str] = []
+
+    class CoordinateCursor:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def execute(self, sql, _params):
+            queries.append(sql)
+
+        async def fetchone(self):
+            return ("field-1", -29.18, -58.08)
+
+    class CoordinateConnection:
+        def cursor(self):
+            return CoordinateCursor()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    async def fake_connect(_dsn: str):
+        return CoordinateConnection()
+
+    monkeypatch.setattr("worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect", fake_connect)
+
+    assert await fetch_field_coordinates("postgres://test", "field-1") == {
+        "field_id": "field-1",
+        "lat": -29.18,
+        "lng": -58.08,
+    }
+    assert '"centroidLat"' in queries[0]
+    assert '"centroidLng"' in queries[0]
+    assert "centroid_lat" not in queries[0]
+    assert "centroid_lng" not in queries[0]
 
 
 @pytest.mark.asyncio
@@ -54,6 +180,8 @@ async def test_handle_agronautas_job_persists_success_without_mock_snapshot(monk
     def fake_fetch_weather(latitude: float, longitude: float):
         return {
             "observed_at": "2026-06-05T00:00:00Z",
+            "acquired_at": "2026-06-05T00:01:00Z",
+            "source_run_id": "open-meteo-provider-run-1",
             "rainfall_mm_7d": 64.0,
             "temperature_max_c": 35.0,
             "temperature_min_c": 22.0,
@@ -74,7 +202,20 @@ async def test_handle_agronautas_job_persists_success_without_mock_snapshot(monk
     assert result["status"] == "succeeded"
     assert result["fieldId"] == "field-1"
     assert result["snapshot"]["ruleVersion"] == "open-meteo-basic-v1"
+    assert result["snapshot"]["engineId"] == "open-meteo-basic-v1"
+    assert result["snapshot"]["engineVersion"] == "open-meteo-basic-v1"
     assert result["snapshot"]["evidenceRefs"] == ["signal_ingestion_runs:open-meteo:climate:run-1"]
+    assert result["lineage"] == {
+        "sourceRunIds": ["run-1"],
+        "providerRunIds": ["open-meteo-provider-run-1"],
+        "acquisitionTimes": ["2026-06-05T00:01:00Z"],
+        "freshness": "fresh",
+        "degradationReasons": [],
+        "engineId": "open-meteo-basic-v1",
+        "engineVersion": "open-meteo-basic-v1",
+        "riskSnapshotId": "field-1:run-1:risk",
+        "alertSnapshotIds": [],
+    }
     assert any(key == "agronautas:job-runs:result" for key, _, _ in redis.calls)
 
 
@@ -256,3 +397,76 @@ async def test_persist_successful_snapshot_writes_contractual_succeeded_status(m
 
     assert captured[0][3] == "run-1"
     assert captured[0][4] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_persist_successful_snapshot_dual_writes_prisma_and_legacy_lineage_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeCursor:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def execute(self, sql, params):
+            queries.append((sql, tuple(params)))
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def commit(self):
+            return None
+
+    async def fake_connect(_dsn: str):
+        return FakeConnection()
+
+    monkeypatch.setattr("worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect", fake_connect)
+    from worker.runtime.agronautas_jobs import persist_successful_snapshot
+
+    snapshot = compute_risk_snapshot(
+        field_id="field-1",
+        run_id="run-1",
+        observed_at="2026-06-05T00:00:00Z",
+        rainfall_mm_7d=1,
+        temperature_max_c=28,
+        temperature_min_c=18,
+        source_run_id="provider-run-1",
+        acquired_at="2026-06-05T00:01:00Z",
+    )
+    await persist_successful_snapshot(
+        postgres_dsn="postgres://test",
+        field_id="field-1",
+        run_id="run-1",
+        requested_at="2026-06-05T00:00:00Z",
+        weather={
+            "observed_at": "2026-06-05T00:00:00Z",
+            "acquired_at": "2026-06-05T00:01:00Z",
+            "source_run_id": "provider-run-1",
+            "source_url": "https://api.open-meteo.com/test",
+            "raw": {},
+        },
+        snapshot=snapshot,
+    )
+
+    assert len(queries) == 2
+    source_sql, risk_sql = queries[0][0], queries[1][0]
+    for column in ('"fieldId"', 'field_id', '"runId"', 'run_id', '"evidencePayload"', 'evidence_payload'):
+        assert column in source_sql
+    for column in ('"fieldId"', 'field_id', '"runId"', 'run_id', '"computedAt"', 'computed_at', '"summaryPayload"', 'summary_payload'):
+        assert column in risk_sql
+    source_params = json.dumps(queries[0][1], default=str)
+    risk_params = queries[1][1]
+    assert "sourceRunId" in source_params
+    assert "provider-run-1" in source_params
+    assert risk_params[0] == snapshot["snapshotId"]
+    assert risk_params[1] == "field-1"
+    assert risk_params[2] == "run-1"

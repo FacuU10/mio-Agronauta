@@ -9,11 +9,13 @@ behavior.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
-from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from worker.contracts import build_contract_validator, load_contract_schema as read_contract_schema
+from worker.core.config import get_settings
+from worker.core.platform import run_worker
+from worker.queue.consumer import WorkflowQueueConsumer
 
 try:
     from langgraph.graph import END, StateGraph
@@ -22,18 +24,19 @@ except Exception:  # pragma: no cover - graceful scaffold fallback
     StateGraph = None
 
 
-ROOT_DIR = Path(__file__).resolve().parents[4]
-SCHEMAS_DIR = ROOT_DIR / "packages" / "contracts" / "schemas"
+SCHEMAS_DIR = get_settings().resolved_contracts_root
 
 
 def load_contract_schema(schema_name: str) -> dict[str, Any]:
-    schema_path = SCHEMAS_DIR / schema_name
-    return json.loads(schema_path.read_text(encoding="utf-8"))
+    return read_contract_schema(schema_name, SCHEMAS_DIR)
 
 
 WORKFLOW_JOB_SCHEMA = load_contract_schema("workflow-job.schema.json")
 WORKFLOW_STATE_SCHEMA = load_contract_schema("workflow-state.schema.json")
 ASSET_METADATA_SCHEMA = load_contract_schema("asset-metadata.schema.json")
+WORKFLOW_JOB_VALIDATOR = build_contract_validator("workflow-job.schema.json", SCHEMAS_DIR)
+WORKFLOW_STATE_VALIDATOR = build_contract_validator("workflow-state.schema.json", SCHEMAS_DIR)
+ASSET_METADATA_VALIDATOR = build_contract_validator("asset-metadata.schema.json", SCHEMAS_DIR)
 
 
 @dataclass(slots=True)
@@ -50,13 +53,13 @@ CONTRACTS = ContractBundle(
 )
 
 
-def validate_payload(payload: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
-    Draft202012Validator(schema).validate(payload)
+def validate_payload(payload: dict[str, Any], schema: dict[str, Any], validator: Draft202012Validator | None = None) -> dict[str, Any]:
+    (validator or Draft202012Validator(schema)).validate(payload)
     return payload
 
 
 def build_initial_state(job: dict[str, Any]) -> dict[str, Any]:
-    validate_payload(job, CONTRACTS.workflow_job)
+    validate_payload(job, CONTRACTS.workflow_job, WORKFLOW_JOB_VALIDATOR)
     return {
         "contractVersion": "1.0.0",
         "workflowId": job["workflowId"],
@@ -81,7 +84,7 @@ def build_initial_state(job: dict[str, Any]) -> dict[str, Any]:
 def validate_input_node(state: dict[str, Any]) -> dict[str, Any]:
     payload = state.get("input", {})
     if isinstance(payload, dict) and "assetMetadata" in payload:
-        validate_payload(payload["assetMetadata"], CONTRACTS.asset_metadata)
+        validate_payload(payload["assetMetadata"], CONTRACTS.asset_metadata, ASSET_METADATA_VALIDATOR)
 
     state["steps"][0]["status"] = "succeeded"
     state["steps"][0]["updatedAt"] = state["updatedAt"]
@@ -95,7 +98,7 @@ def validate_input_node(state: dict[str, Any]) -> dict[str, Any]:
             CONTRACTS.asset_metadata["$id"],
         ],
     }
-    validate_payload(state, CONTRACTS.workflow_state)
+    validate_payload(state, CONTRACTS.workflow_state, WORKFLOW_STATE_VALIDATOR)
     return state
 
 
@@ -120,6 +123,7 @@ def example_job_payload() -> dict[str, Any]:
         "status": "pending",
         "priority": 50,
         "createdAt": "2026-01-01T00:00:00Z",
+        "lease": {"attempt": 1, "maxAttempts": 3},
         "trace": {
             "traceId": "0123456789abcdef0123456789abcdef",
             "correlationId": "corr-001"
@@ -156,8 +160,7 @@ def run_once(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
-    result = run_once(example_job_payload())
-    print(json.dumps(result, indent=2))
+    run_worker(WorkflowQueueConsumer().consume_forever())
 
 
 if __name__ == "__main__":

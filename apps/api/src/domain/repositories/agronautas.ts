@@ -6,7 +6,10 @@ import type {
   GeoPoint,
   RiskSnapshotFoundation,
   SatelliteSummary,
+  SignalFreshness,
+  DegradationReason,
 } from '../entities/agronautas'
+import type { FieldGeometry, FieldGeometryInput } from '../geometry/field-geometry'
 
 export interface SupportedCoverageResult {
   insideSupportedArea: boolean
@@ -54,6 +57,10 @@ export interface SignalIngestionRunRecord {
   startedAt: Date
   finishedAt?: Date
   observedAt?: Date
+  sourceRunId?: string
+  acquiredAt?: Date
+  freshness?: SignalFreshness
+  degradationReasons?: DegradationReason[]
   staleCause?: string
   degradationReason?: string
   evidencePayload: Record<string, unknown>
@@ -100,6 +107,15 @@ export interface AlertSnapshotRecord {
   freshness: 'fresh' | 'stale' | 'degraded'
   degradationReasons: string[]
   staleCause?: string
+  sourceRunIds?: string[]
+  acquisitionTimes?: Date[]
+  engineId?: string
+  engineVersion?: string
+}
+
+export interface FieldGeometryRepository {
+  getGeometry(fieldId: string): Promise<FieldGeometry | null>
+  updateGeometry(fieldId: string, geometry: FieldGeometryInput & { source: 'operator' | 'google' | 'fallback'; expectedUpdatedAt?: string }): Promise<FieldGeometry>
 }
 
 export interface AlertSnapshotRepository {
@@ -137,6 +153,7 @@ export interface AgronautasRuntimeDispatchCommand {
   correlationId: string
   requestedAt: Date
   runtimeMode: 'real' | 'demo'
+  lease?: AgronautasJobLease
 }
 
 export interface AgronautasRuntimeDispatcher {
@@ -153,6 +170,7 @@ export interface AgronautasJobRunRecord {
   requestId: string
   correlationId: string
   runtimeMode: 'real' | 'demo'
+  lease?: AgronautasJobLease
   queuedAt: Date
   startedAt?: Date
   heartbeatAt?: Date
@@ -162,10 +180,26 @@ export interface AgronautasJobRunRecord {
   resultPayload?: Record<string, unknown>
 }
 
+export interface AgronautasJobLease {
+  attempt: number
+  maxAttempts: number
+  leasedAt?: Date
+  leaseExpiresAt?: Date
+}
+
+export interface AgronautasJobClaim {
+  claimed: boolean
+  leaseExpiresAt: Date | null
+}
+
 export interface AgronautasJobRunRepository {
   saveQueuedRun(record: AgronautasJobRunRecord): Promise<void>
   markRunning(jobId: string, startedAt: Date): Promise<void>
   markHeartbeat(jobId: string, heartbeatAt: Date): Promise<void>
   markCompleted(jobId: string, completedAt: Date, resultPayload: Record<string, unknown>): Promise<void>
   markFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void>
+  claim?(jobId: string, workerId: string, now: Date, leaseSeconds: number): Promise<AgronautasJobClaim>
+  heartbeat?(jobId: string, runId: string, workerId: string, heartbeatAt: Date, leaseSeconds?: number): Promise<void>
+  scheduleRetry?(jobId: string, runId: string, nextRetryAt: Date, errorCode: string, errorMessage?: string): Promise<void>
+  deadLetter?(jobId: string, runId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void>
 }

@@ -1,5 +1,5 @@
 import Groq from 'groq-sdk'
-import { hydrologyDenseContextV1Schema, type HydrologyDenseContextV1 } from '@repo/zod-schemas'
+import { hydrologyDenseContextV1Schema, hydrologyIberaCitationSchema, hydrologyIberaCopilotMetadataSchema, type HydrologyDenseContextV1 } from '@repo/zod-schemas'
 
 export interface HydrologyCopilotChatInput {
   message: string
@@ -31,6 +31,8 @@ export class GroqTimeoutError extends Error {
     this.name = 'GroqTimeoutError'
   }
 }
+
+const CITATION_UNAVAILABLE_MESSAGE = 'No hay una referencia oficial verificable para esta respuesta.'
 
 export class GroqUnavailableError extends Error {
   readonly code = 'GROQ_UNAVAILABLE'
@@ -130,6 +132,24 @@ export class HydrologyCopilotService {
 }
 
 function buildMetadata(context: HydrologyDenseContextV1, model: string) {
+  const citations = context.telemetry.flatMap((telemetry) => {
+    const citation = hydrologyIberaCitationSchema.safeParse({
+      id: `${telemetry.source}:${telemetry.stationId}:${telemetry.metric}:${telemetry.observedAt}`,
+      source: telemetry.source,
+      stationId: telemetry.stationId,
+      observedAt: telemetry.observedAt,
+      ...(telemetry.sourceUrl ? { sourceUrl: telemetry.sourceUrl } : {}),
+      kind: telemetry.forecastHorizonDays != null ? 'forecast' : telemetry.metric === 'storm_alert' ? 'alert' : 'observed',
+      freshness: telemetry.freshness,
+    })
+    return citation.success ? [citation.data] : []
+  })
+  const citationMetadata = hydrologyIberaCopilotMetadataSchema.parse({
+    citationMode: citations.length > 0 ? 'validated-context' : 'none',
+    citations,
+    unverifiedClaims: citations.length === 0,
+  })
+
   return {
     contractVersion: context.contractVersion,
     model,
@@ -138,6 +158,9 @@ function buildMetadata(context: HydrologyDenseContextV1, model: string) {
     sources: context.sources,
     lastSuccessfulObservedAt: context.snapshot.lastSuccessfulObservedAt,
     telemetryCount: context.telemetry.length,
+    ...citationMetadata,
+    citationUnavailable: citations.length === 0,
+    ...(citations.length === 0 ? { unavailableReason: CITATION_UNAVAILABLE_MESSAGE } : {}),
   }
 }
 

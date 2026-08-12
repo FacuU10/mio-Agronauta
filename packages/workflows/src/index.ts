@@ -1,9 +1,30 @@
-export const WORKFLOW_CONTRACT_VERSION = "1.0.0" as const;
-export const AGRONAUTAS_RUNTIME_WORKFLOW_ID = 'agronautas-risk-recompute' as const;
-export const AGRONAUTAS_RUNTIME_KIND = 'agronautas-risk-recompute' as const;
+export const WORKFLOW_CONTRACT_VERSION = '1.0.0' as const
+export const AGRONAUTAS_RUNTIME_WORKFLOW_ID = 'agronautas-risk-recompute' as const
+export const AGRONAUTAS_RUNTIME_KIND = 'agronautas-risk-recompute' as const
+export const AGRONAUTAS_RUNTIME_QUEUE_NAME = 'agronautas-runtime' as const
+export const AGRONAUTAS_RUNTIME_QUEUE_KEY = `bull:${AGRONAUTAS_RUNTIME_QUEUE_NAME}:wait` as const
+export const AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS = 3 as const
 
-export type WorkflowRuntime = "python-langgraph";
-export type WorkflowStatus = "queued" | "running" | "completed" | "failed";
+export const JOB_STATUS = {
+  PENDING: 'pending',
+  LEASED: 'leased',
+  RUNNING: 'running',
+  WAITING: 'waiting',
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  DLQ: 'dlq',
+} as const
+
+export type JobStatus = (typeof JOB_STATUS)[keyof typeof JOB_STATUS]
+export type WorkflowRuntime = 'python-langgraph'
+export type WorkflowStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export interface JobLease {
+  attempt: number
+  maxAttempts: number
+  leasedAt?: string
+  leaseExpiresAt?: string
+}
 
 export interface WorkflowDispatch {
   workflowId: string;
@@ -22,6 +43,7 @@ export interface AgronautasRiskRecomputeJob {
   status: 'pending';
   priority: 50;
   createdAt: string;
+  lease: JobLease;
   trace: {
     traceId: string;
     correlationId: string;
@@ -59,7 +81,7 @@ export function createWorkflowDispatch(input: Omit<WorkflowDispatch, "contractVe
 }
 
 export function createAgronautasRiskRecomputeJob(input: {
-  contractVersion?: typeof WORKFLOW_CONTRACT_VERSION;
+  contractVersion?: string;
   jobId: string;
   runId: string;
   fieldId: string;
@@ -68,7 +90,17 @@ export function createAgronautasRiskRecomputeJob(input: {
   correlationId: string;
   requestedAt: Date;
   runtimeMode: 'real' | 'demo';
+  lease?: Pick<JobLease, 'attempt' | 'maxAttempts'>;
 }): AgronautasRiskRecomputeJob {
+  if (input.contractVersion !== undefined && input.contractVersion !== WORKFLOW_CONTRACT_VERSION) {
+    throw new Error(`Unsupported workflow contract version: ${input.contractVersion}`)
+  }
+
+  const lease = input.lease ?? {
+    attempt: 1,
+    maxAttempts: AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS,
+  }
+
   return {
     contractVersion: input.contractVersion ?? WORKFLOW_CONTRACT_VERSION,
     jobId: input.jobId,
@@ -78,6 +110,7 @@ export function createAgronautasRiskRecomputeJob(input: {
     status: 'pending',
     priority: 50,
     createdAt: input.requestedAt.toISOString(),
+    lease,
     trace: {
       traceId: input.requestId,
       correlationId: input.correlationId,

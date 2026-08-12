@@ -77,7 +77,9 @@
         "evidenceId": { "type": "string", "minLength": 1, "maxLength": 120 },
         "provider": { "type": "string", "minLength": 1, "maxLength": 80 },
         "signalType": { "$ref": "#/$defs/SignalType" },
+        "sourceRunId": { "type": "string", "minLength": 1, "maxLength": 120 },
         "observedAt": { "type": "string", "format": "date-time" },
+        "acquiredAt": { "type": "string", "format": "date-time" },
         "ingestedAt": { "type": "string", "format": "date-time" },
         "sourceUrl": { "type": "string", "format": "uri" },
         "rawHash": { "type": "string", "minLength": 1, "maxLength": 160 },
@@ -137,6 +139,11 @@
         "computedAt": { "type": "string", "format": "date-time" },
         "validUntil": { "type": "string", "format": "date-time" },
         "ruleVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "engineId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "engineVersion": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "sourceRunIds": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "acquisitionTimes": { "type": "array", "items": { "type": "string", "format": "date-time" } },
+        "alertSnapshotIds": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
         "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } },
         "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
         "drivers": { "type": "array", "items": { "$ref": "#/$defs/RiskDriver" }, "minItems": 1 }
@@ -151,6 +158,11 @@
         "alertId": { "type": "string", "minLength": 1, "maxLength": 80 },
         "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 },
         "basedOnSnapshotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "sourceRunIds": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "acquisitionTimes": { "type": "array", "items": { "type": "string", "format": "date-time" } },
+        "engineId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "engineVersion": { "type": "string", "minLength": 1, "maxLength": 80 },
         "type": { "enum": ["flood", "water_stress", "thermal_stress"] },
         "priority": { "type": "integer", "enum": [1, 2, 3] },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -225,14 +237,14 @@
         "field": { "type": "object", "required": ["fieldId", "cropCategory", "crop", "provinceCode", "locality"], "properties": { "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 }, "cropCategory": { "enum": ["cereal", "oilseed", "horticulture", "forage", "fruit", "other"] }, "crop": { "enum": ["rice", "maize", "soybean", "wheat", "sunflower", "pasture", "citrus", "other"] }, "provinceCode": { "const": "AR-W" }, "locality": { "type": "string", "minLength": 1, "maxLength": 120 } }, "additionalProperties": false },
         "status": { "$ref": "#/$defs/SignalStatus" },
         "freshness": { "$ref": "#/$defs/SignalStatus" },
-        "signals": { "type": "array", "items": { "type": "object", "required": ["signalType", "status", "evidenceRefs", "confidence", "degradationReasons"], "properties": { "signalType": { "$ref": "#/$defs/SignalType" }, "status": { "$ref": "#/$defs/SignalStatus" }, "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } } }, "additionalProperties": false } },
+         "signals": { "type": "array", "items": { "type": "object", "required": ["signalType", "status", "evidenceRefs", "confidence", "degradationReasons"], "properties": { "signalType": { "$ref": "#/$defs/SignalType" }, "status": { "$ref": "#/$defs/SignalStatus" }, "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "sourceRunId": { "type": "string", "minLength": 1, "maxLength": 120 }, "acquisitionTimes": { "type": "array", "items": { "type": "string", "format": "date-time" } }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "degradationReasons": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } } }, "additionalProperties": false } },
         "risk": { "type": "object", "required": ["score", "level", "confidence", "drivers"], "properties": { "score": { "type": "number", "minimum": 0, "maximum": 100 }, "level": { "enum": ["low", "medium", "high"] }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "drivers": { "type": "array", "items": { "$ref": "#/$defs/RiskDriver" } } }, "additionalProperties": false },
         "alerts": { "type": "array" },
         "provenance": { "type": "array", "items": { "$ref": "#/$defs/SignalEvidence" } },
         "scheduler": { "$ref": "#/$defs/SchedulerStatus" },
         "generatedAt": { "type": "string", "format": "date-time" },
         "lastDataFetchedAt": { "type": "string", "format": "date-time" },
-        "presentation": {
+         "presentation": {
           "type": "object",
           "required": ["disclaimer", "confidenceLabel", "sourcesUnavailable", "staleFlags"],
           "properties": {
@@ -242,7 +254,8 @@
             "staleFlags": { "type": "array", "items": { "$ref": "#/$defs/DegradationReason" } }
           },
           "additionalProperties": false
-        }
+         },
+         "lineage": { "type": "object", "required": ["riskSnapshotId", "sourceRunIds", "acquisitionTimes", "engineId", "engineVersion", "alertSnapshotIds"], "properties": { "riskSnapshotId": { "type": "string", "minLength": 1 }, "sourceRunIds": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "acquisitionTimes": { "type": "array", "items": { "type": "string", "format": "date-time" } }, "engineId": { "type": "string", "minLength": 1 }, "engineVersion": { "type": "string", "minLength": 1 }, "alertSnapshotIds": { "type": "array", "items": { "type": "string", "minLength": 1 } } }, "additionalProperties": false }
       },
       "additionalProperties": false
     },

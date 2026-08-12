@@ -11,6 +11,12 @@ export interface IngestionJobResult<TSummary> {
   summary: TSummary
   degradationReason?: string
   staleCause?: string
+  lineage: {
+    sourceRunIds: string[]
+    acquisitionTimes: string[]
+    freshness: 'fresh' | 'degraded' | 'stale'
+    degradationReasons: string[]
+  }
 }
 
 interface IngestionJobOptions {
@@ -40,16 +46,32 @@ export class ClimateIngestionJob {
         startedAt,
         finishedAt: this.now(),
         observedAt: summary.observedAt,
+        sourceRunId: summary.sourceRunId,
+        acquiredAt: summary.acquiredAt ?? startedAt,
+        freshness: 'fresh',
+        degradationReasons: [],
         evidencePayload: {
           temperatureC: summary.temperatureC,
           rainfallMm7d: summary.rainfallMm7d,
           humidityPct: summary.humidityPct,
           confidence: summary.confidence,
           provenance: summary.provenance,
+          ...(summary.sourceRunId ? { sourceRunId: summary.sourceRunId } : {}),
+          acquiredAt: (summary.acquiredAt ?? startedAt).toISOString(),
         },
       })
 
-      return { runId, status: 'succeeded', summary }
+      return {
+        runId,
+        status: 'succeeded',
+        summary,
+        lineage: {
+          sourceRunIds: [summary.sourceRunId ?? runId],
+          acquisitionTimes: [(summary.acquiredAt ?? startedAt).toISOString()],
+          freshness: 'fresh',
+          degradationReasons: [],
+        },
+      }
     } catch (error) {
       const fallback = await this.summaryRepository.getLatestClimateSummary(fieldId)
       if (!fallback) throw error
@@ -64,6 +86,10 @@ export class ClimateIngestionJob {
         startedAt,
         finishedAt: this.now(),
         observedAt: fallback.observedAt,
+        sourceRunId: fallback.sourceRunId,
+        acquiredAt: fallback.acquiredAt ?? fallback.observedAt,
+        freshness: 'degraded',
+        degradationReasons: ['weather_data_stale'],
         staleCause,
         degradationReason: 'weather_data_stale',
         evidencePayload: {
@@ -72,6 +98,8 @@ export class ClimateIngestionJob {
           humidityPct: fallback.humidityPct,
           confidence: Math.max(0, Number((fallback.confidence * 0.75).toFixed(3))),
           provenance: [...fallback.provenance, `fallback:${runId}`],
+          ...(fallback.sourceRunId ? { sourceRunId: fallback.sourceRunId } : {}),
+          acquiredAt: (fallback.acquiredAt ?? fallback.observedAt).toISOString(),
         },
       })
 
@@ -81,6 +109,12 @@ export class ClimateIngestionJob {
         summary: { ...fallback, confidence: Math.max(0, Number((fallback.confidence * 0.75).toFixed(3))), staleCause },
         degradationReason: 'weather_data_stale',
         staleCause,
+        lineage: {
+          sourceRunIds: [fallback.sourceRunId ?? runId],
+          acquisitionTimes: [(fallback.acquiredAt ?? fallback.observedAt).toISOString()],
+          freshness: 'degraded',
+          degradationReasons: ['weather_data_stale'],
+        },
       }
     }
   }
@@ -113,16 +147,32 @@ export class SatelliteIngestionJob {
         startedAt,
         finishedAt: this.now(),
         observedAt: summary.observedAt,
+        sourceRunId: summary.sourceRunId,
+        acquiredAt: summary.acquiredAt ?? startedAt,
+        freshness: 'fresh',
+        degradationReasons: [],
         evidencePayload: {
           ndvi: summary.ndvi,
           evi: summary.evi,
           waterStressIndex: summary.waterStressIndex,
           confidence: summary.confidence,
           provenance: summary.provenance,
+          ...(summary.sourceRunId ? { sourceRunId: summary.sourceRunId } : {}),
+          acquiredAt: (summary.acquiredAt ?? startedAt).toISOString(),
         },
       })
 
-      return { runId, status: 'succeeded', summary }
+      return {
+        runId,
+        status: 'succeeded',
+        summary,
+        lineage: {
+          sourceRunIds: [summary.sourceRunId ?? runId],
+          acquisitionTimes: [(summary.acquiredAt ?? startedAt).toISOString()],
+          freshness: 'fresh',
+          degradationReasons: [],
+        },
+      }
     } catch (error) {
       const fallback = await this.summaryRepository.getLatestSatelliteSummary(fieldId)
       if (!fallback) throw error
@@ -137,6 +187,10 @@ export class SatelliteIngestionJob {
         startedAt,
         finishedAt: this.now(),
         observedAt: fallback.observedAt,
+        sourceRunId: fallback.sourceRunId,
+        acquiredAt: fallback.acquiredAt ?? fallback.observedAt,
+        freshness: 'degraded',
+        degradationReasons: ['satellite_data_stale'],
         staleCause,
         degradationReason: 'satellite_data_stale',
         evidencePayload: {
@@ -145,6 +199,8 @@ export class SatelliteIngestionJob {
           waterStressIndex: fallback.waterStressIndex,
           confidence: Math.max(0, Number((fallback.confidence * 0.7).toFixed(3))),
           provenance: [...fallback.provenance, `fallback:${runId}`],
+          ...(fallback.sourceRunId ? { sourceRunId: fallback.sourceRunId } : {}),
+          acquiredAt: (fallback.acquiredAt ?? fallback.observedAt).toISOString(),
         },
       })
 
@@ -154,6 +210,12 @@ export class SatelliteIngestionJob {
         summary: { ...fallback, confidence: Math.max(0, Number((fallback.confidence * 0.7).toFixed(3))), staleCause },
         degradationReason: 'satellite_data_stale',
         staleCause,
+        lineage: {
+          sourceRunIds: [fallback.sourceRunId ?? runId],
+          acquisitionTimes: [(fallback.acquiredAt ?? fallback.observedAt).toISOString()],
+          freshness: 'degraded',
+          degradationReasons: ['satellite_data_stale'],
+        },
       }
     }
   }

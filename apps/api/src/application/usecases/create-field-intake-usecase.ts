@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { corrientesRiceZoneBoundarySource, type FieldIntake } from '@repo/zod-schemas'
 import { Field, FieldContext } from '../../domain/entities/agronautas'
 import type { FieldContextRepository, FieldRepository } from '../../domain/repositories/agronautas'
+import { normalizeFieldGeometryInput, polygonMetrics } from '../../domain/geometry/field-geometry'
 
 export interface CreateFieldIntakeResult {
   fieldId: string
+  crop: string
   coverage: {
     locality: string
     provinceCode: string
     boundaryVersion?: string
+    status: 'supported'
   }
 }
 
@@ -24,20 +27,26 @@ export class CreateFieldIntakeUseCase {
   ) {}
 
   async execute(input: FieldIntake): Promise<CreateFieldIntakeResult> {
-    const coverage = await this.fieldRepository.resolveCoverage(input.location)
+    const geometry = input.location.polygonWkt || input.location.geoJson
+      ? normalizeFieldGeometryInput({ polygonWkt: input.location.polygonWkt, geoJson: input.location.geoJson })
+      : null
+    const geometryMetrics = geometry ? polygonMetrics(geometry.coordinates) : null
+    const coverage = await this.fieldRepository.resolveCoverage(geometryMetrics?.centroid ?? input.location)
     if (!coverage.insideSupportedArea || !coverage.locality || !coverage.provinceCode) {
-      throw new Error(coverage.staleCause ?? 'outside_supported_area')
+      throw new Error(coverage.staleCause ?? (coverage.insideSupportedArea ? 'unsupported_locality' : 'outside_supported_area'))
     }
 
     const field = new Field({
       id: this.idGenerator(),
       externalFieldId: input.fieldId,
-      crop: 'rice',
-      hectares: input.hectares,
+      crop: input.crop,
+      cropCategory: input.cropCategory,
+      hectares: geometryMetrics?.hectares ?? input.hectares,
       localityName: coverage.locality,
       provinceCode: coverage.provinceCode,
-      centroid: { lat: input.location.lat, lng: input.location.lng },
-      polygonWkt: input.location.polygonWkt,
+      centroid: geometryMetrics?.centroid ?? { lat: input.location.lat, lng: input.location.lng },
+      polygonWkt: geometry?.polygonWkt,
+      geometrySource: geometry ? 'operator' : 'fallback',
       boundaryMetadata: {
         ...corrientesRiceZoneBoundarySource,
         sourceVersion: coverage.boundaryVersion ?? corrientesRiceZoneBoundarySource.sourceVersion,
@@ -60,10 +69,12 @@ export class CreateFieldIntakeUseCase {
 
     return {
       fieldId: field.props.id,
+      crop: field.props.crop,
       coverage: {
         locality: coverage.locality,
         provinceCode: coverage.provinceCode,
         boundaryVersion: coverage.boundaryVersion,
+        status: 'supported',
       },
     }
   }

@@ -4,10 +4,13 @@ import json
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = ROOT / "packages" / "contracts" / "schemas" / "agronautas-contracts.v1.schema.json"
 MATRIX_PATH = ROOT / "packages" / "contracts" / "fixtures" / "agronautas" / "validation-matrix.v1.json"
+RISK_ENGINE_SCHEMA_PATH = ROOT / "packages" / "contracts" / "schemas" / "risk-engine-contract.v1.schema.json"
+RISK_ENGINE_VECTORS_PATH = ROOT / "packages" / "contracts" / "risk-engine" / "golden-vectors.json"
 
 
 def _validate(schema: dict, payload):
@@ -84,6 +87,22 @@ class AgronautasContractTests(unittest.TestCase):
         for case in MATRIX["cases"]:
             contract_schema = {"$ref": f"#/$defs/{case['contract']}"}
             self.assertEqual(_validate(contract_schema, case["payload"]), case["valid"], case["name"])
+
+    def test_risk_engine_vectors_keep_canonical_engine_undecided_and_record_divergence(self):
+        schema = json.loads(RISK_ENGINE_SCHEMA_PATH.read_text(encoding="utf-8"))
+        vectors = json.loads(RISK_ENGINE_VECTORS_PATH.read_text(encoding="utf-8"))
+
+        Draft202012Validator(schema).validate(vectors)
+        self.assertEqual(schema["$defs"]["CanonicalEngineGate"]["properties"]["status"]["const"], "undecided")
+        self.assertIsNone(schema["$defs"]["CanonicalEngineGate"]["properties"]["engineId"]["const"])
+        self.assertEqual(vectors["canonicalEngine"], {"status": "undecided", "engineId": None})
+        self.assertGreaterEqual(len(vectors["vectors"]), 2)
+
+        for vector in vectors["vectors"]:
+            self.assertEqual(set(vector["expectedByEngine"]), {"risk-v0", "open-meteo-basic-v1"})
+            self.assertEqual(vector["comparison"]["status"], "divergent")
+            self.assertFalse(vector["comparison"]["parityClaim"])
+            self.assertTrue(vector["comparison"]["differences"], vector["id"])
 
 
 if __name__ == "__main__":

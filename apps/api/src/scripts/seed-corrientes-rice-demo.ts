@@ -98,8 +98,8 @@ export async function runSeed(options: SeedOptions): Promise<SeedResultRow[]> {
         sourceName: 'Corrientes demo locality seed',
         sourceUrl: climate.sourceUrl,
         sourceVersion: 'corrientes-demo-v1',
-        normalizationStatus: 'verified-demo-centroid',
-        notes: locality.coordinateSource,
+        normalizationStatus: 'demo-only',
+        notes: `DEMO ONLY; does not establish real parcel coverage. ${locality.coordinateSource}`,
       },
     })
 
@@ -155,7 +155,7 @@ export function buildSignalRun(locality: CorrientesDemoLocality, climate: Climat
     startedAt: new Date(climate.fetchedAt),
     finishedAt: new Date(climate.fetchedAt),
     observedAt: new Date(climate.observedAt),
-    staleCause: climate.staleCause,
+    staleCause: climate.source === 'offline-fixture' ? 'demo_only_fixture' : climate.staleCause,
     degradationReason: climate.source === 'offline-fixture' ? 'weather_data_unavailable' : undefined,
     evidencePayload: {
       temperatureC: climate.current.temperatureC,
@@ -207,11 +207,12 @@ export function buildRiskSnapshot(locality: CorrientesDemoLocality, climate: Cli
       `field_contexts:${locality.fieldId}`,
     ],
     degradationReasons,
-    staleCause: climate.staleCause,
+    staleCause: climate.source === 'offline-fixture' ? 'demo_only_fixture' : climate.staleCause,
   })
 }
 
 export function buildAlerts(locality: CorrientesDemoLocality, snapshot: RiskSnapshotFoundation): AlertSnapshotRecord[] {
+  if (snapshot.freshness !== 'fresh') return []
   const alerts: AlertSnapshotRecord[] = []
 
   if (snapshot.props.score >= 55) {
@@ -387,6 +388,12 @@ export async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_version text')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary geometry(MultiPolygon,4326)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS centroid geometry(Point,4326)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_area_m2 numeric(18,3)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_perimeter_m numeric(18,3)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS geometry_source text')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS geometry_updated_at timestamptz')
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS fields_external_field_id_idx ON fields (external_field_id)')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "externalFieldId" text')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS "localityName" text')

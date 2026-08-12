@@ -255,7 +255,7 @@ test('chat degradado expone motivo honesto', async () => {
 
   await waitFor(() => {
     assert.ok(view.getByText(/Groq no está configurado/i))
-    assert.ok(view.getByText('Degradado'))
+    assert.ok(view.getAllByText('Degradado').length >= 1)
   })
 })
 

@@ -12,6 +12,17 @@ This keeps runtime responsibilities explicit:
 - `apps/api` (TS/JS): API edge + CQRS command/query orchestration.
 - `apps/workflow-runtime-python` (Python): workflow execution worker.
 
+## Hosting boundary prerequisite
+
+The Python worker requires **separate hosting** from the Native Node services in
+`render.yaml`. Render currently deploys only `agronautas-api` and
+`agronautas-web`; this is not a Render Python worker deployment and must not be
+interpreted as Python worker availability.
+Before enabling production recompute, an approved worker host must provide the
+Python process, PostgreSQL, Redis, provider configuration, and the additive
+Agronautas runtime migration. This documentation is a prerequisite, not live
+deployment evidence.
+
 ## JSON Schema bridge (cross-runtime contract)
 
 The TS/JS API and Python worker communicate through shared JSON Schema contracts in `packages/contracts/schemas`.
@@ -27,6 +38,13 @@ This provides:
 - language-neutral interoperability (TS/JS ↔ Python),
 - consistent versioned contracts across services,
 - safe runtime evolution without coupling business workflow logic to one language stack.
+
+When the worker is installed as a wheel, the runtime schemas required for the
+worker envelope are bundled under `worker/schema` and used automatically when
+the monorepo `packages/contracts/schemas` directory is not available. Set
+`WORKER_CONTRACTS_ROOT` only when an explicitly managed schema directory should
+override that packaged fallback; relative `$ref` targets are registered before
+payload validation.
 
 ## Why Python is the standard
 
@@ -50,3 +68,11 @@ Or via npm scripts:
 pnpm run worker:install
 pnpm run worker:run
 ```
+
+### Windows psycopg event-loop boundary
+
+On Windows with Python 3.12, `worker.main` explicitly selects
+`WindowsSelectorEventLoopPolicy` and an explicit selector `asyncio.Runner` before
+starting either worker entrypoint. This is required for psycopg's async
+PostgreSQL connections; connection errors remain surfaced to the durable
+retry/DLQ path rather than being suppressed.

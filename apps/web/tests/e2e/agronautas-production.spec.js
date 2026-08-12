@@ -138,3 +138,11 @@ test('agronautas detalle de lote muestra evidencia de frescura y límites contra
   await expect(page.getByRole('region', { name: 'Estados de evidencia del lote' })).toContainText('missing')
   await expect(page.getByText(/no promete análisis poligonal/i)).toBeVisible()
 })
+
+test('agronautas no convierte el fallback de proveedor en evidencia de producción', async ({ page }) => {
+  await page.goto('/demo')
+
+  await expect(page.getByText(/Google Maps no está disponible/i)).toBeVisible()
+  await expect(page.getByText(/sin una clave pública restringida/i)).toBeVisible()
+  await expect(page.getByTestId('agronautas-future-capabilities')).toContainText('sin vender humo')
+})

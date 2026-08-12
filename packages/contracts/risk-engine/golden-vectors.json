@@ -1,0 +1,115 @@
+{
+  "contractVersion": "risk-engine-contract.v1",
+  "canonicalEngine": {
+    "status": "undecided",
+    "engineId": null
+  },
+  "engines": [
+    {
+      "id": "risk-v0",
+      "algorithmVersion": "risk-v0",
+      "envelopeVersion": "1.0.0",
+      "canonicalEligible": false
+    },
+    {
+      "id": "open-meteo-basic-v1",
+      "algorithmVersion": "open-meteo-basic-v1",
+      "envelopeVersion": "1.0.0",
+      "canonicalEligible": false
+    }
+  ],
+  "vectors": [
+    {
+      "id": "corrientes-hot-wet-001",
+      "inputsByEngine": {
+        "risk-v0": {
+          "climate": {
+            "temperatureC": 36,
+            "rainfallMm7d": 70,
+            "confidence": 0.8
+          },
+          "satellite": {
+            "waterStressIndex": 0.8,
+            "confidence": 0.7
+          },
+          "fieldContext": {
+            "growthStage": "flowering",
+            "localityConfidence": 0.9
+          }
+        },
+        "open-meteo-basic-v1": {
+          "weather": {
+            "rainfallMm7d": 70,
+            "temperatureMaxC": 36,
+            "temperatureMinC": 22
+          }
+        }
+      },
+      "expectedByEngine": {
+        "risk-v0": {
+          "score": 79.5,
+          "confidence": 0.8,
+          "validityHours": 6,
+          "freshness": "fresh"
+        },
+        "open-meteo-basic-v1": {
+          "score": 80,
+          "confidence": 0.74,
+          "validityHours": 24,
+          "freshness": "fresh"
+        }
+      },
+      "comparison": {
+        "status": "divergent",
+        "differences": ["inputs", "score", "confidence", "validityHours"],
+        "parityClaim": false
+      }
+    },
+    {
+      "id": "corrientes-cool-dry-001",
+      "inputsByEngine": {
+        "risk-v0": {
+          "climate": {
+            "temperatureC": 22,
+            "rainfallMm7d": 0,
+            "confidence": 0.8
+          },
+          "satellite": {
+            "waterStressIndex": 0.1,
+            "confidence": 0.7
+          },
+          "fieldContext": {
+            "growthStage": "maturity",
+            "localityConfidence": 0.9
+          }
+        },
+        "open-meteo-basic-v1": {
+          "weather": {
+            "rainfallMm7d": 0,
+            "temperatureMaxC": 22,
+            "temperatureMinC": 18
+          }
+        }
+      },
+      "expectedByEngine": {
+        "risk-v0": {
+          "score": 6.5,
+          "confidence": 0.8,
+          "validityHours": 6,
+          "freshness": "fresh"
+        },
+        "open-meteo-basic-v1": {
+          "score": 0,
+          "confidence": 0.74,
+          "validityHours": 24,
+          "freshness": "fresh"
+        }
+      },
+      "comparison": {
+        "status": "divergent",
+        "differences": ["inputs", "score", "confidence", "validityHours"],
+        "parityClaim": false
+      }
+    }
+  ]
+}

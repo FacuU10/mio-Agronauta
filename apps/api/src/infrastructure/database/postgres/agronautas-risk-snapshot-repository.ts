@@ -49,7 +49,7 @@ export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
   async getLatest(fieldId: string): Promise<RiskSnapshotFoundation | null> {
     const result = await this.pool.query(
       `SELECT id, field_id, run_id, score, confidence, computed_at, valid_until, rule_version,
-              stale_cause, degradation_reasons, drivers, evidence_refs
+              stale_cause, degradation_reasons, drivers, evidence_refs, summary_payload
        FROM risk_snapshots WHERE field_id = $1 ORDER BY computed_at DESC LIMIT 1`,
       [fieldId],
     )
@@ -70,13 +70,14 @@ export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
       degradationReasons: (row.degradation_reasons as RiskSnapshotFoundation['props']['degradationReasons']) ?? [],
       drivers: (row.drivers as RiskSnapshotFoundation['props']['drivers']) ?? [],
       evidenceRefs: (row.evidence_refs as string[]) ?? [],
+      ...readLineage(row.summary_payload),
     })
   }
 
   async listTimeline(fieldId: string, limit: number): Promise<RiskSnapshotFoundation[]> {
     const result = await this.pool.query(
       `SELECT id, field_id, run_id, score, confidence, computed_at, valid_until, rule_version,
-              stale_cause, degradation_reasons, drivers, evidence_refs
+              stale_cause, degradation_reasons, drivers, evidence_refs, summary_payload
        FROM risk_snapshots WHERE field_id = $1 ORDER BY computed_at DESC LIMIT $2`,
       [fieldId, limit],
     )
@@ -96,7 +97,26 @@ export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
           degradationReasons: (row.degradation_reasons as RiskSnapshotFoundation['props']['degradationReasons']) ?? [],
           drivers: (row.drivers as RiskSnapshotFoundation['props']['drivers']) ?? [],
           evidenceRefs: (row.evidence_refs as string[]) ?? [],
+          ...readLineage(row.summary_payload),
         }),
     )
+  }
+}
+
+function readLineage(value: unknown): Pick<RiskSnapshotFoundation['props'], 'engineId' | 'engineVersion' | 'sourceRunIds' | 'acquisitionTimes' | 'alertSnapshotIds'> {
+  if (!value || typeof value !== 'object') return {}
+  const payload = value as Record<string, unknown>
+  const acquisitionTimes = Array.isArray(payload['acquisitionTimes'])
+    ? payload['acquisitionTimes']
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => new Date(item))
+        .filter((item) => !Number.isNaN(item.getTime()))
+    : undefined
+  return {
+    engineId: typeof payload['engineId'] === 'string' ? payload['engineId'] : undefined,
+    engineVersion: typeof payload['engineVersion'] === 'string' ? payload['engineVersion'] : undefined,
+    sourceRunIds: Array.isArray(payload['sourceRunIds']) ? payload['sourceRunIds'].filter((item): item is string => typeof item === 'string') : undefined,
+    acquisitionTimes,
+    alertSnapshotIds: Array.isArray(payload['alertSnapshotIds']) ? payload['alertSnapshotIds'].filter((item): item is string => typeof item === 'string') : undefined,
   }
 }

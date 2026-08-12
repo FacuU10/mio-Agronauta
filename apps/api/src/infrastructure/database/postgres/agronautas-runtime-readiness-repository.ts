@@ -14,10 +14,12 @@ export class PostgresAgronautasRuntimeReadinessRepository {
 
   async getWorkerReadiness(maxHeartbeatAgeSeconds: number, now: Date = new Date()): Promise<AgronautasWorkerReadiness> {
     const result = await this.pool.query(
-      `SELECT job_id, run_id, heartbeat_at, lease_expires_at
+      `SELECT "jobId", "runId", "heartbeatAt", lease_expires_at
          FROM agronautas_job_runs
-        WHERE heartbeat_at IS NOT NULL
-        ORDER BY heartbeat_at DESC
+        WHERE status IN ('leased', 'running')
+          AND "heartbeatAt" IS NOT NULL
+          AND (lease_expires_at IS NULL OR lease_expires_at >= NOW())
+        ORDER BY "heartbeatAt" DESC
         LIMIT 1`,
     )
 
@@ -32,7 +34,7 @@ export class PostgresAgronautasRuntimeReadinessRepository {
       }
     }
 
-    const heartbeatAt = latest['heartbeat_at'] instanceof Date ? latest['heartbeat_at'] : new Date(String(latest['heartbeat_at']))
+    const heartbeatAt = latest['heartbeatAt'] instanceof Date ? latest['heartbeatAt'] : new Date(String(latest['heartbeatAt']))
     const leaseExpiresAt = latest['lease_expires_at'] == null
       ? null
       : latest['lease_expires_at'] instanceof Date
@@ -47,8 +49,8 @@ export class PostgresAgronautasRuntimeReadinessRepository {
       workerHealthy,
       latestHeartbeatAt: heartbeatAt.toISOString(),
       latestLeaseExpiresAt: leaseExpiresAt?.toISOString() ?? null,
-      latestJobId: latest['job_id'] == null ? null : String(latest['job_id']),
-      latestRunId: latest['run_id'] == null ? null : String(latest['run_id']),
+      latestJobId: latest['jobId'] == null ? null : String(latest['jobId']),
+      latestRunId: latest['runId'] == null ? null : String(latest['runId']),
     }
   }
 }

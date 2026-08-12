@@ -16,6 +16,7 @@ export interface MunicipalityTelemetrySummary {
   inaObservedAt: string | null
   inaSourceUrl: string | null
   lastSuccessfulObservedAt: string | null
+  coverageGaps: string[]
 }
 
 export function municipalityTelemetrySummary(telemetry: OverviewTelemetry[]): MunicipalityTelemetrySummary {
@@ -27,6 +28,7 @@ export function municipalityTelemetrySummary(telemetry: OverviewTelemetry[]): Mu
     inaObservedAt: ina?.lastSuccessfulObservedAt ?? null,
     inaSourceUrl: ina?.sourceUrl ?? null,
     lastSuccessfulObservedAt: telemetry.map((item) => item.lastSuccessfulObservedAt).filter(Boolean).sort().at(-1) ?? null,
+    coverageGaps: telemetry.length === 0 ? ['Telemetría local no disponible'] : telemetry.filter((item) => item.value == null || item.freshness === 'degraded' || item.freshness === 'stale').map((item) => `${item.source}: ${item.metric}`).slice(0, 4),
   }
 }
 

@@ -3,7 +3,7 @@
 import { createElement, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
-import type { AlertsCurrent, DashboardSnapshot, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
@@ -19,16 +19,20 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { EVIDENCE_STATE, normalizeEvidence, type EvidenceViewModel } from '@/lib/visibility/evidence-state'
+import { FieldGeometryEditor } from './field-geometry-editor'
 
 const React = { createElement }
 
 interface WorkspaceProps {
   runtimeMode: 'real' | 'demo'
+  runtimeStatus: 'loading' | 'ready' | 'error'
+  runtimeError: string | null
   selectedFieldId: string | null
   lastCreatedFieldId: string | null
   intakeError: string | null
   isSubmitting: boolean
   isDashboardLoading: boolean
+  queryErrors: string[]
   field?: FieldOverview
   risk?: RiskCurrent
   alerts?: AlertsCurrent
@@ -37,6 +41,7 @@ interface WorkspaceProps {
   weatherTimeline?: WeatherTimelineResponse
   dashboardPayload?: DashboardSnapshot
   hydrologyDashboard?: HydrologyDashboard
+  geometry?: FieldGeometryResponse
   chatResponse?: GroundedChatResponse
   hydrologyChatState: ChatStreamState
   chatError: string | null
@@ -46,11 +51,13 @@ interface WorkspaceProps {
   isRecomputePending: boolean
   onSelectField: (fieldId: string | null) => void
   onSubmitIntake: (input: FieldIntake) => Promise<unknown>
+  onSaveGeometry?: (input: { polygonWkt: string; expectedUpdatedAt?: string }) => Promise<FieldGeometryResponse>
   onRequestRecompute: () => Promise<unknown>
   onAskChat: (message: string) => Promise<unknown>
   onRetryChat: () => Promise<unknown>
   onAskHydrologyChat: (message: string) => Promise<unknown>
   onRetryHydrologyChat: () => Promise<unknown>
+  onRetrySync: () => Promise<unknown>
 }
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
@@ -73,12 +80,16 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
             <CardTitle>Estado operativo</CardTitle>
             <CardDescription className="text-white/75">Contrato {AGRONAUTAS_CONTRACT_VERSION} · React Query + Zustand</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3 text-sm">
-            <StatusRow label="Lote activo" value={props.selectedFieldId ?? 'Ninguno'} />
-            <StatusRow label="Última alta" value={props.lastCreatedFieldId ?? 'Sin actividad'} />
-            <StatusRow label="Alertas actuales" value={String(props.alerts?.alerts.length ?? 0)} />
-            <StatusRow label="Runtime backend" value={props.runtimeMode} />
-          </CardContent>
+           <CardContent className="grid gap-3 text-sm" data-testid="agronautas-capability-status">
+             <StatusRow label="Lote activo" value={props.selectedFieldId ?? 'Ninguno'} />
+             <StatusRow label="Última alta" value={props.lastCreatedFieldId ?? 'Sin actividad'} />
+             <StatusRow label="Alertas actuales" value={String(props.alerts?.alerts.length ?? 0)} />
+             <StatusRow label="Runtime backend" value={props.runtimeStatus === 'ready' ? props.runtimeMode : props.runtimeStatus} />
+             <StatusRow label="Fuentes y telemetría" value={props.dashboardPayload?.presentation.sourcesUnavailable ? 'degradado' : 'observado'} />
+             {props.runtimeError ? <p role="alert" className="rounded-xl bg-rose-950/60 px-3 py-2 text-sm text-rose-100">{props.runtimeError}</p> : null}
+             {props.queryErrors.length ? <div role="alert" className="rounded-xl bg-rose-950/60 px-3 py-2 text-sm text-rose-100"><p>Una capacidad no está disponible: {props.queryErrors[0]}</p><p className="mt-1 text-rose-200">Las demás capacidades continúan visibles con su último estado conocido.</p></div> : null}
+             <Button type="button" variant="outline" className="border-white/25 bg-white/10 text-white hover:bg-white/20" onClick={() => void props.onRetrySync()}>Reintentar sincronización</Button>
+           </CardContent>
         </Card>
       </section>
 
@@ -174,6 +185,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
               <div className="flex flex-wrap items-center gap-2"><StatusBadge state={coverage.state === 'inside' ? 'success' : coverage.state === 'outside' ? 'missing' : 'degraded'} /><span className="text-sm text-stone-700">Cobertura por punto · {coverage.locality ?? 'fuera del alcance previsualizado'}</span></div>
             </MapFrame>
             <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-3 text-xs leading-5 text-stone-600">`polygonWkt` se conserva en el contrato, pero este MVP resuelve cobertura por punto y no promete análisis poligonal.</p>
+            <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-3 text-xs leading-5 text-stone-600">Google Maps no está disponible sin una clave pública restringida; la búsqueda por localidad y coordenadas continúa operativa.</p>
           </div>
           {intakeError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{intakeError}</p> : null}
           <Button type="submit" data-testid="agronautas-submit-intake" disabled={isSubmitting}>{isSubmitting ? 'Registrando...' : 'Registrar lote'}</Button>
@@ -183,7 +195,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
+ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -211,6 +223,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
 
   return (
     <div id="agronautas-dashboard" className="grid gap-6">
+      {geometry && onSaveGeometry ? <FieldGeometryEditor fieldId={selectedFieldId} initialGeometry={geometry} onSave={async (input) => onSaveGeometry({ polygonWkt: input.polygonWkt ?? '', expectedUpdatedAt: input.expectedUpdatedAt })} /> : null}
       <section className="grid gap-5 rounded-[2rem] border border-emerald-900/20 bg-emerald-950 p-5 text-white shadow-lg md:grid-cols-[1.15fr,0.85fr] md:p-7" aria-labelledby="decision-heading">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">Resumen · {field?.externalFieldId ?? selectedFieldId}</p>
@@ -228,7 +241,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
 
       <FreshnessBanner state={risk?.status ?? dashboardPayload?.freshness ?? 'missing'} lastSuccessfulAt={dashboardPayload?.lastDataFetchedAt ?? risk?.snapshot.computedAt} />
 
-      <div className="grid gap-4 md:grid-cols-4" data-testid="agronautas-dashboard-metrics">
+       <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4" data-testid="agronautas-dashboard-metrics">
         <MetricCard label="Lote" value={field?.externalFieldId ?? selectedFieldId} detail={field?.locality ?? 'Sin localidad'} />
         <MetricCard label="Score" value={risk ? String(risk.snapshot.score) : '—'} detail={risk?.snapshot.level ?? 'Sin snapshot'} />
         <MetricCard label="Confianza" value={risk ? `${Math.round(risk.snapshot.confidence * 100)}%` : '—'} detail={risk?.status ?? 'Sin estado'} />
@@ -291,7 +304,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+       <div className="grid gap-6 lg:grid-cols-3">
         <Card data-testid="agronautas-status-card">
           <CardHeader>
             <CardTitle>Estado monitoreo</CardTitle>
@@ -382,7 +395,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         </Card>
       </div>
 
-      <Card data-testid="agronautas-chat-card">
+       <Card data-testid="agronautas-chat-card" aria-label="Chat Agronautas">
         <CardHeader>
           <CardTitle>Chat acotado con grounding backend</CardTitle>
           <CardDescription>Solo explica overview, riesgo, alertas o comparaciones aprobadas. Nunca reemplaza el dashboard.</CardDescription>

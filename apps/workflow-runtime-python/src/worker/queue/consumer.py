@@ -1,33 +1,42 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
-from jsonschema import Draft202012Validator
 from redis.asyncio import Redis
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from worker.contracts import build_contract_validator
 from worker.core.config import get_settings
+from worker.core.platform import run_worker
 from worker.core.telemetry import build_logger, traced_operation
 from worker.graph.base import build_graph
+from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, handle_agronautas_job
+
+
+class RetryableAgronautasJobError(ConnectionError):
+    """Signals that the durable retry transition completed but Redis must requeue."""
+
+    durable_transition = True
 
 
 class WorkflowQueueConsumer:
     """Redis/BullMQ-compatible worker consuming JSON-encoded workflow jobs."""
 
-    def __init__(self, queue_name: str = "workflow-jobs") -> None:
+    def __init__(self, queue_name: str = "agronautas-runtime") -> None:
         self.settings = get_settings()
         self.logger = build_logger(self.settings)
         self.redis = Redis.from_url(self.settings.redis_url, decode_responses=True)
-        schema_path = self.settings.resolved_contracts_root / "workflow-job.schema.json"
-        self.validator = Draft202012Validator(json.loads(Path(schema_path).read_text(encoding="utf-8")))
+        self.validator = build_contract_validator("workflow-job.schema.json", self.settings.resolved_contracts_root)
         self.queue_name = f"bull:{queue_name}:wait"
         self.processing_queue_name = self._processing_queue_name(queue_name)
         self.dead_letter_queue_name = self._dead_letter_queue_name(queue_name)
         self.results_key = f"bull:{queue_name}:results"
         self.max_recovery_attempts = 3
+        postgres_dsn = getattr(self.settings, "postgres_dsn", None)
+        self.job_store = PostgresAgronautasJobStore(postgres_dsn, worker_id=f"worker-{uuid4()}") if postgres_dsn else None
 
     @staticmethod
     def _processing_queue_name(queue_name: str) -> str:
@@ -81,8 +90,8 @@ class WorkflowQueueConsumer:
     async def _requeue(self, payload: str, reason: str) -> None:
         job = json.loads(payload)
         next_payload = self._with_retry_metadata(job, reason)
-        await self._ack(payload)
         await self.redis.lpush(self.queue_name, next_payload)
+        await self._ack(payload)
 
     async def _dead_letter(self, payload: str, reason: str) -> None:
         job = json.loads(payload)
@@ -90,11 +99,11 @@ class WorkflowQueueConsumer:
         envelope = {
             "job": job,
             "reason": reason,
-            "failedAt": job.get("createdAt"),
+            "failedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "attempt": attempt,
         }
-        await self._ack(payload)
         await self.redis.rpush(self.dead_letter_queue_name, json.dumps(envelope))
+        await self._ack(payload)
 
     async def _handle_failure(self, payload: str, exc: Exception) -> None:
         job = json.loads(payload)
@@ -102,9 +111,19 @@ class WorkflowQueueConsumer:
         attempt = self._current_attempt(job)
         reason = f"{type(exc).__name__}: {exc}"
         if self._is_retryable_exception(exc) and attempt < max_attempts:
+            if self.job_store is not None and not getattr(exc, "durable_transition", False):
+                await self.job_store.schedule_retry(
+                    job["jobId"],
+                    job["runId"],
+                    datetime.now(UTC) + timedelta(seconds=2**attempt),
+                    type(exc).__name__,
+                    reason,
+                )
             await self._requeue(payload, reason)
             return
 
+        if self.job_store is not None and not getattr(exc, "durable_transition", False):
+            await self.job_store.dead_letter(job["jobId"], job["runId"], datetime.now(UTC), type(exc).__name__, reason)
         await self._dead_letter(payload, reason)
 
     @staticmethod
@@ -131,31 +150,39 @@ class WorkflowQueueConsumer:
         next_job["status"] = "waiting"
         return json.dumps(next_job)
 
-    async def _execute_with_retry(self, operation, *args):
+    async def _execute_with_retry(self, operation: Any, *args: Any) -> Any:
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.5, max=8),
             retry=retry_if_exception_type((TimeoutError, ConnectionError)),
             reraise=True,
         )
-        async def _runner():
+        async def _runner() -> Any:
             return await operation(*args)
 
         return await _runner()
 
     async def _run_agronautas_job(self, job: dict[str, Any]) -> dict[str, Any]:
-        from worker.runtime.agronautas_jobs import handle_agronautas_job
-
-        return await self._execute_with_retry(handle_agronautas_job, job, self.redis, self.logger)
+        result = await self._execute_with_retry(
+            handle_agronautas_job,
+            job,
+            self.redis,
+            self.logger,
+            self.job_store,
+            self.job_store.worker_id if self.job_store is not None else None,
+        )
+        if result.get("status") == "retryable_failure":
+            raise RetryableAgronautasJobError(str(result.get("error", "retryable_failure")))
+        return result
 
     async def _run_graph_job(self, state: dict[str, Any], run_id: str) -> dict[str, Any]:
         graph = await build_graph()
         return await self._execute_with_retry(graph.ainvoke, state, {"configurable": {"thread_id": run_id}})
 
 
-async def main() -> None:
-    await WorkflowQueueConsumer().consume_forever()
+def main() -> None:
+    run_worker(WorkflowQueueConsumer().consume_forever())
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

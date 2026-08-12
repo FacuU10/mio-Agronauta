@@ -1,4 +1,4 @@
-import { toAlertSnapshotContract, type AlertSnapshotFoundation, type RiskSnapshotFoundation } from '../../domain/entities/agronautas'
+import { RiskSnapshotFoundation, toAlertSnapshotContract, type AlertSnapshotFoundation } from '../../domain/entities/agronautas'
 import type { AlertSnapshotRecord, AlertSnapshotRepository, RiskSnapshotRepository } from '../../domain/repositories/agronautas'
 
 export interface GenerateAlertsInput {
@@ -7,9 +7,19 @@ export interface GenerateAlertsInput {
 }
 
 export interface GenerateAlertsResult {
-  status: 'generated' | 'stale-snapshot' | 'missing-snapshot'
+  status: 'generated' | 'stale-snapshot' | 'degraded-snapshot' | 'missing-snapshot'
   alerts: AlertSnapshotFoundation[]
   snapshot: RiskSnapshotFoundation | null
+  lineage: GenerateAlertsLineage | null
+}
+
+export interface GenerateAlertsLineage {
+  riskSnapshotId: string
+  sourceRunIds: string[]
+  acquisitionTimes: string[]
+  engineId: string
+  engineVersion: string
+  alertSnapshotIds: string[]
 }
 
 interface GenerateAlertsOptions {
@@ -25,14 +35,18 @@ export class GenerateAlertsUseCase {
 
   async execute(input: GenerateAlertsInput): Promise<GenerateAlertsResult> {
     const snapshot = await this.riskSnapshotRepository.getLatest(input.fieldId)
-    if (!snapshot) return { status: 'missing-snapshot', alerts: [], snapshot: null }
+    if (!snapshot) return { status: 'missing-snapshot', alerts: [], snapshot: null, lineage: null }
 
     const reference = this.now()
     if (snapshot.isExpired(reference)) {
-      return { status: 'stale-snapshot', alerts: [], snapshot }
+      return { status: 'stale-snapshot', alerts: [], snapshot, lineage: buildLineage(snapshot, []) }
     }
 
-    const alerts = deriveAlerts(snapshot)
+    if (snapshot.props.degradationReasons.length > 0) {
+      return { status: 'degraded-snapshot', alerts: [], snapshot, lineage: buildLineage(snapshot, []) }
+    }
+
+    const alerts = deriveAlerts(snapshot, reference)
     await this.alertSnapshotRepository.saveMany(
       alerts.map((alert) => ({
         alertId: alert.alertId,
@@ -45,10 +59,19 @@ export class GenerateAlertsUseCase {
         freshness: alert.freshness,
         degradationReasons: [...alert.degradationReasons],
         staleCause: snapshot.props.staleCause,
+        sourceRunIds: alert.sourceRunIds,
+        acquisitionTimes: alert.acquisitionTimes,
+        engineId: alert.engineId,
+        engineVersion: alert.engineVersion,
       })),
     )
 
-    return { status: 'generated', alerts, snapshot }
+    const snapshotWithAlerts = alerts.length > 0
+      ? new RiskSnapshotFoundation({ ...snapshot.props, alertSnapshotIds: alerts.map((alert) => alert.alertId) })
+      : snapshot
+    if (alerts.length > 0) await this.riskSnapshotRepository.save(snapshotWithAlerts)
+
+    return { status: 'generated', alerts, snapshot: snapshotWithAlerts, lineage: buildLineage(snapshotWithAlerts, alerts) }
   }
 
   private now(): Date {
@@ -56,10 +79,10 @@ export class GenerateAlertsUseCase {
   }
 }
 
-function deriveAlerts(snapshot: RiskSnapshotFoundation): AlertSnapshotFoundation[] {
+function deriveAlerts(snapshot: RiskSnapshotFoundation, reference: Date): AlertSnapshotFoundation[] {
   const alerts: AlertSnapshotFoundation[] = []
   const driverMap = new Map(snapshot.props.drivers.map((driver) => [driver.key, driver.value]))
-  const freshness = snapshot.freshness
+  const freshness = snapshot.isExpired(reference) ? 'stale' : snapshot.props.degradationReasons.length > 0 ? 'degraded' : 'fresh'
   const degradationReasons = [...snapshot.props.degradationReasons]
   const baseConfidence = snapshot.props.confidence
 
@@ -77,6 +100,12 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation): AlertSnapshotFoundation
       confidence: Number(Math.min(1, Math.max(0.3, baseConfidence)).toFixed(3)),
       freshness,
       degradationReasons,
+      ...buildAlertMetadata(snapshot),
+      runId: snapshot.props.runId,
+      sourceRunIds: snapshot.props.sourceRunIds,
+      acquisitionTimes: snapshot.props.acquisitionTimes,
+      engineId: snapshot.props.engineId ?? snapshot.props.ruleVersion,
+      engineVersion: snapshot.props.engineVersion ?? snapshot.props.ruleVersion,
     })
   }
 
@@ -90,6 +119,7 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation): AlertSnapshotFoundation
       confidence: Number(Math.max(0.25, (baseConfidence - 0.04)).toFixed(3)),
       freshness,
       degradationReasons,
+      ...buildAlertMetadata(snapshot),
     })
   }
 
@@ -103,6 +133,7 @@ function deriveAlerts(snapshot: RiskSnapshotFoundation): AlertSnapshotFoundation
       confidence: Number(Math.max(0.25, (baseConfidence - 0.02)).toFixed(3)),
       freshness,
       degradationReasons,
+      ...buildAlertMetadata(snapshot),
     })
   }
 
@@ -131,6 +162,11 @@ export function toStaleAlertContracts(alerts: AlertSnapshotRecord[]) {
       confidence: alert.confidence,
       freshness: 'stale',
       degradationReasons: alert.degradationReasons as AlertSnapshotFoundation['degradationReasons'],
+      runId: alert.runId,
+      sourceRunIds: alert.sourceRunIds,
+      acquisitionTimes: alert.acquisitionTimes,
+      engineId: alert.engineId,
+      engineVersion: alert.engineVersion,
     }),
   )
 }
@@ -146,6 +182,32 @@ export function toStoredAlertContracts(alerts: AlertSnapshotRecord[]) {
       confidence: alert.confidence,
       freshness: alert.freshness,
       degradationReasons: alert.degradationReasons as AlertSnapshotFoundation['degradationReasons'],
+      runId: alert.runId,
+      sourceRunIds: alert.sourceRunIds,
+      acquisitionTimes: alert.acquisitionTimes,
+      engineId: alert.engineId,
+      engineVersion: alert.engineVersion,
     }),
   )
+}
+
+function buildLineage(snapshot: RiskSnapshotFoundation, alerts: AlertSnapshotFoundation[]): GenerateAlertsLineage {
+  return {
+    riskSnapshotId: snapshot.props.snapshotId,
+    sourceRunIds: snapshot.props.sourceRunIds ?? [snapshot.props.runId],
+    acquisitionTimes: (snapshot.props.acquisitionTimes ?? []).map((value) => value.toISOString()),
+    engineId: snapshot.props.engineId ?? snapshot.props.ruleVersion,
+    engineVersion: snapshot.props.engineVersion ?? snapshot.props.ruleVersion,
+    alertSnapshotIds: alerts.map((alert) => alert.alertId),
+  }
+}
+
+function buildAlertMetadata(snapshot: RiskSnapshotFoundation) {
+  return {
+    runId: snapshot.props.runId,
+    sourceRunIds: snapshot.props.sourceRunIds,
+    acquisitionTimes: snapshot.props.acquisitionTimes,
+    engineId: snapshot.props.engineId ?? snapshot.props.ruleVersion,
+    engineVersion: snapshot.props.engineVersion ?? snapshot.props.ruleVersion,
+  }
 }

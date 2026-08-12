@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://golden-boilerplate.dev/contracts/agronautas-runtime-recompute-job.v1.schema.json",
+  "title": "AgronautasRuntimeRecomputeJobV1",
+  "type": "object",
+  "required": ["fieldId", "triggeredBy", "requestedAt", "runtime"],
+  "properties": {
+    "fieldId": { "type": "string", "minLength": 1 },
+    "triggeredBy": { "enum": ["api", "alert-refresh"] },
+    "requestedAt": { "type": "string", "format": "date-time" },
+    "runtime": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": { "mode": { "enum": ["real", "demo"] } },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

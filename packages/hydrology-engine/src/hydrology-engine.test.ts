@@ -57,8 +57,8 @@ test('HydrologyRepository maps zones using ST_Intersects without deleting histor
 
   assert.deepEqual(mapping.referencePorts, ['paso_de_la_patria', 'corrientes'])
   assert.match(calls[0]?.sql ?? '', /ST_Intersects/)
-  assert.equal(calls.length, 1)
-  assert.deepEqual(pruned, { telemetryDeleted: 0, snapshotsDeleted: 0 })
+  assert.equal(calls.length, 2)
+  assert.deepEqual(pruned, { telemetryDeleted: 0, snapshotsDeleted: 0, ledgerDeleted: 0 })
 })
 
 test('HydrologyRepository returns source freshness from successful ingestion runs and exposes failed latest runs', async () => {
@@ -94,6 +94,124 @@ test('government municipality migration is additive and defines mapping indexes'
   assert.match(sql, /USING GIN \(inmet_station_ids\)/)
   assert.doesNotMatch(sql, /ALTER TABLE\s+(fields|lots|agronautas_boundaries)/i)
   assert.doesNotMatch(sql, /DROP TABLE/i)
+})
+
+test('Iberá ingest ledger migration is additive, indexed, and rollback-isolatable', async () => {
+  const sql = await readFile(resolve(process.cwd(), '../../apps/api/prisma/migrations/20260811120000_ibera_ingest_ledger/migration.sql'), 'utf8')
+
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS ibera_ingest_runs/)
+  assert.match(sql, /scheduled_slot TEXT UNIQUE/)
+  assert.match(sql, /source_results JSONB NOT NULL DEFAULT '\[\]'::jsonb/)
+  assert.match(sql, /diagnostics JSONB NOT NULL DEFAULT '\{\}'::jsonb/)
+  assert.match(sql, /ALTER TABLE hydrology_ingestion_runs\s+ADD COLUMN IF NOT EXISTS ibera_run_id TEXT/)
+  assert.match(sql, /ALTER TABLE hydrology_ingestion_runs\s+ADD COLUMN IF NOT EXISTS diagnostics JSONB/)
+  assert.doesNotMatch(sql, /DROP TABLE/i)
+  assert.doesNotMatch(sql, /DELETE FROM hydrology_(telemetry|ingestion_runs)/i)
+})
+
+test('Iberá ledger schema repair is additive and heals partially applied deployments', async () => {
+  const sql = await readFile(resolve(process.cwd(), '../../apps/api/prisma/migrations/20260812100000_ibera_ingest_ledger_schema_repair/migration.sql'), 'utf8')
+
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS ibera_ingest_runs/)
+  assert.match(sql, /ALTER TABLE hydrology_ingestion_runs\s+ADD COLUMN IF NOT EXISTS ibera_run_id TEXT/)
+  assert.match(sql, /ALTER TABLE hydrology_ingestion_runs\s+ADD COLUMN IF NOT EXISTS diagnostics JSONB/)
+  assert.match(sql, /hydrology_ingestion_runs_ibera_run_fk/)
+  assert.match(sql, /hydrology_ingestion_runs_ibera_run_idx/)
+  assert.doesNotMatch(sql, /DROP TABLE|DROP COLUMN|DELETE FROM hydrology_(telemetry|ingestion_runs)/i)
+})
+
+
+test('HydrologyRepository persists and reconstructs an Iberá run with stable source diagnostics', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const row = {
+    id: 'run-ledger-1',
+    proof_run_id: 'proof-ledger-1',
+    status: 'partial',
+    requested_sources: ['PNA', 'SMN'],
+    source_results: [{ source: 'PNA', status: 'success', recordsIngested: 2 }],
+    diagnostics: { SMN: { failureKind: 'network_failure', attempts: 1 } },
+    scheduled_slot: null,
+    reason: 'manual',
+    started_at: '2026-08-11T12:00:00.000Z',
+    finished_at: '2026-08-11T12:01:00.000Z',
+    expires_at: '2026-08-12T12:01:00.000Z',
+  }
+  const db = {
+    async query(sql: string, params: unknown[] = []) {
+      calls.push({ sql, params })
+      if (/RETURNING id/.test(sql)) return { rows: [row], rowCount: 1, command: 'INSERT', oid: 0, fields: [] }
+      if (/FROM ibera_ingest_runs/.test(sql)) return { rows: [row], rowCount: 1, command: 'SELECT', oid: 0, fields: [] }
+      return { rows: [], rowCount: 1, command: 'UPDATE', oid: 0, fields: [] }
+    },
+  }
+  const repo = new HydrologyRepository(db)
+
+  await repo.createIberaIngestRun({
+    id: 'run-ledger-1',
+    proofRunId: 'proof-ledger-1',
+    status: 'queued',
+    requestedSources: ['PNA', 'SMN'],
+    sourceResults: [],
+    diagnostics: {},
+    reason: 'manual',
+    startedAt: new Date('2026-08-11T12:00:00.000Z'),
+    expiresAt: new Date('2026-08-12T12:01:00.000Z'),
+  })
+  await repo.updateIberaIngestRun('run-ledger-1', {
+    status: 'partial',
+    sourceResults: [{ source: 'PNA', status: 'success', recordsIngested: 2 }],
+    diagnostics: { SMN: { failureKind: 'network_failure', attempts: 1 } },
+    finishedAt: new Date('2026-08-11T12:01:00.000Z'),
+  })
+  const persisted = await repo.getIberaIngestRun('run-ledger-1')
+
+  assert.equal(persisted?.status, 'partial')
+  assert.deepEqual(persisted?.requestedSources, ['PNA', 'SMN'])
+  assert.deepEqual(persisted?.sourceResults, [{ source: 'PNA', status: 'success', recordsIngested: 2 }])
+  assert.deepEqual(persisted?.diagnostics, { SMN: { failureKind: 'network_failure', attempts: 1 } })
+  assert.ok(calls.some(({ sql }) => /ibera_ingest_runs/.test(sql)))
+})
+
+test('HydrologyRepository claims an unleased or expired Iberá slot with a compare-and-set lease', async () => {
+  const row = {
+    id: 'scheduled-run', proof_run_id: 'scheduled-proof', status: 'queued', requested_sources: ['PNA'],
+    scheduled_slot: 'PNA:2026-06-23T18:00:00.000Z', lease_owner: null, lease_expires_at: null,
+    source_results: [], diagnostics: {}, reason: 'scheduler', started_at: new Date('2026-06-23T18:00:00.000Z'),
+    finished_at: null, expires_at: new Date('2026-06-24T18:00:00.000Z'), created_at: new Date('2026-06-23T18:00:00.000Z'), updated_at: new Date('2026-06-23T18:00:00.000Z'),
+  }
+  const calls: Array<{ sql: string; params?: unknown[] }> = []
+  const db = {
+    async query(sql: string, params?: unknown[]) {
+      calls.push({ sql, params })
+      if (/UPDATE ibera_ingest_runs/.test(sql)) return { rows: [{ ...row, status: 'started', lease_owner: 'instance-a', lease_expires_at: new Date('2026-06-23T18:02:00.000Z') }], rowCount: 1, command: 'UPDATE', oid: 0, fields: [] }
+      return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] }
+    },
+  }
+
+  const claimed = await new HydrologyRepository(db).claimIberaIngestLease('scheduled-run', 'instance-a', new Date('2026-06-23T18:01:00.000Z'), 60_000)
+
+  assert.equal(claimed?.leaseOwner, 'instance-a')
+  assert.equal(claimed?.status, 'started')
+  assert.match(calls[0]?.sql ?? '', /lease_expires_at <= \$3|lease_owner IS NULL/)
+  assert.equal(calls[0]?.params?.[3], 60_000)
+})
+
+test('HydrologyRepository prunes only expired Iberá ledger rows with a SQL batch bound', async () => {
+  const calls: Array<{ sql: string; params?: unknown[] }> = []
+  const db = {
+    async query(sql: string, params?: unknown[]) {
+      calls.push({ sql, params })
+      return { rows: [{ id: 'expired-run' }], rowCount: 1, command: 'DELETE', oid: 0, fields: [] }
+    },
+  }
+
+  const result = await new HydrologyRepository(db).pruneOldData(30, new Date('2026-06-23T00:00:00.000Z'))
+
+  assert.deepEqual(result, { telemetryDeleted: 0, snapshotsDeleted: 0, ledgerDeleted: 1 })
+  assert.match(calls[0]?.sql ?? '', /FOR UPDATE SKIP LOCKED/)
+  assert.match(calls[0]?.sql ?? '', /LIMIT \$2/)
+  assert.equal(calls[0]?.params?.[1], 100)
+  assert.doesNotMatch(calls[0]?.sql ?? '', /DELETE FROM hydrology_telemetry/)
 })
 
 test('municipality alert coverage migration is additive and rejects dynamic alert identifiers', async () => {
@@ -347,6 +465,23 @@ test('HydrologyRepository saveTelemetryDeduped inserts changed numeric values an
   assert.deepEqual(summary, { inserted: 1, unchanged: 0 })
   assert.equal(calls.filter((call) => /INSERT INTO hydrology_telemetry/i.test(call.sql)).length, 1)
   assert.equal(calls.find((call) => /SELECT value\s+FROM hydrology_telemetry/i.test(call.sql))?.params[4], 7)
+})
+
+test('HydrologyRepository creates missing provider stations before persisting telemetry', async () => {
+  const calls: string[] = []
+  const db = {
+    async query(sql: string) {
+      calls.push(sql)
+      return { rows: [], rowCount: 1, command: 'SELECT', oid: 0, fields: [] }
+    },
+  }
+
+  await new HydrologyRepository(db).saveTelemetryDeduped([
+    { source: 'PNA', stationId: 'pna-new-station', metric: 'river_height_m', unit: 'm', value: 2.1, observedAt: new Date('2026-08-12T04:00:00.000Z'), lastSuccessfulObservedAt: new Date('2026-08-12T04:00:00.000Z'), quality: 'ok', freshness: 'fresh' },
+  ], { source: 'PNA', stationId: 'pna-new-station', status: 'success', startedAt: new Date('2026-08-12T04:00:00.000Z'), recordsIngested: 1 })
+
+  assert.equal(calls.filter((sql) => /INSERT INTO hydrology_stations/i.test(sql)).length, 1)
+  assert.equal(calls.filter((sql) => /INSERT INTO hydrology_telemetry/i.test(sql)).length, 1)
 })
 
 test('HydrologyRepository preserves alert semantics by storing storm alerts with a null value', async () => {

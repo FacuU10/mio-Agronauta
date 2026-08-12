@@ -10,9 +10,9 @@ import { EvidenceStateBadge } from '@/components/visibility/primitives'
 import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-state'
 
 
-type TelemetryCard = { source: string; stationId: string; metric: string; value: number | null; unit: string; observedAt?: string | null; lastSuccessfulObservedAt?: string | null; label: string; freshness?: 'fresh' | 'stale' | 'degraded' | 'missing'; forecastHorizonDays?: number | null }
+type TelemetryCard = { source: string; stationId: string; metric: string; value: number | null; unit: string; observedAt?: string | null; lastSuccessfulObservedAt?: string | null; label: string; freshness?: 'fresh' | 'stale' | 'degraded' | 'missing'; forecastHorizonDays?: number | null; sourceUrl?: string | null }
 type ForecastRow = TelemetryCard & { forecastHorizonDays?: number | null; confidence?: string | null; sourceUrl?: string | null }
-type Provenance = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
+ type Provenance = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
 type OfficialAlert = { source: 'SMN' | 'INMET'; coverageKey: string; message: string; observedAt: string; lastSuccessfulObservedAt: string; freshness: 'fresh' | 'degraded'; sourceUrl?: string }
 type DashboardPayload = {
   municipality: { id: string; localityId: string; name: string; alertHeightM?: number; evacuationHeightM?: number; officialAlerts: OfficialAlert[] }
@@ -21,6 +21,7 @@ type DashboardPayload = {
   inaPredictions30d: ForecastRow[]
   alerts: TelemetryCard[]
   provenance: Provenance[]
+  coverageGaps?: string[]
 }
 
 export function GovernmentDetail({ municipalityId, initialData = null }: { municipalityId: string; initialData?: DashboardPayload | null }) {
@@ -101,14 +102,16 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
                 <article key={`${card.source}-${card.stationId}-${card.metric}`} className="rounded-[2rem] border border-white/10 bg-white/[0.08] p-5 shadow-xl backdrop-blur">
                   <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.24em] text-teal-200">{card.source} · {card.stationId}</p><h3 className="mt-2 text-xl font-black">{card.label}</h3></div><DatabaseZap className="text-lime-200" aria-hidden="true" /></div>
                   <p className="mt-5 text-4xl font-black tabular-nums">{card.value ?? '—'} <span className="text-lg text-stone-300">{card.unit}</span></p>
-                  <p className="mt-3 text-xs font-bold uppercase tracking-wide text-lime-200">{telemetryMode(card)}</p>
-                  <p className="mt-2 text-sm text-stone-300">{formatTelemetryTime(card)}</p>
+                   <p className="mt-3 text-xs font-bold uppercase tracking-wide text-lime-200">{telemetryMode(card)}</p>
+                   <p className="mt-2 text-sm text-stone-300">{formatTelemetryTime(card)}</p>
+                   {card.sourceUrl ? <a className="mt-2 inline-block text-sm font-bold text-lime-200 underline underline-offset-2" href={card.sourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a> : null}
                 </article>
               ))}
               {data && data.telemetryCards.length === 0 ? <p className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 text-stone-300">Sin telemetría oficial reciente para este municipio.</p> : null}
             </div>
           </section>
-          <MunicipalEvidenceStatePanel data={data} />
+           <MunicipalEvidenceStatePanel data={data} />
+           {data && data.coverageGaps?.length ? <section aria-label="Brechas de cobertura local" className="mt-6 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4 text-sm text-amber-100"><strong>Brechas de cobertura local:</strong> {data.coverageGaps.join(' · ')}</section> : null}
 
           <section aria-labelledby="mappings-heading" className="mt-10 rounded-[2rem] border border-white/10 bg-white/[0.07] p-5 shadow-2xl">
             <h2 id="mappings-heading" className="text-2xl font-black">Mapeos de estaciones</h2>
@@ -134,14 +137,14 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
             <div className="mt-5 overflow-x-auto">
               <table aria-label="Predicción INA a 30 días" className="w-full min-w-[620px] border-separate border-spacing-y-2 text-left">
                 <thead><tr className="text-sm uppercase tracking-[0.2em] text-stone-400"><th className="px-4 py-2">Horizonte</th><th className="px-4 py-2">Estación</th><th className="px-4 py-2">Altura</th><th className="px-4 py-2">Confianza</th><th className="px-4 py-2">Observado</th></tr></thead>
-                <tbody>{(data?.inaPredictions30d ?? []).map((row) => (<tr key={`${row.stationId}-${row.forecastHorizonDays}-${row.observedAt}`} className="rounded-2xl bg-stone-900/80"><td className="px-4 py-3 font-black">Día {row.forecastHorizonDays ?? '—'}</td><td className="px-4 py-3">{row.stationId}</td><td className="px-4 py-3 tabular-nums">{row.value ?? '—'} {row.unit}</td><td className="px-4 py-3">{row.confidence === 'speculative' ? 'tendencia' : 'normal'}</td><td className="px-4 py-3">{formatOfficialTime(row.observedAt).replace('Último dato obtenido: ', '')}</td></tr>))}</tbody>
+                 <tbody>{(data?.inaPredictions30d ?? []).map((row) => (<tr key={`${row.stationId}-${row.forecastHorizonDays}-${row.observedAt}`} className="rounded-2xl bg-stone-900/80"><td className="px-4 py-3 font-black">Día {row.forecastHorizonDays ?? '—'}</td><td className="px-4 py-3">{row.stationId}</td><td className="px-4 py-3 tabular-nums">{row.value ?? '—'} {row.unit}</td><td className="px-4 py-3">{row.confidence === 'speculative' ? 'tendencia' : 'normal'}</td><td className="px-4 py-3">{formatOfficialTime(row.observedAt).replace('Último dato obtenido: ', '')}{row.sourceUrl ? <> · <a className="underline" href={row.sourceUrl} target="_blank" rel="noreferrer">Fuente</a></> : null}</td></tr>))}</tbody>
               </table>
              </div>
              <p className="mt-3 text-sm text-amber-100">Días 15–30: planificación especulativa o de baja confianza.</p>
            </section>
 
            <section aria-labelledby="provenance-heading" className="mt-10 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-5"><h2 id="provenance-heading" className="text-2xl font-black">Procedencia oficial</h2><div className="mt-5 space-y-3">{(data?.provenance ?? []).map((item) => (<article key={`${item.source}-${item.lastSuccessfulObservedAt ?? 'missing'}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{item.source}</h3><p className="text-sm text-stone-300">Estado: {statusLabel(item.freshness)}</p><p className="mt-2 text-sm text-stone-300">{item.label || formatOfficialTime(item.lastSuccessfulObservedAt)}</p></article>))}</div></div>
+             <div className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-5"><h2 id="provenance-heading" className="text-2xl font-black">Procedencia oficial</h2><div className="mt-5 space-y-3">{(data?.provenance ?? []).map((item) => (<article key={`${item.source}-${item.lastSuccessfulObservedAt ?? 'missing'}`} className="rounded-2xl bg-stone-900/80 p-4"><h3 className="font-black">{item.source}</h3><p className="text-sm text-stone-300">Estado: {statusLabel(item.freshness)}</p><p className="mt-2 text-sm text-stone-300">{item.label || formatOfficialTime(item.lastSuccessfulObservedAt)}</p></article>))}{data && data.provenance.length === 0 ? <p className="rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4 text-sm text-amber-100">Procedencia no disponible para este municipio.</p> : null}</div></div>
              <CopilotPanel view={chatView} message={message} onMessageChange={setMessage} onSubmit={submitChat} onRetry={() => lastMessage ? requestCopilot(lastMessage) : undefined} />
           </section>
         </div>
@@ -154,16 +157,19 @@ function CopilotPanel(props: { message: string; view: ReturnType<typeof createCh
   return (
     <section aria-labelledby="copilot-heading" className="rounded-[2rem] border border-teal-200/20 bg-teal-200/10 p-5 shadow-2xl">
       <div className="flex items-center gap-3"><Bot className="text-teal-100" aria-hidden="true" /><div><h2 id="copilot-heading" className="text-2xl font-black">Copilot Advisor</h2><p className="text-sm text-teal-50/80">Consultas de apoyo con fuentes observadas y pronosticadas oficiales.</p></div></div>
-       <div aria-live="polite" className="mt-5 min-h-28 rounded-3xl bg-stone-950/70 p-4 text-sm text-stone-100">
-         <p className="font-bold uppercase tracking-wide text-lime-200">Estado: {chatStatusLabel(props.view.status)}</p>
-         <p className="mt-3">{props.view.answer || 'El stream todavía no entregó tokens.'}</p>
-         {props.view.error ? <p role="alert" className="mt-3 rounded-2xl bg-red-950/70 p-3 text-red-100">{props.view.error}</p> : null}
-       </div>
-       <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+        <div aria-live="polite" className="mt-5 min-h-28 rounded-3xl bg-stone-950/70 p-4 text-sm text-stone-100">
+          <p className="font-bold uppercase tracking-wide text-lime-200">Estado: {chatStatusLabel(props.view.status)}</p>
+          <p className="mt-3">{props.view.answer || 'El stream todavía no entregó tokens.'}</p>
+          {props.view.error ? <p role="alert" className="mt-3 rounded-2xl bg-red-950/70 p-3 text-red-100">{props.view.error}</p> : null}
+          {props.view.citationUnavailable ? <p role="status" className="mt-3 rounded-2xl border border-amber-200/30 bg-amber-200/10 p-3 text-amber-100">{props.view.unavailableReason ?? 'Citación no disponible: la respuesta no tiene una referencia oficial verificable.'}</p> : null}
+        </div>
+        <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
          <p><strong>Fuentes:</strong> {props.view.sources.join(' · ') || 'No provistas'}</p>
          <p><strong>Límites:</strong> {props.view.limits.join(' · ') || 'No provistos por el endpoint'}</p>
            <p><strong>Última actualización del Copilot:</strong> {formatOfficialTime(chatTimestamp(props.view)).replace('Último dato obtenido: ', '')}</p>
-         <p><strong>Metadata:</strong> {Object.keys(props.view.metadata).length ? JSON.stringify(props.view.metadata) : 'No provista'}</p>
+          <p><strong>Metadata:</strong> {Object.keys(props.view.metadata).length ? JSON.stringify(props.view.metadata) : 'No provista'}</p>
+          <p><strong>Citación:</strong> {props.view.citationUnavailable ? 'No disponible' : props.view.citationMode === 'validated-context' ? `${props.view.citations.length} referencia(s) verificadas` : 'Contexto sin referencias verificadas'}</p>
+          {props.view.citations.length ? <ul className="sm:col-span-2" aria-label="Referencias verificadas">{props.view.citations.map((citation) => <li key={citation}>{citation}</li>)}</ul> : null}
        </div>
        {props.view.retryable && props.onRetry ? <button type="button" onClick={props.onRetry} className="mt-4 rounded-full border border-lime-200 px-4 py-2 text-sm font-bold text-lime-100 hover:bg-lime-200/10 focus-visible:ring-4 focus-visible:ring-lime-100">Reintentar consulta</button> : null}
       <form onSubmit={props.onSubmit} className="mt-4 flex flex-col gap-3 sm:flex-row">

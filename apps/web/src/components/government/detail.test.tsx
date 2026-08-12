@@ -84,6 +84,24 @@ test('GovernmentDetail preserves partial Copilot tokens, metadata and retry afte
   }
 })
 
+test('GovernmentDetail renders citation unavailable without inventing a source', async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response([
+    'event: metadata\ndata: {"citationMode":"none","citations":[],"unverifiedClaims":true,"citationUnavailable":true,"unavailableReason":"No hay una referencia oficial verificable para esta respuesta."}\n\n',
+    'event: done\ndata: {"model":"test"}\n\n',
+  ].join(''), { headers: { 'content-type': 'text/event-stream' } })) as typeof fetch
+  try {
+    const view = render(<GovernmentDetail municipalityId="corrientes" initialData={dashboardPayload()} />)
+    fireEvent.input(view.getByLabelText('Consulta para Copilot Advisor'), { target: { value: '¿Qué ocurre?' } })
+    fireEvent.click(view.getByRole('button', { name: 'Enviar Consulta' }))
+    await waitFor(() => assert.ok(view.getByText('No hay una referencia oficial verificable para esta respuesta.')))
+    assert.match(view.container.textContent ?? '', /No hay una referencia oficial verificable/)
+    assert.match(view.container.textContent ?? '', /Citación:\s*No disponible/)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
 function dashboardPayload() {
   return {
     municipality: { id: 'corrientes', localityId: 'corrientes-capital', name: 'Corrientes Capital', alertHeightM: 6.5, evacuationHeightM: 7, officialAlerts: [{ source: 'SMN', coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: '2026-06-23T09:00:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z', freshness: 'fresh', sourceUrl: 'https://example.com/smn' }] },
@@ -91,7 +109,8 @@ function dashboardPayload() {
     telemetryCards: [{ source: 'PNA', stationId: 'corrientes', metric: 'river_height_m', value: 3.2, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', label: 'Altura PNA' }],
     inaPredictions30d: [{ source: 'INA', stationId: 'ina-corrientes', metric: 'river_height_m', value: 3.8, unit: 'm', observedAt: '2026-07-13T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', label: 'Pronóstico INA', forecastHorizonDays: 20, confidence: 'speculative' }],
     alerts: [{ source: 'SMN', stationId: 'smn-corrientes', metric: 'storm_alert', value: null, unit: 'alerta', observedAt: '2026-06-23T09:00:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z', label: 'Alerta SMN' }],
-    provenance: [{ source: 'PNA', freshness: 'fresh', label: 'PNA vigente', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }, { source: 'SMN', freshness: 'degraded', label: 'SMN degradado', lastSuccessfulObservedAt: null }],
+     provenance: [{ source: 'PNA', freshness: 'fresh', label: 'PNA vigente', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }, { source: 'SMN', freshness: 'degraded', label: 'SMN degradado', lastSuccessfulObservedAt: null }],
+     coverageGaps: ['INA: sin estación asociada'],
   }
 }
 

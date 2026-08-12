@@ -1,4 +1,5 @@
 export interface CorrientesDemoLocality {
+  demoOnly: true
   slug: string
   fieldId: string
   externalFieldId: string
@@ -14,8 +15,11 @@ export interface CorrientesDemoLocality {
   coordinateSource: string
 }
 
+export const CORRIENTES_DEMO_ONLY = true as const
+
 export const corrientesDemoLocalities: CorrientesDemoLocality[] = [
   {
+    demoOnly: true,
     slug: 'mercedes',
     fieldId: 'corrientes-demo-mercedes',
     externalFieldId: 'corrientes-demo-mercedes',
@@ -31,6 +35,7 @@ export const corrientesDemoLocalities: CorrientesDemoLocality[] = [
     coordinateSource: 'OpenStreetMap / municipal centroid verification',
   },
   {
+    demoOnly: true,
     slug: 'curuzu-cuatio',
     fieldId: 'corrientes-demo-curuzu-cuatio',
     externalFieldId: 'corrientes-demo-curuzu-cuatio',
@@ -46,6 +51,7 @@ export const corrientesDemoLocalities: CorrientesDemoLocality[] = [
     coordinateSource: 'OpenStreetMap / departmental centroid verification',
   },
   {
+    demoOnly: true,
     slug: 'paso-de-los-libres',
     fieldId: 'corrientes-demo-paso-de-los-libres',
     externalFieldId: 'corrientes-demo-paso-de-los-libres',
@@ -61,6 +67,7 @@ export const corrientesDemoLocalities: CorrientesDemoLocality[] = [
     coordinateSource: 'OpenStreetMap / city centroid verification',
   },
   {
+    demoOnly: true,
     slug: 'santo-tome',
     fieldId: 'corrientes-demo-santo-tome',
     externalFieldId: 'corrientes-demo-santo-tome',
@@ -76,6 +83,7 @@ export const corrientesDemoLocalities: CorrientesDemoLocality[] = [
     coordinateSource: 'OpenStreetMap / city centroid verification',
   },
   {
+    demoOnly: true,
     slug: 'ituzaingo',
     fieldId: 'corrientes-demo-ituzaingo',
     externalFieldId: 'corrientes-demo-ituzaingo',

@@ -14,6 +14,7 @@ test('municipalityTelemetrySummary exposes current PNA and INA levels with offic
     inaObservedAt: '2026-07-14T19:05:00.000Z',
     inaSourceUrl: 'https://alerta.ina.gob.ar/a5/getObservaciones/6764',
     lastSuccessfulObservedAt: '2026-07-14T19:05:00.000Z',
+    coverageGaps: [],
   })
 })
 
@@ -28,5 +29,6 @@ test('municipalityTelemetrySummary keeps INA unavailable without substituting we
     inaObservedAt: null,
     inaSourceUrl: null,
     lastSuccessfulObservedAt: '2026-07-14T19:00:00.000Z',
+    coverageGaps: [],
   })
 })

@@ -30,6 +30,11 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const [chatError, setChatError] = useState<string | null>(null)
   const [lastChatMessage, setLastChatMessage] = useState<string | null>(null)
   const [lastHydrologyMessage, setLastHydrologyMessage] = useState<string | null>(null)
+  const geometryQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'geometry', selectedFieldId], queryFn: () => resolvedService.getFieldGeometry?.(selectedFieldId as string), enabled: Boolean(selectedFieldId && resolvedService.getFieldGeometry) }] })[0]
+  const geometryMutation = useMutation({ mutationFn: async (input: { polygonWkt: string; expectedUpdatedAt?: string }) => {
+    if (!selectedFieldId || !resolvedService.updateFieldGeometry) throw new Error('La edición de geometría no está disponible')
+    return resolvedService.updateFieldGeometry(selectedFieldId, input)
+  }, onSuccess: () => void geometryQuery.refetch() })
 
   const intakeMutation = useMutation({
     mutationFn: (input: FieldIntake) => resolvedService.createFieldIntake(input),
@@ -96,51 +101,72 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
         queryKey: ['agronautas', 'field', selectedFieldId],
         queryFn: () => resolvedService.getField(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'risk', selectedFieldId],
         queryFn: () => resolvedService.getCurrentRisk(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'alerts', selectedFieldId],
         queryFn: () => resolvedService.getCurrentAlerts(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'status', selectedFieldId],
         queryFn: () => resolvedService.getMonitoringStatus(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'risk-timeline', selectedFieldId],
         queryFn: () => resolvedService.getRiskTimeline(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'weather-timeline', selectedFieldId],
         queryFn: () => resolvedService.getWeatherTimeline(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'dashboard-payload', selectedFieldId],
         queryFn: () => resolvedService.getDashboard(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
       {
         queryKey: ['agronautas', 'hydrology-dashboard', selectedFieldId],
         queryFn: () => resolvedService.getHydrologyDashboard(selectedFieldId as string),
         enabled: Boolean(selectedFieldId),
+        retry: false,
       },
     ],
   })
   const runtimeQuery = useQueries({
     queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime() }],
   })[0]
+  const queryErrors = [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, dashboardQuery, hydrologyQuery]
+    .filter((query) => Boolean(query.error))
+    .map((query) => query.error instanceof Error ? query.error.message : 'Una capacidad devolvió un error no identificado')
+  const retrySync = async () => {
+    await Promise.all([
+      runtimeQuery.refetch(),
+      ...[fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, dashboardQuery, hydrologyQuery]
+        .filter((query) => query.isEnabled)
+        .map((query) => query.refetch()),
+    ])
+  }
 
   return (
     <AgronautasWorkspace
       runtimeMode={runtimeQuery.data?.mode ?? 'real'}
+      runtimeStatus={runtimeQuery.isLoading ? 'loading' : runtimeQuery.error ? 'error' : 'ready'}
+      runtimeError={runtimeQuery.error instanceof Error ? runtimeQuery.error.message : null}
       selectedFieldId={selectedFieldId}
       lastCreatedFieldId={lastCreatedFieldId}
       intakeError={intakeError}
@@ -153,6 +179,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       weatherTimeline={weatherTimelineQuery.data}
       dashboardPayload={dashboardQuery.data}
       hydrologyDashboard={hydrologyQuery.data}
+      geometry={geometryQuery.data}
       chatResponse={chatResponse}
        hydrologyChatState={hydrologyChatState}
       chatError={chatError}
@@ -160,9 +187,12 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       isHydrologyChatPending={hydrologyChatMutation.isPending}
       recomputeStatus={recomputeRequestResultSchema.safeParse(recomputeMutation.data).success ? recomputeMutation.data : undefined}
       isRecomputePending={recomputeMutation.isPending}
-      isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || hydrologyQuery.isLoading}
+       isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || dashboardQuery.isLoading}
+      queryErrors={queryErrors}
+      onRetrySync={retrySync}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}
+      onSaveGeometry={(input) => geometryMutation.mutateAsync(input) as Promise<NonNullable<typeof geometryQuery.data>>}
       onRequestRecompute={() => (selectedFieldId ? recomputeMutation.mutateAsync(selectedFieldId) : Promise.resolve(undefined))}
        onAskChat={(message) => chatMutation.mutateAsync(message)}
        onRetryChat={() => lastChatMessage ? chatMutation.mutateAsync(lastChatMessage) : Promise.resolve()}

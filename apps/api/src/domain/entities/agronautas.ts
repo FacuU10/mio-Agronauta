@@ -2,6 +2,7 @@ import type { AlertSnapshot as AlertSnapshotContract, RiskSnapshot as RiskSnapsh
 
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type SnapshotFreshness = 'fresh' | 'stale' | 'degraded'
+export type SignalFreshness = SnapshotFreshness | 'missing'
 export type DegradationReason =
   | 'weather_data_unavailable'
   | 'weather_data_stale'
@@ -34,6 +35,7 @@ export interface FieldProps {
   provinceCode: string
   centroid: GeoPoint
   polygonWkt?: string
+  geometrySource?: 'operator' | 'google' | 'fallback'
   boundaryMetadata: FieldBoundaryMetadata
 }
 
@@ -49,9 +51,14 @@ export interface FieldContextProps {
 export interface SignalSummary {
   provider: string
   observedAt: Date
+  runId?: string
+  sourceRunId?: string
+  acquiredAt?: Date
   freshnessHours: number
   confidence: number
+  freshness?: SignalFreshness
   staleCause?: string
+  degradationReasons?: DegradationReason[]
   provenance: string[]
 }
 
@@ -83,6 +90,11 @@ export interface RiskSnapshotFoundationProps {
   computedAt: Date
   validUntil: Date
   ruleVersion: string
+  engineId?: string
+  engineVersion?: string
+  sourceRunIds?: string[]
+  acquisitionTimes?: Date[]
+  alertSnapshotIds?: string[]
   drivers: RiskDriver[]
   evidenceRefs: string[]
   degradationReasons: DegradationReason[]
@@ -159,6 +171,11 @@ export class RiskSnapshotFoundation {
       computedAt: this.props.computedAt.toISOString(),
       validUntil: this.props.validUntil.toISOString(),
       ruleVersion: this.props.ruleVersion,
+      ...(this.props.engineId ? { engineId: this.props.engineId } : {}),
+      ...(this.props.engineVersion ? { engineVersion: this.props.engineVersion } : {}),
+      ...(this.props.sourceRunIds ? { sourceRunIds: this.props.sourceRunIds } : {}),
+      ...(this.props.acquisitionTimes ? { acquisitionTimes: this.props.acquisitionTimes.map((value) => value.toISOString()) } : {}),
+      ...(this.props.alertSnapshotIds ? { alertSnapshotIds: this.props.alertSnapshotIds } : {}),
       degradationReasons: this.props.degradationReasons,
       evidenceRefs: this.props.evidenceRefs,
       drivers: this.props.drivers,
@@ -175,6 +192,11 @@ export interface AlertSnapshotFoundation {
   confidence: number
   freshness: SnapshotFreshness
   degradationReasons: DegradationReason[]
+  runId?: string
+  sourceRunIds?: string[]
+  acquisitionTimes?: Date[]
+  engineId?: string
+  engineVersion?: string
 }
 
 export function toAlertSnapshotContract(snapshot: AlertSnapshotFoundation): AlertSnapshotContract {
@@ -188,6 +210,11 @@ export function toAlertSnapshotContract(snapshot: AlertSnapshotFoundation): Aler
     confidence: snapshot.confidence,
     freshness: snapshot.freshness,
     degradationReasons: snapshot.degradationReasons,
+    ...(snapshot.runId ? { runId: snapshot.runId } : {}),
+    ...(snapshot.sourceRunIds ? { sourceRunIds: snapshot.sourceRunIds } : {}),
+    ...(snapshot.acquisitionTimes ? { acquisitionTimes: snapshot.acquisitionTimes.map((value) => value.toISOString()) } : {}),
+    ...(snapshot.engineId ? { engineId: snapshot.engineId } : {}),
+    ...(snapshot.engineVersion ? { engineVersion: snapshot.engineVersion } : {}),
   }
 }
 

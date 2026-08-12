@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio as real_asyncio
 import json
 import logging
 from asyncio import CancelledError
@@ -10,7 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 import worker.queue.consumer as consumer_module
+import worker.main as worker_main
 from worker.queue.consumer import WorkflowQueueConsumer
+from worker.core.platform import configure_worker_event_loop, run_worker, worker_event_loop_factory
 
 
 class FakeRedis:
@@ -85,6 +88,111 @@ def _job(*, workflow_id: str = "demo-workflow", attempt: int = 1, max_attempts: 
         "payload": {"assetId": "asset-1", "inputUri": "https://example.com/input.json"},
         "lease": {"attempt": attempt, "maxAttempts": max_attempts},
     }
+
+
+def _job_with_asset_metadata() -> dict:
+    job = _job()
+    job["payload"]["assetMetadata"] = {
+        "contractVersion": "1.0.0",
+        "assetId": "asset-1",
+        "mimeType": "application/json",
+        "sourceUri": "https://example.com/input.json",
+        "checksum": {"algorithm": "sha256", "value": "a" * 16},
+        "sizeBytes": 12,
+        "capturedAt": "2026-06-05T00:00:00Z",
+        "ownership": {"tenantId": "tenant-1", "workspaceId": "workspace-1"},
+    }
+    return job
+
+
+def test_default_consumer_owns_the_agronautas_bull_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        consumer_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            redis_url="redis://test",
+            resolved_contracts_root=Path(__file__).resolve().parents[3] / "packages" / "contracts" / "schemas",
+        ),
+    )
+    monkeypatch.setattr(consumer_module, "build_logger", lambda settings: logging.getLogger("test-worker"))
+    monkeypatch.setattr(consumer_module.Redis, "from_url", lambda *args, **kwargs: FakeRedis())
+
+    consumer = WorkflowQueueConsumer()
+
+    assert consumer.queue_name == "bull:agronautas-runtime:wait"
+
+
+def test_consumer_validator_resolves_relative_schema_refs(consumer: WorkflowQueueConsumer) -> None:
+    consumer.validator.validate(_job_with_asset_metadata())
+
+
+def test_worker_entrypoint_starts_the_queue_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    class FakeConsumer:
+        async def consume_forever(self) -> None:
+            calls.append("consume_forever")
+
+    def fake_run(coroutine: object) -> None:
+        calls.append("run_worker")
+        real_asyncio.run(coroutine)
+
+    monkeypatch.setattr(worker_main, "WorkflowQueueConsumer", FakeConsumer)
+    monkeypatch.setattr(worker_main, "run_worker", fake_run)
+
+    worker_main.main()
+
+    assert calls == ["run_worker", "consume_forever"]
+
+
+def test_worker_entrypoint_configures_platform_boundary_before_asyncio_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    class FakeConsumer:
+        async def consume_forever(self) -> None:
+            events.append("consume_forever")
+
+    def fake_run(coroutine: object) -> None:
+        events.append("run_worker")
+        real_asyncio.run(coroutine)
+
+    monkeypatch.setattr(worker_main, "WorkflowQueueConsumer", FakeConsumer)
+    monkeypatch.setattr(worker_main, "run_worker", fake_run)
+
+    worker_main.main()
+
+    assert events == ["run_worker", "consume_forever"]
+
+
+def test_windows_worker_uses_selector_event_loop_for_psycopg() -> None:
+    previous_policy = real_asyncio.get_event_loop_policy()
+    try:
+        configure_worker_event_loop(platform_name="win32")
+        assert isinstance(real_asyncio.get_event_loop_policy(), real_asyncio.WindowsSelectorEventLoopPolicy)
+    finally:
+        real_asyncio.set_event_loop_policy(previous_policy)
+
+
+def test_non_windows_worker_keeps_platform_default_event_loop_policy() -> None:
+    previous_policy = real_asyncio.get_event_loop_policy()
+    configure_worker_event_loop(platform_name="linux")
+    assert real_asyncio.get_event_loop_policy() is previous_policy
+
+
+def test_worker_event_loop_factory_is_selector_loop_on_windows() -> None:
+    loop = worker_event_loop_factory(platform_name="win32")
+    selector_probe = real_asyncio.WindowsSelectorEventLoopPolicy().new_event_loop()
+    try:
+        assert isinstance(loop, type(selector_probe))
+    finally:
+        selector_probe.close()
+        loop.close()
+
+
+def test_worker_runner_does_not_suppress_database_boundary_errors() -> None:
+    async def fail_with_database_error() -> None:
+        raise RuntimeError("psycopg boundary failure")
+
+    with pytest.raises(RuntimeError, match="psycopg boundary failure"):
+        run_worker(fail_with_database_error())
 
 
 @pytest.mark.asyncio

@@ -17,12 +17,13 @@ export interface HydrologyIngestionRunResult {
 }
 
 export interface HydrologyIngestionRunner {
-  run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date; proofRunId?: string }): Promise<HydrologyIngestionRunResult>
+  run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date; scheduledSlot: string; ownerId: string; proofRunId?: string }): Promise<HydrologyIngestionRunResult>
 }
 
 type TimerCallback = (() => void) & { source: HydrologyIngestionSource }
 
 interface HydrologyIngestionSchedulerOptions {
+  ownerId?: string
   now?: () => Date
   setInterval?: (callback: TimerCallback, ms: number) => NodeJS.Timeout
   setTimeout?: (callback: TimerCallback, ms: number) => NodeJS.Timeout
@@ -69,9 +70,10 @@ export class HydrologyIngestionScheduler {
     }
     const attempt = metadata.attempt ?? 0
     const scheduledFor = metadata.scheduledFor ?? this.now()
+    const scheduledSlot = hydrologyScheduledSlotFor(source, scheduledFor)
     this.runningSources.add(source)
     try {
-      const result = await this.runner.run(source, { attempt, scheduledFor, proofRunId: metadata.proofRunId })
+      const result = await this.runner.run(source, { attempt, scheduledFor, scheduledSlot, ownerId: this.options.ownerId ?? 'hydrology-scheduler', proofRunId: metadata.proofRunId })
       const observedResult = { ...result, retry: null, skipped: false }
       this.options.onRunResult?.({ source, attempt, scheduledFor, result: observedResult })
       return observedResult
@@ -79,6 +81,8 @@ export class HydrologyIngestionScheduler {
       this.runningSources.delete(source)
     }
   }
+
+  
 
   msUntilNextUtcTime(hour: number, minute: number): number {
     const now = this.now()
@@ -129,4 +133,16 @@ export class HydrologyIngestionScheduler {
   private now(): Date {
     return this.options.now?.() ?? new Date()
   }
+}
+
+export function hydrologyScheduledSlotFor(source: HydrologyIngestionSource, at: Date): string {
+  const cadence = hydrologyIngestionCadences[source]
+  const slot = new Date(at)
+  if (cadence.kind === 'interval') {
+    slot.setTime(Math.floor(at.getTime() / cadence.everyMs) * cadence.everyMs)
+  } else {
+    slot.setUTCHours(cadence.hour, cadence.minute, 0, 0)
+    if (slot > at) slot.setUTCDate(slot.getUTCDate() - 1)
+  }
+  return `${source}:${slot.toISOString()}`
 }

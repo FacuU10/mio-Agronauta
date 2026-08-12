@@ -9,6 +9,8 @@ export const agronautasSupportedProvinceCodes = ['AR-W'] as const
 export const agronautasCountryCodes = ['AR'] as const
 export const agronautasSignalTypes = ['weather', 'alert', 'satellite_vegetation', 'fire', 'hydric_soil', 'hydrology'] as const
 export const agronautasSignalStatuses = ['fresh', 'stale', 'degraded', 'missing'] as const
+export const agronautasFieldGeometryStatuses = ['saved', 'point_only', 'unavailable'] as const
+export const agronautasFieldGeometrySources = ['operator', 'google', 'fallback'] as const
 export const agronautasProviderModes = ['live', 'seam', 'mock', 'unavailable'] as const
 export const degradationReasons = [
   'weather_data_unavailable',
@@ -33,6 +35,9 @@ export const hydrologyOperatorReceiptScopes = ['local', 'production'] as const
 export const hydrologyOperatorReceiptChatModes = ['groq', 'degraded-fallback', 'not_run'] as const
 export const hydrologyOperatorReceiptRunnerModes = ['direct', 'proxy'] as const
 export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
+export const hydrologyIberaRunStatuses = ['queued', 'started', 'completed', 'partial', 'failed'] as const
+export const hydrologyIberaCitationKinds = ['observed', 'forecast', 'alert'] as const
+export const hydrologyIberaCitationModes = ['validated-context', 'context-only', 'none'] as const
 export const hydrologyExcludedInputs = [
   'itaipu_discharge',
   'yacyreta_discharge',
@@ -126,6 +131,18 @@ export const demoContactSubmissionResponseSchema = z.object({
   status: z.literal('received'),
 })
 
+const geoPointSchema = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lng: z.number().finite().min(-180).max(180),
+})
+
+const polygonWktSchema = z.string().trim().min(1).max(100_000).refine((value) => /^POLYGON\s*\(\(/i.test(value), 'Only POLYGON WKT is supported')
+
+const geoJsonPolygonSchema = z.object({
+  type: z.literal('Polygon'),
+  coordinates: z.array(z.array(z.array(z.number().finite()).length(2)).min(4)).length(1),
+})
+
 export const fieldIntakeSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
@@ -139,8 +156,9 @@ export const fieldIntakeSchema = z.object({
   location: z.object({
     lat: z.number().min(-90).max(90),
     lng: z.number().min(-180).max(180),
-    polygonWkt: z.string().min(1).optional(),
-  }),
+    polygonWkt: polygonWktSchema.optional(),
+    geoJson: geoJsonPolygonSchema.optional(),
+  }).refine((location) => !(location.polygonWkt && location.geoJson), 'Provide exactly one polygon representation'),
 }).superRefine((value, ctx) => {
   if (!countryCodeSchema.safeParse(value.countryCode).success || !supportedProvinceCodeSchema.safeParse(value.provinceCode).success) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'OUT_OF_SUPPORTED_AREA', path: ['provinceCode'] })
@@ -155,7 +173,9 @@ export const signalEvidenceSchema = z.object({
   evidenceId: z.string().min(1).max(120),
   provider: z.string().min(1).max(80),
   signalType: signalTypeSchema,
+  sourceRunId: z.string().min(1).max(120).optional(),
   observedAt: z.string().datetime(),
+  acquiredAt: z.string().datetime().optional(),
   ingestedAt: z.string().datetime(),
   sourceUrl: z.string().url(),
   rawHash: z.string().min(1).max(160),
@@ -203,6 +223,11 @@ export const riskSnapshotSchema = z.object({
   computedAt: z.string().datetime(),
   validUntil: z.string().datetime(),
   ruleVersion: z.string().min(1).max(40),
+  engineId: z.string().min(1).max(80).optional(),
+  engineVersion: z.string().min(1).max(80).optional(),
+  sourceRunIds: z.array(z.string().min(1).max(120)).optional(),
+  acquisitionTimes: z.array(z.string().datetime()).optional(),
+  alertSnapshotIds: z.array(z.string().min(1).max(80)).optional(),
   degradationReasons: z.array(degradationReasonSchema).default([]),
   evidenceRefs: z.array(z.string().min(1)).min(1),
   drivers: z.array(riskDriverSchema).min(1),
@@ -212,6 +237,8 @@ export const dashboardSignalSchema = z.object({
   signalType: signalTypeSchema,
   status: signalStatusSchema,
   evidenceRefs: z.array(z.string().min(1)).default([]),
+  sourceRunId: z.string().min(1).max(120).optional(),
+  acquisitionTimes: z.array(z.string().datetime()).default([]),
   confidence: z.number().min(0).max(1),
   degradationReasons: z.array(degradationReasonSchema).default([]),
 })
@@ -246,6 +273,32 @@ export const dashboardSnapshotSchema = z.object({
     sourcesUnavailable: z.boolean(),
     staleFlags: z.array(degradationReasonSchema).default([]),
   }),
+  lineage: z.object({
+    riskSnapshotId: z.string().min(1),
+    sourceRunIds: z.array(z.string().min(1)),
+    acquisitionTimes: z.array(z.string().datetime()),
+    engineId: z.string().min(1),
+    engineVersion: z.string().min(1),
+    alertSnapshotIds: z.array(z.string().min(1)),
+  }).optional(),
+})
+
+export const fieldGeometryUpdateSchema = z.object({
+  polygonWkt: polygonWktSchema.optional(),
+  geoJson: geoJsonPolygonSchema.optional(),
+  expectedUpdatedAt: z.string().datetime().optional(),
+}).strict().refine((value) => Boolean(value.polygonWkt) !== Boolean(value.geoJson), 'Provide exactly one polygon representation')
+
+export const fieldGeometryResponseSchema = z.object({
+  fieldId: z.string().min(1).max(80),
+  polygonWkt: polygonWktSchema,
+  centroid: geoPointSchema,
+  areaM2: z.number().finite().positive(),
+  hectares: z.number().finite().positive(),
+  perimeterM: z.number().finite().positive(),
+  status: z.enum(agronautasFieldGeometryStatuses),
+  source: z.enum(agronautasFieldGeometrySources),
+  updatedAt: z.string().datetime().nullable(),
 })
 
 export const pdfReportRequestSchema = z.object({
@@ -258,6 +311,11 @@ export const alertSnapshotSchema = z.object({
   alertId: z.string().min(1).max(80),
   fieldId: z.string().min(1).max(80),
   basedOnSnapshotId: z.string().min(1).max(80),
+  runId: z.string().min(1).max(120).optional(),
+  sourceRunIds: z.array(z.string().min(1).max(120)).optional(),
+  acquisitionTimes: z.array(z.string().datetime()).optional(),
+  engineId: z.string().min(1).max(80).optional(),
+  engineVersion: z.string().min(1).max(80).optional(),
   type: z.enum(agronautasAlertTypes),
   priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   confidence: z.number().min(0).max(1),
@@ -441,6 +499,7 @@ export const hydrologyGovernmentMunicipalitySchema = z.object({
     freshness: z.enum(['fresh', 'degraded']),
     sourceUrl: z.string().url().optional(),
   })).default([]),
+  coverageGaps: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
 })
 
 export const hydrologyGovernmentProvinceAlertSchema = z.object({
@@ -469,6 +528,7 @@ export const hydrologyGovernmentDashboardResponseSchema = z.object({
   inaPredictions30d: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'INA' && value.forecastHorizonDays !== undefined && value.forecastHorizonDays !== null && value.forecastHorizonDays <= 30, 'Debe ser pronóstico INA hasta 30 días')).default([]),
   alerts: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'SMN' || value.source === 'INMET', 'Las alertas municipales provienen de SMN/INMET en Fase 1')).default([]),
   provenance: z.array(hydrologyGovernmentFreshnessSchema).default([]),
+  coverageGaps: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
 })
 
 export const hydrologyGovernmentIngestRequestSchema = z.object({
@@ -526,7 +586,38 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
     recordsIngested: z.number().int().nonnegative().default(0),
     errorMessage: z.string().min(1).max(240).optional(),
   })).default([]),
+  coverageGaps: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
 })
+
+export const hydrologyIberaSourceResultSchema = z.object({
+  source: hydrologySourceSchema,
+  status: z.enum(['success', 'failed', 'empty', 'skipped']),
+  recordsIngested: z.number().int().nonnegative(),
+  errorMessage: z.string().min(1).max(500).optional(),
+  provenanceUrl: z.string().min(1).max(500).optional(),
+  observedFrom: z.string().datetime().optional(),
+  observedTo: z.string().datetime().optional(),
+  httpSummary: hydrologyGovernmentHttpSummarySchema.optional(),
+  diagnostic: hydrologyGovernmentIngestDiagnosticSchema.optional(),
+})
+
+export const hydrologyIberaCitationSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  source: hydrologySourceSchema,
+  stationId: z.string().trim().min(1).max(120).optional(),
+  observedAt: z.string().datetime(),
+  sourceUrl: z.string().url().optional(),
+  kind: z.enum(hydrologyIberaCitationKinds),
+  freshness: hydrologyFreshnessSchema,
+}).strict()
+
+export const hydrologyIberaCopilotMetadataSchema = z.object({
+  citationMode: z.enum(hydrologyIberaCitationModes),
+  citations: z.array(hydrologyIberaCitationSchema).max(16).default([]),
+  unverifiedClaims: z.boolean(),
+  citationUnavailable: z.boolean().optional(),
+  unavailableReason: z.string().trim().min(1).max(240).optional(),
+}).strict()
 
 export const hydrologyOperatorReceiptSchema = z.object({
   verifier: z.literal('ibera-alerta-operator-v1'),
@@ -666,6 +757,8 @@ export const groundedChatResponseSchema = z.object({
 })
 
 export type FieldIntake = z.infer<typeof fieldIntakeSchema>
+export type FieldGeometryUpdate = z.infer<typeof fieldGeometryUpdateSchema>
+export type FieldGeometryResponse = z.infer<typeof fieldGeometryResponseSchema>
 export type SignalEvidence = z.infer<typeof signalEvidenceSchema>
 export type AgronautasProviderMode = z.infer<typeof providerModeSchema>
 export type SourceCadence = z.infer<typeof sourceCadenceSchema>
@@ -695,6 +788,10 @@ export type HydrologyGovernmentHttpSummary = z.infer<typeof hydrologyGovernmentH
 export type HydrologyGovernmentIngestRequest = z.infer<typeof hydrologyGovernmentIngestRequestSchema>
 export type HydrologyGovernmentIngestResponse = z.infer<typeof hydrologyGovernmentIngestResponseSchema>
 export type HydrologyOperatorReceipt = z.infer<typeof hydrologyOperatorReceiptSchema>
+export type HydrologyIberaRunStatus = (typeof hydrologyIberaRunStatuses)[number]
+export type HydrologyIberaSourceResult = z.infer<typeof hydrologyIberaSourceResultSchema>
+export type HydrologyIberaCitation = z.infer<typeof hydrologyIberaCitationSchema>
+export type HydrologyIberaCopilotMetadata = z.infer<typeof hydrologyIberaCopilotMetadataSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>

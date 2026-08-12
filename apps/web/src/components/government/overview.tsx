@@ -132,8 +132,9 @@ export function GovernmentOverview({ initialData = null, initialError = null }: 
                     <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">PNA</dt><dd className="font-black text-white">{summary.pnaHeightM ?? '—'} m</dd></div>
                     <div className="rounded-2xl bg-white/5 p-3"><dt className="text-slate-400">INA</dt><dd className="font-black text-white">{summary.inaHeightM ?? '—'} m</dd></div>
                   </dl>
-                  {summary.inaHeightM != null ? <p className="mt-3 text-sm text-slate-300">INA · {formatOfficialTime(summary.inaObservedAt)}{summary.inaSourceUrl ? <> · <a className="underline underline-offset-2" href={summary.inaSourceUrl} target="_blank" rel="noreferrer">Ver fuente INA</a></> : null}</p> : null}
+                  <p className="mt-3 text-sm text-slate-300">INA · {summary.inaHeightM != null ? `${summary.inaHeightM} m · ${formatOfficialTime(summary.inaObservedAt)}` : 'Pronóstico no disponible'}{summary.inaSourceUrl ? <> · <a className="underline underline-offset-2" href={summary.inaSourceUrl} target="_blank" rel="noreferrer">Ver fuente INA</a></> : null}</p>
                   <p className="mt-4 flex items-center gap-2 text-sm text-slate-300"><Clock3 size={16} aria-hidden="true" />{formatOfficialTime(summary.lastSuccessfulObservedAt)}</p>
+                  <p className="mt-2 text-sm text-amber-100">Brechas de cobertura: {summary.coverageGaps.length ? summary.coverageGaps.join(' · ') : 'No informadas'}</p>
                   <div className="mt-5 border-t border-white/10 pt-4" aria-label={`Alertas oficiales de ${municipality.name}`}>
                     {municipality.officialAlerts.length > 0 ? municipality.officialAlerts.map((alert) => (
                       <div key={`${alert.source}-${alert.coverageKey}-${alert.observedAt}`} className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4">

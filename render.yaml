@@ -30,6 +30,20 @@ services:
       - key: GROQ_TIMEOUT_MS
         sync: false
 
+  - type: cron
+    runtime: node
+    name: ibera-hydrology-cron
+    schedule: "0 * * * *"
+    buildCommand: pnpm install --frozen-lockfile && pnpm --dir packages/zod-schemas build && pnpm --dir packages/hydrology-engine build && pnpm --dir apps/api build
+    startCommand: pnpm --dir apps/api scheduler:once -- --render-cron
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: HYDROLOGY_INGEST_TOKEN
+        sync: false
+      - key: HYDROLOGY_CRON_OWNER_ID
+        value: ibera-hydrology-cron
+
   - type: web
     runtime: node
     name: agronautas-web

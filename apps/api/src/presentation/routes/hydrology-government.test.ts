@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, runnerTimeoutFor, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
+import type { IberaIngestRunInput, IberaIngestRunRecord } from '@repo/hydrology-engine'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, coverageGapsFor, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, runnerTimeoutFor, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -499,6 +500,44 @@ test('GET /api/hydrology/ingest/:runId does not expose unknown job state', async
   assert.doesNotMatch(JSON.stringify(json), /DATABASE_URL|password|secret|postgres/i)
 })
 
+test('statusPath can reconstruct a terminal Iberá run from the durable ledger after coordinator recreation', async () => {
+  const durable = new Map<string, IberaIngestRunRecord>()
+  const repository = {
+    async createIberaIngestRun(input: IberaIngestRunInput): Promise<{ record: IberaIngestRunRecord; created: boolean }> {
+      const existing = durable.get(input.id)
+      const record = existing ?? { ...input, startedAt: new Date(input.startedAt), expiresAt: new Date(input.expiresAt) }
+      durable.set(input.id, record as IberaIngestRunRecord)
+      return { record: record as IberaIngestRunRecord, created: !existing }
+    },
+    async updateIberaIngestRun(id: string, patch: Partial<Pick<IberaIngestRunInput, 'status' | 'sourceResults' | 'diagnostics' | 'leaseOwner' | 'leaseExpiresAt' | 'finishedAt'>>): Promise<void> {
+      const existing = durable.get(id)
+      if (!existing) throw new Error('missing durable run')
+      durable.set(id, { ...existing, ...patch } as IberaIngestRunRecord)
+    },
+    async getIberaIngestRun(id: string): Promise<IberaIngestRunRecord | null> { return durable.get(id) ?? null },
+  }
+  const runner = async (input: { runId?: string; proofRunId?: string }) => ({
+    runId: input.runId,
+    proofRunId: input.proofRunId,
+    status: 'completed' as const,
+    requestedSources: ['PNA'] as ['PNA'],
+    sources: ['PNA'] as ['PNA'],
+    results: [{ source: 'PNA' as const, status: 'success' as const, recordsIngested: 3 }],
+    sourceResults: [{ source: 'PNA' as const, status: 'success' as const, recordsIngested: 3 }],
+  })
+  const first = createHydrologyIngestionCoordinator(runner, repository)
+  const admission = first.start({ source: 'PNA', runId: 'durable-run-1', proofRunId: 'durable-proof-1' }, 'manual')
+  if (!admission.ok) throw new Error('durable admission unexpectedly rejected')
+  await admission.promise
+  const restarted = createHydrologyIngestionCoordinator(runner, repository)
+
+  const observed = await restarted.observe('durable-run-1')
+
+  assert.equal(observed?.status, 'completed')
+  assert.equal(observed?.proofRunId, 'durable-proof-1')
+  assert.deepEqual(observed?.results?.map((result) => [result.source, result.recordsIngested]), [['PNA', 3]])
+})
+
 test('POST /api/hydrology/ingest persists background runner failures to proof records', async () => {
   const savedRuns: Array<{ source: string; proofRunId?: string; status: string; recordsIngested: number }> = []
   const response = await request(createTestApp({
@@ -951,7 +990,7 @@ test('government municipality seeding inserts Corrientes PNA municipalities only
   assert.equal(insertMunicipalities.params?.[6], 5)
 })
 
-test('government municipality seeding skips every write when all municipalities already exist', async () => {
+test('government municipality seeding reconciles mappings when all municipalities already exist', async () => {
   const writes: string[] = []
   const db = {
     async query(sql: string) {
@@ -963,8 +1002,10 @@ test('government municipality seeding skips every write when all municipalities 
 
   const result = await seedGovernmentMunicipalitiesIfEmpty(db)
 
-  assert.deepEqual(result, { inserted: 0, skipped: true })
-  assert.deepEqual(writes, [])
+  assert.deepEqual(result, { inserted: 0, skipped: false })
+  assert.equal(writes.filter((sql) => /INSERT INTO hydrology_stations/.test(sql)).length, 20)
+  assert.equal(writes.filter((sql) => /INSERT INTO agronautas_municipalities/.test(sql)).length, 17)
+  assert.equal(writes.filter((sql) => /INSERT INTO municipality_gauge_mappings/.test(sql)).length, 17)
 })
 
 test('PNA flood-risk dictionary contains the 17 monitored Corrientes ports with official thresholds', () => {
@@ -1052,6 +1093,45 @@ test('POST /api/hydrology/municipalities/:id/copilot/chat streamea eventos del c
   assert.match(body, /municipalityId/) 
   assert.match(body, /Respuesta basada en SMN/)
   assert.match(body, /event: done/)
+})
+
+test('Iberá coverage manifest exposes only adapter-supported station relationships and explicit gaps', () => {
+  const corrientes = PNA_FLOOD_RISK_PORTS.find((port) => port.id === 'corrientes')
+  const ituzaingo = PNA_FLOOD_RISK_PORTS.find((port) => port.id === 'ituzaingo')
+
+  assert.deepEqual(corrientes?.inaStationIds, ['6764'])
+  assert.deepEqual(ituzaingo?.inaStationIds, [])
+  assert.deepEqual(coverageGapsFor({
+    primaryPnaPortId: corrientes?.primaryPnaPortId ?? null,
+    secondaryPnaPortIds: corrientes?.secondaryPnaPortIds ?? [],
+    inaStationIds: corrientes?.inaStationIds ?? [],
+    smnRegionIds: corrientes?.smnRegionIds ?? [],
+    inmetStationIds: corrientes?.inmetStationIds ?? [],
+  }), [])
+  assert.deepEqual(coverageGapsFor({
+    primaryPnaPortId: ituzaingo?.primaryPnaPortId ?? null,
+    secondaryPnaPortIds: ituzaingo?.secondaryPnaPortIds ?? [],
+    inaStationIds: ituzaingo?.inaStationIds ?? [],
+    smnRegionIds: ituzaingo?.smnRegionIds ?? [],
+    inmetStationIds: ituzaingo?.inmetStationIds ?? [],
+  }), ['INA: sin estación asociada'])
+})
+
+test('POST /api/hydrology/municipalities/:id/copilot/chat preserves validated citation metadata and safe absence', async () => {
+  const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat() {
+    yield { type: 'metadata' as const, data: { citationMode: 'none', citations: [], unverifiedClaims: true, citationUnavailable: true, unavailableReason: 'No hay una referencia oficial verificable para esta respuesta.' } }
+    yield { type: 'done' as const, data: { model: 'test' } }
+  } } }), '/api/hydrology/municipalities/mercedes/copilot/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: '¿Qué ocurre?' }),
+  })
+
+  const body = await response.text()
+  assert.equal(response.status, 200)
+  assert.match(body, /citationMode/)
+  assert.match(body, /citationUnavailable/)
+  assert.match(body, /No hay una referencia oficial verificable/)
 })
 
 test('POST /api/hydrology/municipalities/:id/copilot/chat redacts provider failures from the degraded SSE response', async () => {

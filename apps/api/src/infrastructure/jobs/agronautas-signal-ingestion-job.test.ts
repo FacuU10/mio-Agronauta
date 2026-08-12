@@ -47,6 +47,8 @@ test('ClimateIngestionJob persists normalized successful evidence', async () => 
       async fetch() {
         return {
           observedAt: new Date('2026-06-03T05:00:00.000Z'),
+          acquiredAt: new Date('2026-06-03T05:01:00.000Z'),
+          sourceRunId: 'weather-provider-run-1',
           temperatureC: 33,
           rainfallMm7d: 90,
           humidityPct: 74,
@@ -72,5 +74,13 @@ test('ClimateIngestionJob persists normalized successful evidence', async () => 
     humidityPct: 74,
     confidence: 0.88,
     provenance: ['adapter:weather-api:climate'],
+    sourceRunId: 'weather-provider-run-1',
+    acquiredAt: '2026-06-03T05:01:00.000Z',
+  })
+  assert.deepEqual(result.lineage, {
+    sourceRunIds: ['weather-provider-run-1'],
+    acquisitionTimes: ['2026-06-03T05:01:00.000Z'],
+    freshness: 'fresh',
+    degradationReasons: [],
   })
 })

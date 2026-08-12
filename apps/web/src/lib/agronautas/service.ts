@@ -18,8 +18,10 @@ import {
   hydrologyDashboardSchema,
   riskCurrentSchema,
   runtimeInfoSchema,
+  fieldGeometryResponseSchema,
+  fieldGeometryUpdateSchema,
 } from './schemas'
-import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
 const AGRONAUTAS_REQUEST_MODES = {
@@ -45,6 +47,8 @@ export interface AgronautasService {
   getRuntime(): Promise<RuntimeInfo>
   createFieldIntake(input: FieldIntake): Promise<FieldCreated>
   getField(fieldId: string): Promise<FieldOverview>
+  getFieldGeometry?: (fieldId: string) => Promise<FieldGeometryResponse>
+  updateFieldGeometry?: (fieldId: string, input: FieldGeometryUpdate) => Promise<FieldGeometryResponse>
   getCurrentRisk(fieldId: string): Promise<RiskCurrent>
   getCurrentAlerts(fieldId: string): Promise<AlertsCurrent>
   getAlertsTimeline(fieldId: string): Promise<AlertsTimelineResponse>
@@ -65,6 +69,8 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
     getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
     createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
+    getFieldGeometry: async (fieldId) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'))),
+    updateFieldGeometry: async (fieldId, input) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'), { method: 'PATCH', body: JSON.stringify(fieldGeometryUpdateSchema.parse(input)) })),
     getCurrentRisk: async (fieldId) => riskCurrentSchema.parse(await apiClient(fieldEndpoint(fieldId, '/risk/current'))),
     getCurrentAlerts: async (fieldId) => alertsCurrentSchema.parse(await apiClient(fieldEndpoint(fieldId, '/alerts/current'))),
     getAlertsTimeline: async (fieldId) => alertsTimelineResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/alerts/timeline'))),
@@ -81,6 +87,19 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
 
 export function createAgronautasMockService(): AgronautasService {
   const recomputeRuns = new Map<string, number>()
+  const geometries = new Map<string, FieldGeometryResponse>()
+
+  const fallbackGeometry = (fieldId: string): FieldGeometryResponse => fieldGeometryResponseSchema.parse({
+    fieldId,
+    polygonWkt: 'POLYGON((-58.08 -29.18,-58.07 -29.18,-58.07 -29.19,-58.08 -29.18))',
+    centroid: { lat: -29.1833, lng: -58.0767 },
+    areaM2: 10000,
+    hectares: 1,
+    perimeterM: 400,
+    status: 'point_only',
+    source: 'fallback',
+    updatedAt: null,
+  })
 
   return {
     async getRuntime() {
@@ -160,6 +179,26 @@ export function createAgronautasMockService(): AgronautasService {
         alerts,
         recompute: { status: 'enqueued' },
       })
+    },
+    async getFieldGeometry(fieldId) {
+      return geometries.get(fieldId) ?? fallbackGeometry(fieldId)
+    },
+    async updateFieldGeometry(fieldId, input) {
+      const current = geometries.get(fieldId) ?? fallbackGeometry(fieldId)
+      const polygonWkt = input.polygonWkt ?? current.polygonWkt
+      const updated = fieldGeometryResponseSchema.parse({
+        ...current,
+        fieldId,
+        polygonWkt,
+        status: 'saved',
+        source: 'operator',
+        hectares: 1,
+        areaM2: 10000,
+        perimeterM: polygonWkt === current.polygonWkt ? current.perimeterM : 400,
+        updatedAt: '2026-08-12T12:00:00.000Z',
+      })
+      geometries.set(fieldId, updated)
+      return updated
     },
     async getAlertsTimeline(fieldId) {
       const alerts = await this.getCurrentAlerts(fieldId)

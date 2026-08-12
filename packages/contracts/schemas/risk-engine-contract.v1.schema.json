@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://golden-boilerplate.dev/contracts/risk-engine-contract.v1",
+  "title": "AgronautasRiskEngineContractV1",
+  "description": "Cross-runtime comparison contract. It records divergence and blocks canonical-engine claims until a later decision.",
+  "type": "object",
+  "required": ["contractVersion", "canonicalEngine", "engines", "vectors"],
+  "properties": {
+    "contractVersion": {
+      "const": "risk-engine-contract.v1"
+    },
+    "canonicalEngine": {
+      "$ref": "#/$defs/CanonicalEngineGate"
+    },
+    "engines": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/EngineDescriptor"
+      }
+    },
+    "vectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/GoldenVector"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "CanonicalEngineGate": {
+      "type": "object",
+      "required": ["status", "engineId"],
+      "properties": {
+        "status": {
+          "const": "undecided"
+        },
+        "engineId": {
+          "const": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "EngineDescriptor": {
+      "type": "object",
+      "required": ["id", "algorithmVersion", "envelopeVersion", "canonicalEligible"],
+      "properties": {
+        "id": {
+          "enum": ["risk-v0", "open-meteo-basic-v1"]
+        },
+        "algorithmVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "envelopeVersion": {
+          "const": "1.0.0"
+        },
+        "canonicalEligible": {
+          "const": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExpectedOutput": {
+      "type": "object",
+      "required": ["score", "confidence", "validityHours", "freshness"],
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "validityHours": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "freshness": {
+          "enum": ["fresh", "degraded", "stale"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GoldenVector": {
+      "type": "object",
+      "required": ["id", "inputsByEngine", "expectedByEngine", "comparison"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputsByEngine": {
+          "type": "object",
+          "required": ["risk-v0", "open-meteo-basic-v1"],
+          "properties": {
+            "risk-v0": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "open-meteo-basic-v1": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "expectedByEngine": {
+          "type": "object",
+          "required": ["risk-v0", "open-meteo-basic-v1"],
+          "properties": {
+            "risk-v0": {
+              "$ref": "#/$defs/ExpectedOutput"
+            },
+            "open-meteo-basic-v1": {
+              "$ref": "#/$defs/ExpectedOutput"
+            }
+          },
+          "additionalProperties": false
+        },
+        "comparison": {
+          "type": "object",
+          "required": ["status", "differences", "parityClaim"],
+          "properties": {
+            "status": {
+              "const": "divergent"
+            },
+            "differences": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": ["inputs", "score", "confidence", "validityHours", "freshness", "degradationReasons"]
+              }
+            },
+            "parityClaim": {
+              "const": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

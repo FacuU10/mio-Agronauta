@@ -190,6 +190,7 @@ function SafeResultView({ result, onRetry }: { result: SafeIngestView; onRetry: 
       <div className="mt-5">
         <h3 className="font-bold text-slate-100">Fuentes solicitadas</h3>
         <p className="mt-2 text-slate-300">{result.requestedSources.length ? result.requestedSources.join(' · ') : 'No informadas'}</p>
+        <p className="mt-2 text-sm text-amber-100">Cobertura local: {result.coverageGaps.length ? result.coverageGaps.join(' · ') : 'Sin brechas informadas'}</p>
       </div>
 
       {result.results.length ? (

@@ -14,6 +14,8 @@ import {
   riskSnapshotSchema,
   riskTimelineResponseSchema,
   weatherTimelineResponseSchema,
+  fieldGeometryResponseSchema,
+  fieldGeometryUpdateSchema,
 } from '@repo/zod-schemas'
 
 export {
@@ -30,14 +32,18 @@ export {
   riskTimelineResponseSchema,
   weatherTimelineResponseSchema,
   dashboardSnapshotSchema,
+  fieldGeometryResponseSchema,
+  fieldGeometryUpdateSchema,
 }
 
 export const fieldCreatedSchema = z.object({
   fieldId: z.string().min(1),
+  crop: z.string().min(1).optional(),
   coverage: z.object({
     locality: z.string().min(1),
     provinceCode: z.string().min(1),
     boundaryVersion: z.string().optional(),
+    status: z.enum(['supported', 'unsupported-locality']).optional(),
   }),
 })
 
@@ -62,6 +68,14 @@ export const alertsCurrentSchema = z.object({
   snapshot: riskSnapshotSchema.nullable(),
   alerts: z.array(alertSnapshotSchema),
   recompute: z.object({ status: z.enum(['enqueued', 'already_in_progress']) }).optional(),
+  lineage: z.object({
+    riskSnapshotId: z.string(),
+    sourceRunIds: z.array(z.string()),
+    acquisitionTimes: z.array(z.string()),
+    engineId: z.string(),
+    engineVersion: z.string(),
+    alertSnapshotIds: z.array(z.string()),
+  }).nullable().optional(),
 })
 
 export const alertsTimelineResponseSchema = z.object({
@@ -146,5 +160,7 @@ export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema
 export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>
 export type WeatherTimelineResponse = z.infer<typeof weatherTimelineResponseSchema>
 export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
+export type FieldGeometryResponse = z.infer<typeof fieldGeometryResponseSchema>
+export type FieldGeometryUpdate = z.infer<typeof fieldGeometryUpdateSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>

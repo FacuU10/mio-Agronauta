@@ -4,6 +4,7 @@ import express from 'express'
 import { createServer } from 'node:http'
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import { createHealthRouter, READINESS_DEPENDENCY_TIMEOUT_MS, withReadinessTimeout } from './health'
+import { PostgresAgronautasRuntimeReadinessRepository } from '../../infrastructure/database/postgres/agronautas-runtime-readiness-repository'
 
 const baseConfig = {
   mode: 'real' as const,
@@ -160,6 +161,23 @@ test('GET /ready exposes worker requirement when runtime is mandatory', async ()
   const body = await response.json() as { worker?: { required: boolean; heartbeatMaxAgeSeconds: number } }
   assert.equal(body.worker?.required, true)
   assert.equal(body.worker?.heartbeatMaxAgeSeconds, 120)
+})
+
+test('worker readiness query guards against expired leases and non-running jobs', async () => {
+  let capturedSql = ''
+  const repository = new PostgresAgronautasRuntimeReadinessRepository({
+    async query(sql: string) {
+      capturedSql = sql
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasRuntimeReadinessRepository>[0])
+
+  await repository.getWorkerReadiness(120, new Date('2026-08-04T00:00:00.000Z'))
+
+  assert.match(capturedSql, /status\s+IN\s*\('leased',\s*'running'\)/i)
+  assert.match(capturedSql, /SELECT\s+"jobId",\s*"runId",\s*"heartbeatAt"/i)
+  assert.match(capturedSql, /lease_expires_at\s*(IS NULL|>=)/i)
+  assert.match(capturedSql, /ORDER BY\s+"heartbeatAt"/i)
 })
 
 test('GET /ready fails only on active dependencies and still reports Mongo as optional capability', async () => {

@@ -189,15 +189,32 @@ test('api environment template uses a secret-manager placeholder for ingest', as
   assert.match(envExample, /^HYDROLOGY_INGEST_TOKEN=replace-with-secret-manager-reference$/m)
 })
 
-test('Render manifest declares exactly two current Native Node services', async () => {
+test('Render manifest declares two current Native Node services and one hydrology Cron', async () => {
   const renderYaml = await readRootText('render.yaml')
   const serviceNames = [...renderYaml.matchAll(/^\s+name: ([a-z0-9-]+)$/gm)].map((match) => match[1])
 
   assert.equal((renderYaml.match(/^\s+- type: web$/gm) ?? []).length, 2)
-  assert.equal((renderYaml.match(/^\s+runtime: node$/gm) ?? []).length, 2)
-  assert.deepEqual(serviceNames, ['agronautas-api', 'agronautas-web'])
+  assert.equal((renderYaml.match(/^\s+runtime: node$/gm) ?? []).length, 3)
+  assert.equal((renderYaml.match(/^\s+- type: cron$/gm) ?? []).length, 1)
+  assert.deepEqual(serviceNames, ['agronautas-api', 'ibera-hydrology-cron', 'agronautas-web'])
   assert.doesNotMatch(renderYaml, /docker|python|type:\s*worker|worker:/i)
   assert.doesNotMatch(renderYaml, /\$\{|\{\{|\}\}|<%/)
+})
+
+test('Render baseline does not claim Python worker availability or recompute readiness', async () => {
+  const renderYaml = await readRootText('render.yaml')
+  const workerProject = await readRootText('apps/workflow-runtime-python/pyproject.toml')
+
+  assert.doesNotMatch(renderYaml, /python|worker|agronautas-risk-recompute/i)
+  assert.match(workerProject, /workflow-runtime\s*=\s*"worker\.main:main"/)
+  assert.doesNotMatch(renderYaml, /workflow-runtime-python|WORKER_CONTRACTS_ROOT/i)
+})
+
+test('Python worker hosting is documented as a separate prerequisite from Render Node services', async () => {
+  const workerReadme = await readRootText('apps/workflow-runtime-python/README.md')
+  assert.match(workerReadme, /separate.*hosting|hosting.*separate/i)
+  assert.match(workerReadme, /PostgreSQL|Redis/i)
+  assert.match(workerReadme, /not.*Render|Render.*not/i)
 })
 
 test('Render commands match current workspace scripts and preserve separate routes', async () => {
@@ -221,6 +238,9 @@ test('Render commands match current workspace scripts and preserve separate rout
   assert.match(renderYaml, /startCommand: pnpm --dir apps\/api start/)
   assert.match(renderYaml, /buildCommand: pnpm install --frozen-lockfile && pnpm --dir apps\/web build/)
   assert.match(renderYaml, /startCommand: pnpm --dir apps\/web start/)
+  assert.match(renderYaml, /schedule: "0 \* \* \* \*"/)
+  assert.match(renderYaml, /startCommand: pnpm --dir apps\/api scheduler:once -- --render-cron/)
+  assert.match(renderYaml, /HYDROLOGY_CRON_OWNER_ID/)
   assert.match(server, /app\.use\('\/api\/hydrology'/)
   assert.match(server, /app\.use\(runtimeConfig\.routePrefix, createAgronautasRouter\(\)\)/)
   assert.match(server, /app\.use\(`\$\{runtimeConfig\.routePrefix\}\/v1`/)
@@ -236,6 +256,7 @@ test('Render manifest declares current environment names and disables both sched
   for (const schedulerName of ['HYDROLOGY_SCHEDULER_ENABLED', 'AGRONAUTAS_SCHEDULER_ENABLED']) {
     assert.match(renderYaml, new RegExp(`- key: ${schedulerName}\\r?\\n\\s+value: false`))
   }
+  assert.match(renderYaml, /- key: HYDROLOGY_CRON_OWNER_ID\r?\n\s+value: ibera-hydrology-cron/)
 
   for (const secretName of ['DATABASE_URL', 'REDIS_URL', 'HYDROLOGY_INGEST_TOKEN', 'GROQ_API_KEY', 'AGRONAUTAS_BFF_BEARER_TOKEN']) {
     assert.match(renderYaml, new RegExp(`- key: ${secretName}\\r?\\n\\s+sync: false`))

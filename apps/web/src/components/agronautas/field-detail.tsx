@@ -2,7 +2,7 @@
 
 import { createElement } from 'react'
 import { useMutation, useQueries } from '@tanstack/react-query'
-import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, FieldOverview, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, FieldGeometryResponse, FieldOverview, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
 import { ProductShell } from '@/components/shell/product-shell'
 import { EvidenceDrawer, EvidenceStateBadge, FreshnessBanner, MapFrame, MetricCard, ReportAction, SourceCard, StatusBadge, Timeline, VisibilityState } from '@/components/visibility/primitives'
@@ -10,6 +10,7 @@ import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-sta
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { FieldGeometryEditor } from './field-geometry-editor'
 
 const React = { createElement }
 const CANONICAL_DEMO_FIELD_ID = 'field-demo-1'
@@ -23,6 +24,8 @@ export interface AgronautasFieldDetailProps {
   weatherTimeline: WeatherTimelineResponse
   dashboard: DashboardSnapshot
   alertsTimeline: AlertsTimelineResponse
+  geometry?: FieldGeometryResponse
+  onSaveGeometry?: (input: { polygonWkt: string; expectedUpdatedAt?: string }) => Promise<FieldGeometryResponse>
   recomputeStatus?: RecomputeRequestResult
   isRecomputePending: boolean
   onRequestRecompute: () => Promise<unknown>
@@ -88,17 +91,18 @@ export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
           </Card>
         </section>
 
-        <section id="field-timelines" className="grid gap-5 lg:grid-cols-3">
+        <section id="field-timelines" className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           <Card><CardHeader><CardTitle>Riesgo timeline</CardTitle><CardDescription>Snapshots persistidos para auditar evolución y vigencia.</CardDescription></CardHeader><CardContent><Timeline items={props.riskTimeline.items.map((item) => ({ label: formatDateTime(item.computedAt), value: `${item.score}/100 · ${riskLabel(item.level)}`, detail: `Confianza ${Math.round(item.confidence * 100)}% · ${item.snapshotId}` }))} title="Evolución de riesgo" /></CardContent></Card>
           <Card><CardHeader><CardTitle>Clima timeline</CardTitle><CardDescription>Observaciones contratadas, con frescura y causa de degradación.</CardDescription></CardHeader><CardContent className="grid gap-3">{props.weatherTimeline.items.length ? props.weatherTimeline.items.map((item) => <div key={`${item.provider}-${item.observedAt}`} className="rounded-2xl border border-stone-200 p-3"><p className="font-medium">{item.provider}</p><p className="text-sm text-stone-600">{formatDateTime(item.observedAt)} · {item.temperatureC}°C · lluvia 7d {item.rainfallMm7d} mm</p><p className="text-sm text-stone-600">Confianza {Math.round(item.confidence * 100)}%{item.staleCause ? ` · ${item.staleCause}` : ''}</p></div>) : <p className="text-sm text-stone-600">Sin timeline climático persistido.</p>}</CardContent></Card>
           <Card><CardHeader><CardTitle>Alertas timeline</CardTitle><CardDescription>Historial de alertas y snapshot de origen.</CardDescription></CardHeader><CardContent className="grid gap-3">{props.alertsTimeline.items.length ? props.alertsTimeline.items.map((item) => <div key={item.alertId} className="rounded-2xl border border-stone-200 p-3"><p className="font-medium">{alertLabel(item.type)}</p><p className="text-sm text-stone-600">{item.alertId} · {item.freshness} · snapshot {item.basedOnSnapshotId}</p></div>) : <p className="text-sm text-stone-600">Sin alertas persistidas.</p>}</CardContent></Card>
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[1fr,1.1fr]">
-          <MapFrame title="Ubicación y cobertura" fallback={`${props.field.locality} · ${props.field.provinceCode} · punto ${props.field.centroid.lat.toFixed(4)}, ${props.field.centroid.lng.toFixed(4)}`}>
+         <section className="grid gap-5 lg:grid-cols-[1fr,1.1fr]">
+          {props.geometry && props.onSaveGeometry ? <FieldGeometryEditor fieldId={props.field.fieldId} initialGeometry={props.geometry} onSave={async (input) => props.onSaveGeometry?.({ polygonWkt: input.polygonWkt ?? '', expectedUpdatedAt: input.expectedUpdatedAt }) as Promise<FieldGeometryResponse>} /> : null}
+           <MapFrame title="Ubicación y cobertura" fallback={`${props.field.locality} · ${props.field.provinceCode} · punto ${props.field.centroid.lat.toFixed(4)}, ${props.field.centroid.lng.toFixed(4)}`}>
             <div className="flex flex-wrap items-center gap-2"><StatusBadge state="success" /><span className="text-sm text-stone-700">Cobertura por punto resuelta.</span></div>
           </MapFrame>
-          <Card><CardHeader><CardTitle>Frescura y procedencia</CardTitle><CardDescription>Las señales no disponibles se mantienen visibles como límite, no como cero.</CardDescription></CardHeader><CardContent className="grid gap-3">{props.dashboard.provenance.map((source) => <SourceCard key={source.evidenceId} source={source.provider} mode={source.providerMode} observedAt={source.observedAt} lastSuccessfulObservedAt={source.lastSuccessfulObservedAt} validUntil={source.nextDueAt} sourceUrl={source.sourceUrl} />)}<p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-4 text-sm text-stone-600">`polygonWkt` se conserva en el contrato de intake, pero este MVP sólo resuelve cobertura y evidencia por punto; no promete análisis poligonal.</p></CardContent></Card>
+           <Card><CardHeader><CardTitle>Frescura y procedencia</CardTitle><CardDescription>Las señales no disponibles se mantienen visibles como límite, no como cero.</CardDescription></CardHeader><CardContent className="grid gap-3">{props.dashboard.provenance.length ? props.dashboard.provenance.map((source) => <SourceCard key={source.evidenceId} source={source.provider} mode={source.providerMode} observedAt={source.observedAt} lastSuccessfulObservedAt={source.lastSuccessfulObservedAt} validUntil={source.nextDueAt} sourceUrl={source.sourceUrl} />) : <VisibilityState state="missing" title="Procedencia no disponible" description="El backend no devolvió fuentes verificables para esta vista." />}<p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-4 text-sm text-stone-600">`polygonWkt` se conserva en el contrato de intake, pero este MVP sólo resuelve cobertura y evidencia por punto; no promete análisis poligonal.</p></CardContent></Card>
         </section>
 
         <Card>
@@ -142,7 +146,8 @@ export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId:
     { queryKey: ['agronautas', 'detail-risk-timeline', fieldId], queryFn: () => resolvedService.getRiskTimeline(fieldId) },
     { queryKey: ['agronautas', 'detail-weather-timeline', fieldId], queryFn: () => resolvedService.getWeatherTimeline(fieldId) },
     { queryKey: ['agronautas', 'detail-dashboard', fieldId], queryFn: () => resolvedService.getDashboard(fieldId) },
-    { queryKey: ['agronautas', 'detail-alerts-timeline', fieldId], queryFn: () => resolvedService.getAlertsTimeline(fieldId) },
+     { queryKey: ['agronautas', 'detail-alerts-timeline', fieldId], queryFn: () => resolvedService.getAlertsTimeline(fieldId) },
+     { queryKey: ['agronautas', 'detail-geometry', fieldId], queryFn: () => resolvedService.getFieldGeometry?.(fieldId), enabled: Boolean(resolvedService.getFieldGeometry) },
   ] })
   const recompute = useMutation({ mutationFn: () => resolvedService.requestRecompute(fieldId) })
   const hasError = queries.find((query) => query.error)
@@ -155,11 +160,18 @@ export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId:
   const weatherTimeline = queries[5]?.data as WeatherTimelineResponse | undefined
   const dashboard = queries[6]?.data as DashboardSnapshot | undefined
   const alertsTimeline = queries[7]?.data as AlertsTimelineResponse | undefined
+  const geometry = queries[8]?.data as FieldGeometryResponse | undefined
 
   if (hasError) return <ProductShell product="agronautas" title="Detalle del lote" description="No se pudo leer el contrato del lote." navItems={[{ href: '/demo', label: 'Workspace' }]}><main className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="error" title="No se pudo cargar el lote" description="El endpoint existente devolvió un error. Podés reintentar sin perder el contexto de la ruta." onRetry={() => void Promise.all(queries.map((query) => query.refetch()))} /></main></ProductShell>
   if (isLoading || !field || !risk || !alerts || !status || !riskTimeline || !weatherTimeline || !dashboard || !alertsTimeline) return <ProductShell product="agronautas" title="Detalle del lote" description="Cargando datos contratados." navItems={[{ href: '/demo', label: 'Workspace' }]}><main className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="loading" title="Cargando detalle del lote" description="Sincronizando riesgo, alertas, timelines y procedencia." /></main></ProductShell>
 
-  return <AgronautasFieldDetail field={field} risk={risk} alerts={alerts} status={status} riskTimeline={riskTimeline} weatherTimeline={weatherTimeline} dashboard={dashboard} alertsTimeline={alertsTimeline} recomputeStatus={recompute.data} isRecomputePending={recompute.isPending} onRequestRecompute={() => recompute.mutateAsync()} />
+  const saveGeometry = async (input: { polygonWkt: string; expectedUpdatedAt?: string }) => {
+    if (!resolvedService.updateFieldGeometry) throw new Error('La edición de geometría no está disponible')
+    const result = await resolvedService.updateFieldGeometry(fieldId, input)
+    await queries[8]?.refetch()
+    return result
+  }
+  return <AgronautasFieldDetail field={field} risk={risk} alerts={alerts} status={status} riskTimeline={riskTimeline} weatherTimeline={weatherTimeline} dashboard={dashboard} alertsTimeline={alertsTimeline} geometry={geometry} onSaveGeometry={saveGeometry} recomputeStatus={recompute.data} isRecomputePending={recompute.isPending} onRequestRecompute={() => recompute.mutateAsync()} />
 }
 
 export function AgronautasFieldDetailPageClientForTests() {

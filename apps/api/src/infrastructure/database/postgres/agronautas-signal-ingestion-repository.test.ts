@@ -21,12 +21,19 @@ test('PostgresSignalIngestionRepository upserts raw evidence by run id', async (
     startedAt: new Date('2026-07-04T19:00:00.000Z'),
     finishedAt: new Date('2026-07-04T19:00:10.000Z'),
     observedAt: new Date('2026-07-04T18:00:00.000Z'),
+    sourceRunId: 'open-meteo-provider-run-1',
+    acquiredAt: new Date('2026-07-04T19:00:05.000Z'),
+    freshness: 'fresh',
+    degradationReasons: [],
     evidencePayload: { raw: { temperature_2m: 31.2 }, normalized: { rainfallMm7d: 12.4 }, confidence: 0.91 },
   })
 
   assert.match(calls[0]?.sql ?? '', /ON CONFLICT \(run_id\) DO UPDATE/)
   assert.equal(calls[0]?.params[3], 'open-meteo:field-1:2026-07-04T19')
   assert.match(String(calls[0]?.params[9]), /temperature_2m/)
+  const evidence = JSON.parse(String(calls[0]?.params[9])) as Record<string, unknown>
+  assert.equal(evidence['sourceRunId'], 'open-meteo-provider-run-1')
+  assert.equal(evidence['acquiredAt'], '2026-07-04T19:00:05.000Z')
 })
 
 test('PostgresSignalIngestionRepository reads latest successful evidence for latest-good fallback', async () => {
@@ -37,8 +44,8 @@ test('PostgresSignalIngestionRepository reads latest successful evidence for lat
       return {
         rows: [{
           field_id: 'field-1', provider: 'nasa-firms', signal_type: 'fire', run_id: 'run-good', status: 'succeeded',
-          stale_cause: null, started_at: '2026-07-04T15:00:00.000Z', finished_at: '2026-07-04T15:01:00.000Z',
-          observed_at: '2026-07-04T14:00:00.000Z', evidence_payload: { hotspots: 2, confidence: 0.86 }, degradation_reason: null,
+           stale_cause: null, started_at: '2026-07-04T15:00:00.000Z', finished_at: '2026-07-04T15:01:00.000Z',
+           observed_at: '2026-07-04T14:00:00.000Z', evidence_payload: { hotspots: 2, confidence: 0.86, sourceRunId: 'firms-run-1', acquiredAt: '2026-07-04T15:00:30.000Z', freshness: 'fresh', degradationReasons: [] }, degradation_reason: null,
         }],
       }
     },
@@ -49,6 +56,8 @@ test('PostgresSignalIngestionRepository reads latest successful evidence for lat
   assert.equal(latest?.provider, 'nasa-firms')
   assert.equal(latest?.evidencePayload['hotspots'], 2)
   assert.equal(latest?.observedAt?.toISOString(), '2026-07-04T14:00:00.000Z')
+  assert.equal(latest?.sourceRunId, 'firms-run-1')
+  assert.equal(latest?.acquiredAt?.toISOString(), '2026-07-04T15:00:30.000Z')
 })
 
 test('PostgresSourceCadenceRepository persists researched per-source cadence idempotently', async () => {

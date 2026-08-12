@@ -31,8 +31,9 @@ export class HydrologyPruneJob {
     this.interval = null
   }
 
-  async run(): Promise<{ telemetryDeleted: number; snapshotsDeleted: number }> {
-    return this.repository.pruneOldData(30, this.now())
+  async run(): Promise<{ telemetryDeleted: number; snapshotsDeleted: number; ledgerDeleted: number }> {
+    const result = await this.repository.pruneOldData(30, this.now())
+    return { ...result, ledgerDeleted: result.ledgerDeleted ?? 0 }
   }
 
   msUntilNextUtcHour(hour: number): number {

@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import type { AgronautasJobRunRepository, AgronautasRuntimeDispatcher, RecomputeLockRepository } from '../../domain/repositories/agronautas'
 import { AgronautasRuntimeDispatcherError } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
+import { AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS, WORKFLOW_CONTRACT_VERSION } from '@golden/workflows'
 
 const API_RECOMPUTE_LOCK_TTL_SECONDS = 120
-const AGRONAUTAS_RUNTIME_CONTRACT_VERSION = '1.0.0'
+const AGRONAUTAS_RUNTIME_CONTRACT_VERSION = WORKFLOW_CONTRACT_VERSION
 
 export interface RequestRiskRecomputeResult {
   status: 'enqueued' | 'already_in_progress'
@@ -76,6 +77,7 @@ export class RequestRiskRecomputeUseCase {
       requestId,
       correlationId,
       runtimeMode: runtimeConfig.mode,
+      lease: { attempt: 1, maxAttempts: AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS },
       queuedAt,
       resultPayload: {},
     })
@@ -91,6 +93,7 @@ export class RequestRiskRecomputeUseCase {
         correlationId,
         requestedAt: queuedAt,
         runtimeMode: runtimeConfig.mode,
+        lease: { attempt: 1, maxAttempts: AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS },
       })
     } catch (error) {
       await this.jobRunRepository.markFailed(jobId, new Date(), 'WORKER_UNAVAILABLE', error instanceof Error ? error.message : 'unknown_worker_error')

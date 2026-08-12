@@ -50,6 +50,10 @@ test('mantiene enums y metadata compartida alineados con el catálogo JSON Schem
   assert.equal(schema.$defs.CorrientesRiceZoneBoundaryMetadata.properties.sourceName.type, 'string')
   assert.deepEqual(schema.$defs.FieldIntake.properties.crop.enum, ['rice', 'maize', 'soybean', 'wheat', 'sunflower', 'pasture', 'citrus', 'other'])
   assert.equal(schema.$defs.SignalEvidence.properties.rawHash.type, 'string')
+  assert.equal(schema.$defs.SignalEvidence.properties.sourceRunId.type, 'string')
+  assert.equal(schema.$defs.SignalEvidence.properties.acquiredAt.format, 'date-time')
+  assert.equal(schema.$defs.RiskSnapshot.properties.engineId.type, 'string')
+  assert.equal(schema.$defs.AlertSnapshot.properties.basedOnSnapshotId.type, 'string')
   assert.equal(schema.$defs.SchedulerStatus.properties.nextDueBySource.items.properties.cadence.$ref, '#/$defs/SourceCadence')
   assert.equal(corrientesRiceZoneBoundarySource.normalizationStatus, 'placeholder-pending-ingest')
 })
@@ -98,7 +102,6 @@ test('keeps explicit non-goals aligned with the actual evidence and map boundari
     'Docker',
     'Google Maps',
     'WhatsApp',
-    'durable/editable polygons',
     'scheduler rewrite',
     'Risk Engine',
     'hydraulic simulation',
@@ -116,11 +119,42 @@ test('keeps explicit non-goals aligned with the actual evidence and map boundari
 
   assert.ok(persistedFieldColumns)
   assert.ok(persistedFieldReads.length >= 2)
-  assert.doesNotMatch(persistedFieldColumns, /\bboundary\b(?!_source|_version)/i)
+  assert.match(persistedFieldColumns, /\bboundary\b/i)
+  assert.match(persistedFieldColumns, /\bcentroid\b/i)
+  assert.match(persistedFieldColumns, /\bboundary_area_m2\b/i)
+  assert.match(persistedFieldColumns, /\bboundary_perimeter_m\b/i)
   for (const query of persistedFieldReads) {
-    assert.doesNotMatch(query, /\bboundary\b(?!_source|_version)/i)
+    assert.match(query, /ST_AsText\(boundary\)\s+AS\s+polygon_wkt/i)
   }
   assert.match(workspace, /no promete análisis poligonal/i)
   assert.match(workspace, /evita controles hidráulicos personalizados/i)
   assert.match(municipalDetail, /sin convertir mapeos en impacto hidráulico/i)
+})
+
+test('risk-engine vectors record divergence and keep canonical selection undecided', () => {
+  const riskEngineSchema = JSON.parse(readFileSync(join(contractsRoot, 'schemas', 'risk-engine-contract.v1.schema.json'), 'utf8')) as {
+    $defs: {
+      CanonicalEngineGate: { properties: { status: { const: string }; engineId: { const: string | null } } }
+    }
+  }
+  const vectors = JSON.parse(readFileSync(join(contractsRoot, 'risk-engine', 'golden-vectors.json'), 'utf8')) as {
+    canonicalEngine: { status: string; engineId: string | null }
+    vectors: Array<{
+      id: string
+      expectedByEngine: Record<string, { score: number; confidence: number; validityHours: number; freshness: string }>
+      comparison: { status: string; differences: string[]; parityClaim: boolean }
+    }>
+  }
+
+  assert.equal(riskEngineSchema.$defs.CanonicalEngineGate.properties.status.const, 'undecided')
+  assert.equal(riskEngineSchema.$defs.CanonicalEngineGate.properties.engineId.const, null)
+  assert.deepEqual(vectors.canonicalEngine, { status: 'undecided', engineId: null })
+  assert.ok(vectors.vectors.length >= 2)
+
+  for (const vector of vectors.vectors) {
+    assert.deepEqual(Object.keys(vector.expectedByEngine).sort(), ['open-meteo-basic-v1', 'risk-v0'])
+    assert.equal(vector.comparison.status, 'divergent', vector.id)
+    assert.equal(vector.comparison.parityClaim, false, vector.id)
+    assert.ok(vector.comparison.differences.length > 0, vector.id)
+  }
 })

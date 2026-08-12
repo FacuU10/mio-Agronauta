@@ -78,6 +78,10 @@ export class ComputeFieldRiskUseCase {
         computedAt,
         validUntil: new Date(computedAt.getTime() + SNAPSHOT_TTL_HOURS * 3_600_000),
         ruleVersion: RISK_RULE_VERSION,
+        engineId: RISK_RULE_VERSION,
+        engineVersion: RISK_RULE_VERSION,
+        sourceRunIds: [climate?.sourceRunId ?? climate?.runId, satellite?.sourceRunId ?? satellite?.runId].filter((value): value is string => Boolean(value)),
+        acquisitionTimes: [climate?.acquiredAt, satellite?.acquiredAt].filter((value): value is Date => value instanceof Date),
         drivers,
         evidenceRefs,
         degradationReasons,
@@ -114,13 +118,13 @@ function collectDegradationReasons(input: {
 
   if (!input.climate) {
     reasons.add('weather_data_unavailable')
-  } else if (input.climate.freshnessHours > 12 || input.climate.staleCause) {
+  } else if ((input.climate.freshness && input.climate.freshness !== 'fresh') || input.climate.freshnessHours > 12 || input.climate.staleCause) {
     reasons.add('weather_data_stale')
   }
 
   if (!input.satellite) {
     reasons.add('satellite_data_unavailable')
-  } else if (input.satellite.freshnessHours > 72 || input.satellite.staleCause) {
+  } else if ((input.satellite.freshness && input.satellite.freshness !== 'fresh') || input.satellite.freshnessHours > 72 || input.satellite.staleCause) {
     reasons.add('satellite_data_stale')
   }
 

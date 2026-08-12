@@ -47,7 +47,7 @@ export class PostgresAlertSnapshotRepository implements AlertSnapshotRepository 
 
   async listTimeline(fieldId: string, limit: number): Promise<AlertSnapshotRecord[]> {
     const result = await this.pool.query(
-      `SELECT id, field_id, risk_snapshot_id, run_id, alert_type, priority, confidence, freshness, stale_cause, degradation_reasons
+      `SELECT id, field_id, risk_snapshot_id, run_id, alert_type, priority, confidence, freshness, stale_cause, degradation_reasons, payload
        FROM alert_snapshots WHERE field_id = $1 ORDER BY created_at DESC LIMIT $2`,
       [fieldId, limit],
     )
@@ -57,7 +57,7 @@ export class PostgresAlertSnapshotRepository implements AlertSnapshotRepository 
 
   private async listByCreatedAt(fieldId: string, createdAt: Date): Promise<AlertSnapshotRecord[]> {
     const result = await this.pool.query(
-      `SELECT id, field_id, risk_snapshot_id, run_id, alert_type, priority, confidence, freshness, stale_cause, degradation_reasons
+      `SELECT id, field_id, risk_snapshot_id, run_id, alert_type, priority, confidence, freshness, stale_cause, degradation_reasons, payload
        FROM alert_snapshots WHERE field_id = $1 AND created_at = $2 ORDER BY priority ASC, confidence DESC`,
       [fieldId, createdAt],
     )
@@ -67,6 +67,13 @@ export class PostgresAlertSnapshotRepository implements AlertSnapshotRepository 
 }
 
 function mapAlertRow(row: Record<string, unknown>): AlertSnapshotRecord {
+  const payload = row['payload'] && typeof row['payload'] === 'object' ? row['payload'] as Record<string, unknown> : {}
+  const acquisitionTimes = Array.isArray(payload['acquisitionTimes'])
+    ? payload['acquisitionTimes']
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => new Date(item))
+        .filter((item) => !Number.isNaN(item.getTime()))
+    : undefined
   return {
     alertId: String(row['id']),
     fieldId: String(row['field_id']),
@@ -78,5 +85,9 @@ function mapAlertRow(row: Record<string, unknown>): AlertSnapshotRecord {
     freshness: row['freshness'] as AlertSnapshotRecord['freshness'],
     degradationReasons: ((row['degradation_reasons'] as string[]) ?? []).map(String),
     staleCause: row['stale_cause'] == null ? undefined : String(row['stale_cause']),
+    sourceRunIds: Array.isArray(payload['sourceRunIds']) ? payload['sourceRunIds'].filter((item): item is string => typeof item === 'string') : undefined,
+    acquisitionTimes,
+    engineId: typeof payload['engineId'] === 'string' ? payload['engineId'] : undefined,
+    engineVersion: typeof payload['engineVersion'] === 'string' ? payload['engineVersion'] : undefined,
   }
 }

@@ -12,6 +12,8 @@ import { createGovernmentIngestionRunner, createHydrologyGovernmentRouter, creat
 import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
 import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type SourceWindow, type ScheduledWindowLock } from './infrastructure/jobs/agronautas-scheduler'
 import { PostgresSignalIngestionRepository } from './infrastructure/database/postgres/agronautas-signal-ingestion-repository'
+import { HydrologyRepository } from '@repo/hydrology-engine'
+import { getPostgresPool } from './infrastructure/database/postgres/pool'
 import { PostgresSourceCadenceRepository } from './infrastructure/database/postgres/agronautas-source-cadence-repository'
 import { RedisSchedulerWindowLock } from './infrastructure/database/redis/scheduler-lock'
 import type { SignalIngestionRepository, SourceCadenceRepository } from './domain/repositories/agronautas'
@@ -45,12 +47,14 @@ interface HydrologySchedulerStartupDeps {
   ingestionRunner?: (input: HydrologyIngestionInput) => Promise<GovernmentIngestionResponse>
   ingestionCoordinator?: HydrologyIngestionCoordinator
   schedulerFactory?: (runner: HydrologyIngestionRunner) => Pick<HydrologyIngestionScheduler, 'start'>
+  ownerId?: string
 }
 
 export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyIngestionCoordinator } = {}): Application {
   const app = express()
   const runtimeConfig = getAgronautasRuntimeConfig()
-  const hydrologyIngestionCoordinator = deps.hydrologyIngestionCoordinator ?? createHydrologyIngestionCoordinator()
+  const hydrologyRepository = new HydrologyRepository(getPostgresPool())
+  const hydrologyIngestionCoordinator = deps.hydrologyIngestionCoordinator ?? createHydrologyIngestionCoordinator(createGovernmentIngestionRunner({ repository: hydrologyRepository }), hydrologyRepository)
 
   app.set('trust proxy', runtimeConfig.trustProxy)
 
@@ -82,7 +86,8 @@ export function startServer(): void {
   ProductionEnvValidatorPort.validate()
   const port = resolveApiPort()
 
-  const hydrologyIngestionCoordinator = createHydrologyIngestionCoordinator()
+  const hydrologyRepository = new HydrologyRepository(getPostgresPool())
+  const hydrologyIngestionCoordinator = createHydrologyIngestionCoordinator(createGovernmentIngestionRunner({ repository: hydrologyRepository }), hydrologyRepository)
   const app = createApp({ hydrologyIngestionCoordinator })
 
   app.listen(port, () => {
@@ -124,7 +129,7 @@ export function startAgronautasSchedulerFromEnv(env: NodeJS.ProcessEnv = process
 }
 
 export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: HydrologySchedulerStartupDeps = {}): Pick<HydrologyIngestionScheduler, 'start'> | null {
-  if (env['HYDROLOGY_SCHEDULER_ENABLED'] !== 'true') {
+  if (env['HYDROLOGY_SCHEDULER_ENABLED'] !== 'true' || env['RENDER'] === 'true') {
     logger.info({ enabled: false }, 'Hydrology ingestion scheduler disabled')
     return null
   }
@@ -132,12 +137,13 @@ export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: Hyd
   const ingestionCoordinator = deps.ingestionCoordinator ?? createHydrologyIngestionCoordinator(deps.ingestionRunner ?? createGovernmentIngestionRunner())
   const schedulerRunner: HydrologyIngestionRunner = {
     async run(source, metadata) {
-      const result = await ingestionCoordinator.run({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}`, proofRunId: metadata.proofRunId }, `scheduler:${source}`)
+      const result = await ingestionCoordinator.run({ source: toGovernmentHydrologySource(source), reason: `scheduler:${source}:attempt-${metadata.attempt}`, proofRunId: metadata.proofRunId, runId: `scheduled-${metadata.scheduledSlot}`, scheduledSlot: metadata.scheduledSlot, leaseOwner: metadata.ownerId }, `scheduler:${metadata.scheduledSlot}`)
       const sourceResult = result.results?.find((item) => item.source === source)
       return { inserted: sourceResult?.recordsIngested ?? 0, unchanged: 0 }
     },
   }
   const scheduler = deps.schedulerFactory?.(schedulerRunner) ?? new HydrologyIngestionScheduler(schedulerRunner, {
+    ownerId: deps.ownerId,
     onBackgroundError: (error, metadata) => logger.error({ error, ...metadata }, 'Hydrology scheduler background ingestion failed'),
     onRunResult: ({ source, attempt, scheduledFor, result }) => logger.info({ source, attempt, scheduledFor, ...result }, 'Hydrology scheduler ingestion result'),
   })

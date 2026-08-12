@@ -100,6 +100,22 @@ img {
     linear-gradient(120deg, rgba(15, 61, 39, 0.06), transparent 42%);
 }
 
+.agronautas-canvas > * {
+  animation: agronautas-reveal 500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.agronautas-canvas > *:nth-child(2) { animation-delay: 70ms; }
+.agronautas-canvas > *:nth-child(3) { animation-delay: 120ms; }
+
+@keyframes agronautas-reveal {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agronautas-canvas > * { animation: none; }
+}
+
 .bg-grid-pattern {
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),

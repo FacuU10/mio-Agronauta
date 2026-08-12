@@ -10,6 +10,12 @@ test('municipality alert coverage seed is reviewed, versioned, and free of dynam
   assert.equal(new Set(MUNICIPALITY_ALERT_COVERAGE_SEED.map((item) => `${item.municipalityId}:${item.source}:${item.officialCoverageKey}`)).size, MUNICIPALITY_ALERT_COVERAGE_SEED.length)
 })
 
+test('municipality alert coverage seed is reconciled to the current 17-locality inventory', () => {
+  assert.equal(new Set(MUNICIPALITY_ALERT_COVERAGE_SEED.map((item) => item.municipalityId)).size, 17)
+  assert.equal(MUNICIPALITY_ALERT_COVERAGE_SEED.filter((item) => item.source === 'SMN').length, 17)
+  assert.equal(MUNICIPALITY_ALERT_COVERAGE_SEED.filter((item) => item.source === 'INMET').length, 34)
+})
+
 test('municipality alert coverage seed is idempotent and rolls back failed writes', async () => {
   const rows = new Set<string>()
   const transactions: string[] = []

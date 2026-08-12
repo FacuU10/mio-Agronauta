@@ -1,10 +1,52 @@
 import type { QueryResult } from 'pg'
-import type { HydrologyDenseContextV1, HydrologyStationReference, HydrologyTelemetry } from '@repo/zod-schemas'
-import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
+import type { HydrologyDenseContextV1, HydrologyIberaRunStatus, HydrologyIberaSourceResult, HydrologyStationReference, HydrologyTelemetry, HydrologySource } from '@repo/zod-schemas'
+import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IberaIngestRunInput, type IberaIngestRunRecord, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
 
 interface DbExecutor { query(sql: string, params?: unknown[]): Promise<QueryResult> }
 interface Db extends DbExecutor { connect?: () => Promise<DbClient> }
 interface DbClient extends DbExecutor { release(): void }
+
+interface IberaIngestRunRow extends Record<string, unknown> {
+  id: string
+  proof_run_id: string
+  status: HydrologyIberaRunStatus
+  requested_sources: HydrologySource[]
+  scheduled_slot: string | null
+  lease_owner: string | null
+  lease_expires_at: Date | string | null
+  source_results: HydrologyIberaSourceResult[] | string
+  diagnostics: Record<string, unknown> | string
+  reason: string | null
+  started_at: Date | string
+  finished_at: Date | string | null
+  expires_at: Date | string
+  created_at?: Date | string
+  updated_at?: Date | string
+}
+
+function parseJson<T>(value: T | string): T {
+  return typeof value === 'string' ? JSON.parse(value) as T : value
+}
+
+function toIberaIngestRunRecord(row: IberaIngestRunRow): IberaIngestRunRecord {
+  return {
+    id: row.id,
+    proofRunId: row.proof_run_id,
+    status: row.status,
+    requestedSources: row.requested_sources,
+    sourceResults: parseJson(row.source_results),
+    diagnostics: parseJson(row.diagnostics),
+    ...(row.scheduled_slot ? { scheduledSlot: row.scheduled_slot } : {}),
+    ...(row.lease_owner ? { leaseOwner: row.lease_owner } : {}),
+    ...(row.lease_expires_at ? { leaseExpiresAt: new Date(row.lease_expires_at) } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+    startedAt: new Date(row.started_at),
+    ...(row.finished_at ? { finishedAt: new Date(row.finished_at) } : {}),
+    expiresAt: new Date(row.expires_at),
+    ...(row.created_at ? { createdAt: new Date(row.created_at) } : {}),
+    ...(row.updated_at ? { updatedAt: new Date(row.updated_at) } : {}),
+  }
+}
 
 export interface MunicipalityGaugeMappings {
   primaryPnaPortId: string | null
@@ -99,7 +141,7 @@ export class HydrologyRepository {
 
   async saveTelemetry(records: NormalizedHydrologyTelemetry[], db: DbExecutor = this.db): Promise<void> {
     for (const record of records.filter((item) => item.forecastHorizonDays === undefined || item.forecastHorizonDays <= 30)) {
-      if ((record.source === 'INMET' || record.source === 'SMN') && record.metric === 'storm_alert') await this.ensureAlertStation(record, db)
+      await this.ensureStation(record, db)
       await db.query(
         `INSERT INTO hydrology_telemetry (station_id, source, metric, observed_at, ingested_at, last_successful_observed_at, value, unit, tendency, forecast_horizon_days, confidence, quality, freshness, source_url, raw)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -118,8 +160,8 @@ export class HydrologyRepository {
     }
   }
 
-  private async ensureAlertStation(record: NormalizedHydrologyTelemetry, db: DbExecutor = this.db): Promise<void> {
-    const stationName = typeof record.raw?.['title'] === 'string' ? record.raw['title'].slice(0, 160) : `${record.source} alerta oficial`
+  private async ensureStation(record: NormalizedHydrologyTelemetry, db: DbExecutor = this.db): Promise<void> {
+    const stationName = typeof record.raw?.['title'] === 'string' ? record.raw['title'].slice(0, 160) : `${record.source} ${record.stationId}`
     await db.query(
       `INSERT INTO hydrology_stations (id, source, station_code, station_name, river_name, zone, source_url, is_active, country_code)
        VALUES ($1,$2,$1,$3,null,null,$4,true,'AR')
@@ -130,10 +172,60 @@ export class HydrologyRepository {
 
   async saveIngestionRun(run: IngestionRunInput): Promise<void> {
     await this.db.query(
-      `INSERT INTO hydrology_ingestion_runs (source, proof_run_id, station_id, status, started_at, finished_at, observed_from, observed_to, last_successful_observed_at, records_ingested, excluded_metrics, error_message, provenance_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [run.source, run.proofRunId ?? null, run.stationId ?? null, run.status, run.startedAt, run.finishedAt ?? null, run.observedFrom ?? null, run.observedTo ?? null, run.lastSuccessfulObservedAt ?? null, run.recordsIngested, run.excludedMetrics ?? [], run.errorMessage ?? null, run.provenanceUrl ?? null],
+      `INSERT INTO hydrology_ingestion_runs (source, proof_run_id, station_id, status, started_at, finished_at, observed_from, observed_to, last_successful_observed_at, records_ingested, excluded_metrics, error_message, provenance_url, ibera_run_id, diagnostics)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [run.source, run.proofRunId ?? null, run.stationId ?? null, run.status, run.startedAt, run.finishedAt ?? null, run.observedFrom ?? null, run.observedTo ?? null, run.lastSuccessfulObservedAt ?? null, run.recordsIngested, run.excludedMetrics ?? [], run.errorMessage ?? null, run.provenanceUrl ?? null, run.iberaRunId ?? null, run.diagnostics ?? {}],
     )
+  }
+
+  async createIberaIngestRun(input: IberaIngestRunInput): Promise<{ record: IberaIngestRunRecord; created: boolean }> {
+    const result = await this.db.query(
+      `INSERT INTO ibera_ingest_runs (id, proof_run_id, status, requested_sources, scheduled_slot, lease_owner, lease_expires_at, source_results, diagnostics, reason, started_at, finished_at, expires_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,now())
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id, proof_run_id, status, requested_sources, scheduled_slot, lease_owner, lease_expires_at, source_results, diagnostics, reason, started_at, finished_at, expires_at, created_at, updated_at`,
+      [input.id, input.proofRunId, input.status, input.requestedSources, input.scheduledSlot ?? null, input.leaseOwner ?? null, input.leaseExpiresAt ?? null, JSON.stringify(input.sourceResults), JSON.stringify(input.diagnostics), input.reason ?? null, input.startedAt, input.finishedAt ?? null, input.expiresAt],
+    ) as QueryResult<IberaIngestRunRow>
+    if (result.rows[0]) return { record: toIberaIngestRunRecord(result.rows[0]), created: true }
+    const existing = await this.getIberaIngestRun(input.id)
+    if (!existing) throw new Error('Iberá ingest ledger admission did not return a record')
+    return { record: existing, created: false }
+  }
+
+  async updateIberaIngestRun(id: string, patch: Partial<Pick<IberaIngestRunInput, 'status' | 'sourceResults' | 'diagnostics' | 'leaseOwner' | 'leaseExpiresAt' | 'finishedAt'>>): Promise<void> {
+    const result = await this.db.query(
+      `UPDATE ibera_ingest_runs
+          SET status = COALESCE($2, status), source_results = COALESCE($3::jsonb, source_results), diagnostics = COALESCE($4::jsonb, diagnostics), lease_owner = COALESCE($5, lease_owner), lease_expires_at = COALESCE($6, lease_expires_at), finished_at = COALESCE($7, finished_at), updated_at = now()
+        WHERE id = $1`,
+      [id, patch.status ?? null, patch.sourceResults ? JSON.stringify(patch.sourceResults) : null, patch.diagnostics ? JSON.stringify(patch.diagnostics) : null, patch.leaseOwner ?? null, patch.leaseExpiresAt ?? null, patch.finishedAt ?? null],
+    )
+    if ((result.rowCount ?? 0) === 0) throw new Error('Iberá ingest ledger run not found')
+  }
+
+  async claimIberaIngestLease(id: string, owner: string, now = new Date(), leaseMs = 120_000): Promise<IberaIngestRunRecord | null> {
+    const result = await this.db.query(
+      `UPDATE ibera_ingest_runs
+          SET status = CASE WHEN status = 'queued' THEN 'started' ELSE status END,
+              lease_owner = $2,
+              lease_expires_at = $3 + ($4::bigint * interval '1 millisecond'),
+              updated_at = now()
+        WHERE id = $1
+          AND (lease_owner IS NULL OR lease_expires_at <= $3)
+          AND status IN ('queued', 'started', 'partial')
+        RETURNING id, proof_run_id, status, requested_sources, scheduled_slot, lease_owner, lease_expires_at, source_results, diagnostics, reason, started_at, finished_at, expires_at, created_at, updated_at`,
+      [id, owner, now, leaseMs],
+    ) as QueryResult<IberaIngestRunRow>
+    return result.rows[0] ? toIberaIngestRunRecord(result.rows[0]) : null
+  }
+
+  async getIberaIngestRun(id: string): Promise<IberaIngestRunRecord | null> {
+    const result = await this.db.query(
+      `SELECT id, proof_run_id, status, requested_sources, scheduled_slot, lease_owner, lease_expires_at, source_results, diagnostics, reason, started_at, finished_at, expires_at, created_at, updated_at
+         FROM ibera_ingest_runs
+        WHERE id = $1 AND expires_at > now()`,
+      [id],
+    ) as QueryResult<IberaIngestRunRow>
+    return result.rows[0] ? toIberaIngestRunRecord(result.rows[0]) : null
   }
 
   async getSourceFreshness(): Promise<HydrologySourceFreshness[]> {
@@ -240,10 +332,23 @@ export class HydrologyRepository {
     return { municipality, gaugeMappings, latestTelemetry, officialAlerts }
   }
 
-  async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number }> {
-    void retentionDays
-    void now
-    return { telemetryDeleted: 0, snapshotsDeleted: 0 }
+  async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number; ledgerDeleted: number }> {
+    const days = Number.isFinite(retentionDays) && retentionDays > 0 ? Math.floor(retentionDays) : 30
+    const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+    const result = await this.db.query(
+      `WITH expired AS (
+         SELECT id FROM ibera_ingest_runs
+          WHERE expires_at <= $1
+          ORDER BY expires_at ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT $2
+       )
+       DELETE FROM ibera_ingest_runs run USING expired
+        WHERE run.id = expired.id
+       RETURNING run.id`,
+      [cutoff, 100],
+    )
+    return { telemetryDeleted: 0, snapshotsDeleted: 0, ledgerDeleted: result.rows.length }
   }
 }
 

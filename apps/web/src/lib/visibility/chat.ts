@@ -15,6 +15,9 @@ export interface ChatStreamState {
   receivedAt?: string
   error?: string
   retryable: boolean
+  citationMode?: 'validated-context' | 'context-only' | 'none'
+  citationUnavailable?: boolean
+  unavailableReason?: string
 }
 
 export interface ChatViewModel extends ChatStreamState {
@@ -52,6 +55,9 @@ export function createChatViewModelFromStream(state: ChatStreamState): ChatViewM
     sources: state.sources.length ? state.sources : metadataSources,
     limits: state.limits.length ? state.limits : metadataLimits,
     retryable: state.retryable || state.status === 'partial' || state.status === 'error' || state.status === 'degraded',
+    citationMode: isCitationMode(state.metadata['citationMode']) ? state.metadata['citationMode'] : undefined,
+    citationUnavailable: state.metadata['citationUnavailable'] === true,
+    unavailableReason: typeof state.metadata['unavailableReason'] === 'string' ? state.metadata['unavailableReason'] : undefined,
   }
 }
 
@@ -124,4 +130,8 @@ function asFacts(value: unknown): Array<{ label: string; value: string }> {
   return Array.isArray(value)
     ? value.filter((item): item is { label: string; value: string } => Boolean(item && typeof item === 'object' && typeof (item as { label?: unknown }).label === 'string' && typeof (item as { value?: unknown }).value === 'string'))
     : []
+}
+
+function isCitationMode(value: unknown): value is NonNullable<ChatStreamState['citationMode']> {
+  return value === 'validated-context' || value === 'context-only' || value === 'none'
 }

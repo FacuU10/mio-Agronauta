@@ -20,6 +20,7 @@ export type SafeIngestView = {
   statusPath?: string
   requestedSources: HydrologySource[]
   results: SafeIngestResult[]
+  coverageGaps: string[]
 }
 
 export type PollOptions = {
@@ -47,7 +48,7 @@ export async function pollStatusPath(statusPath: string, options: PollOptions = 
     if (attempt < maxAttempts - 1 && delayMs > 0) await wait(delayMs)
   }
 
-  return latest ?? { status: 'queued', requestedSources: [], results: [] }
+  return latest ?? { status: 'queued', requestedSources: [], results: [], coverageGaps: [] }
 }
 
 export function sanitizeIngestResponse(value: unknown): SafeIngestView | null {
@@ -60,6 +61,7 @@ export function sanitizeIngestResponse(value: unknown): SafeIngestView | null {
     statusPath: safeStatusPath(value['statusPath']),
     requestedSources: safeSources(value['requestedSources']),
     results,
+    coverageGaps: safeStrings(value['coverageGaps'], 8, 160),
   }
 }
 
@@ -114,6 +116,13 @@ function sanitizeDiagnostic(value: unknown): SafeIngestResult['diagnostic'] {
 
 function safeSources(value: unknown): HydrologySource[] {
   return Array.isArray(value) ? value.filter(isSource).slice(0, 8) : []
+}
+
+function safeStrings(value: unknown, maxItems: number, maxLength: number): string[] {
+  return Array.isArray(value) ? value.flatMap((item) => {
+    const text = safeString(item, maxLength)
+    return text ? [text] : []
+  }).slice(0, maxItems) : []
 }
 
 function safeStatusPath(value: unknown) {

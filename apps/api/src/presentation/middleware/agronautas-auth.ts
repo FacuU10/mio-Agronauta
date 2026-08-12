@@ -26,9 +26,10 @@ export function getAgronautasAuthConfig(env: NodeJS.ProcessEnv = process.env): A
   }
 }
 
-export function requireAgronautasScope(scope: AgronautasScope, config: AgronautasAuthConfig = getAgronautasAuthConfig()) {
+export function requireAgronautasScope(scope: AgronautasScope, config?: AgronautasAuthConfig) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!config.enabled) {
+    const effectiveConfig = config ?? getAgronautasAuthConfig()
+    if (!effectiveConfig.enabled) {
       return next()
     }
 
@@ -37,7 +38,7 @@ export function requireAgronautasScope(scope: AgronautasScope, config: Agronauta
       return respondAuthError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
     }
 
-    const identity = resolveIdentity(token, config.tokens)
+    const identity = resolveIdentity(token, effectiveConfig.tokens)
     if (!identity) {
       return respondAuthError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
     }

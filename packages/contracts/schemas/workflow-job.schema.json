@@ -14,7 +14,8 @@
     "priority",
     "createdAt",
     "trace",
-    "payload"
+    "payload",
+    "lease"
   ],
   "properties": {
     "contractVersion": {
@@ -37,7 +38,7 @@
       "enum": ["ingest", "transform", "render", "publish", "agronautas-risk-recompute"]
     },
     "status": {
-      "enum": ["pending", "leased", "running", "waiting", "succeeded", "failed", "cancelled"]
+      "enum": ["pending", "leased", "running", "waiting", "succeeded", "failed", "dlq", "cancelled"]
     },
     "priority": {
       "type": "integer",

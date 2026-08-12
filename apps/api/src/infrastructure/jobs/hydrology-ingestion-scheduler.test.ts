@@ -72,7 +72,7 @@ test('startHydrologySchedulerFromEnv starts once when enabled without running in
 test('startHydrologySchedulerFromEnv maps scheduler sources to one manual government ingest call', async () => {
   const manualSources: Array<string | undefined> = []
   const proofRunIds: Array<string | undefined> = []
-  let capturedRunner: { run(source: HydrologyIngestionSource, metadata: { attempt: number; scheduledFor: Date; proofRunId?: string }): Promise<{ inserted: number; unchanged: number }> } | undefined
+  let capturedRunner: HydrologyIngestionRunner | undefined
   startHydrologySchedulerFromEnv({ HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
     ingestionRunner: async ({ source, proofRunId }) => {
       manualSources.push(source)
@@ -85,10 +85,32 @@ test('startHydrologySchedulerFromEnv maps scheduler sources to one manual govern
     },
   })
 
-  assert.deepEqual(await capturedRunner?.run('SMN', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z'), proofRunId: 'scheduler-proof-test' }), { inserted: 0, unchanged: 0 })
-  assert.deepEqual(await capturedRunner?.run('INA', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') }), { inserted: 0, unchanged: 0 })
+  assert.deepEqual(await capturedRunner?.run('SMN', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z'), scheduledSlot: 'SMN:2026-06-23T12:00:00.000Z', ownerId: 'test', proofRunId: 'scheduler-proof-test' }), { inserted: 0, unchanged: 0 })
+  assert.deepEqual(await capturedRunner?.run('INA', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z'), scheduledSlot: 'INA:2026-06-22T18:30:00.000Z', ownerId: 'test' }), { inserted: 0, unchanged: 0 })
   assert.deepEqual(manualSources, ['SMN', 'INA'])
   assert.deepEqual(proofRunIds, ['scheduler-proof-test', undefined])
+})
+
+test('startHydrologySchedulerFromEnv stays disabled on Render even when enabled locally', () => {
+  let factoryCalls = 0
+  const scheduler = startHydrologySchedulerFromEnv({ RENDER: 'true', HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
+    schedulerFactory: () => { factoryCalls += 1; return { start() {} } },
+  })
+  assert.equal(scheduler, null)
+  assert.equal(factoryCalls, 0)
+})
+
+test('startHydrologySchedulerFromEnv stays disabled on Render even when enabled locally', () => {
+  let factoryCalls = 0
+  const scheduler = startHydrologySchedulerFromEnv({ RENDER: 'true', HYDROLOGY_SCHEDULER_ENABLED: 'true' }, {
+    schedulerFactory: () => {
+      factoryCalls += 1
+      return { start() {} }
+    },
+  })
+
+  assert.equal(scheduler, null)
+  assert.equal(factoryCalls, 0)
 })
 
 test('hydrology scheduler shares the in-process admission coordinator with manual ingest', async () => {
@@ -106,7 +128,7 @@ test('hydrology scheduler shares the in-process admission coordinator with manua
   })
 
   const manual = coordinator.start({ source: 'PNA', proofRunId: 'shared-proof' }, 'client')
-  const scheduled = capturedRunner?.run('INMET', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z') })
+  const scheduled = capturedRunner?.run('INMET', { attempt: 0, scheduledFor: new Date('2026-06-23T12:00:00.000Z'), scheduledSlot: 'INMET:2026-06-23T12:00:00.000Z', ownerId: 'test' })
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.equal(calls, 2)
   releases.forEach((release) => release())

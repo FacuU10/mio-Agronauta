@@ -1,10 +1,14 @@
-import type Redis from 'ioredis'
 import type { AgronautasRuntimeDispatchCommand, AgronautasRuntimeDispatcher } from '../../domain/repositories/agronautas'
 import { getRedisClient } from '../database/redis/client'
 import { createAgronautasTelemetry } from '../observability/agronautas-telemetry'
+import { AGRONAUTAS_RUNTIME_QUEUE_KEY, createAgronautasRiskRecomputeJob } from '@golden/workflows'
 
 const telemetry = createAgronautasTelemetry()
-const RUNTIME_QUEUE_NAME = 'bull:agronautas-runtime:wait'
+const RUNTIME_QUEUE_NAME = AGRONAUTAS_RUNTIME_QUEUE_KEY
+
+interface RedisListPublisher {
+  lpush(key: string, value: string): Promise<number>
+}
 
 export class AgronautasRuntimeDispatcherError extends Error {
   constructor(message: string, readonly causeValue?: unknown) {
@@ -14,7 +18,7 @@ export class AgronautasRuntimeDispatcherError extends Error {
 }
 
 export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispatcher {
-  constructor(private redis?: Pick<Redis, 'lpush'>) {}
+  constructor(private redis?: RedisListPublisher) {}
 
   async dispatchRiskRecompute(command: AgronautasRuntimeDispatchCommand): Promise<void> {
     telemetry.onDispatchAttempt({
@@ -47,38 +51,8 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
     }
   }
 
-  private getRedis(): Pick<Redis, 'lpush'> {
+  private getRedis(): RedisListPublisher {
     this.redis ??= getRedisClient()
     return this.redis
-  }
-}
-
-function createAgronautasRiskRecomputeJob(command: AgronautasRuntimeDispatchCommand) {
-  return {
-    contractVersion: command.contractVersion,
-    jobId: command.jobId,
-    workflowId: 'agronautas-risk-recompute',
-    runId: command.runId,
-    kind: 'agronautas-risk-recompute',
-    status: 'pending',
-    priority: 50,
-    createdAt: command.requestedAt.toISOString(),
-    trace: {
-      traceId: command.requestId,
-      correlationId: command.correlationId,
-      causationId: command.runId,
-    },
-    payload: {
-      fieldId: command.fieldId,
-      triggeredBy: command.triggeredBy,
-      requestedAt: command.requestedAt.toISOString(),
-      runtime: {
-        mode: command.runtimeMode,
-      },
-    },
-    labels: {
-      domain: 'agronautas',
-      operation: 'risk-recompute',
-    },
   }
 }

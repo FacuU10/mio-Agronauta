@@ -22,3 +22,8 @@ test('sanitizeIngestResponse removes secret diagnostics and keeps bounded operat
   assert.equal(result?.results[0]?.diagnostic?.providerHost, 'pna.gov.ar')
   assert.equal(result?.results[0]?.diagnostic?.upstreamStatus, 503)
 })
+
+test('sanitizeIngestResponse preserves bounded coverage gaps', () => {
+  const result = sanitizeIngestResponse({ status: 'partial', coverageGaps: ['INA: sin estación asociada'], results: [] })
+  assert.deepEqual(result?.coverageGaps, ['INA: sin estación asociada'])
+})

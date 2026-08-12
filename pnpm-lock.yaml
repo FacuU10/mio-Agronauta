@@ -26,6 +26,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@golden/workflows':
+        specifier: workspace:*
+        version: link:../../packages/workflows
       '@prisma/client':
         specifier: ^5.10.2
         version: 5.22.0(prisma@5.22.0)

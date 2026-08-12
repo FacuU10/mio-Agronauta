@@ -32,6 +32,7 @@ test('Agronautas intake offers locality search, provider-neutral pin preview and
   assert.ok(view.getByRole('option', { name: /Mercedes/i }))
   fireEvent.click(view.getByRole('option', { name: /Mercedes/i }))
   assert.ok(view.getByText(/Cobertura por punto · Mercedes/i))
+   assert.ok(view.getByText(/Google Maps no está disponible/i))
   assert.ok(view.getByRole('region', { name: /alternativa no cartográfica/i }))
    assert.ok(view.getByText(/polygonWkt/i))
   const future = view.getByTestId('agronautas-future-capabilities')
@@ -57,6 +58,41 @@ test('Agronautas dashboard prioritizes decision, confidence, freshness and next 
     assert.ok(view.getAllByText(/Frescura/i).length >= 1)
     assert.ok(view.getByRole('link', { name: /Ver alertas/i }))
     assert.ok(view.getByRole('link', { name: /Ver timeline/i }))
+  })
+})
+
+test('Agronautas workspace makes runtime, source status and retry boundaries visible', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+
+  const view = render(<QueryProvider><AgronautasPageClient service={createAgronautasMockService()} /></QueryProvider>)
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    const status = view.getByTestId('agronautas-capability-status')
+    assert.match(status.textContent ?? '', /Fuentes y telemetría/i)
+    assert.match(status.textContent ?? '', /Runtime backend/i)
+    assert.match(status.textContent ?? '', /Fuentes y telemetría/i)
+    assert.ok(view.getByRole('button', { name: /Reintentar sincronización/i }))
+    assert.ok(view.getByRole('link', { name: /Abrir detalle/i }))
+  })
+})
+
+test('Agronautas keeps unrelated panels available when one source query fails', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+  const base = createAgronautasMockService()
+  const view = render(<QueryProvider><AgronautasPageClient service={{ ...base, async getWeatherTimeline() { throw new Error('weather source unavailable') } }} /></QueryProvider>)
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('alert').textContent?.includes('weather source unavailable'))
+    assert.ok(view.getByText('Drivers y evidencia'))
+    assert.ok(view.getAllByText('Alertas actuales').length >= 1)
+    assert.ok(view.getByRole('button', { name: /Reintentar sincronización/i }))
   })
 })
 

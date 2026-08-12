@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field, HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from worker.contracts import resolve_contracts_root
+
 
 class RuntimeSettings(BaseSettings):
     """Central runtime configuration for worker, graph, storage and telemetry."""
@@ -37,7 +39,7 @@ class RuntimeSettings(BaseSettings):
     asset_bucket: str = Field(default="workflow-assets")
     asset_prefix: str = Field(default="tenants")
     local_asset_root: Path = Field(default=Path("./.runtime/assets"))
-    contracts_root: Path = Field(default=Path("../../packages/contracts/schemas"))
+    contracts_root: Path = Field(default=Path("packages/contracts/schemas"))
 
     embeddings_model: str = Field(default="text-embedding-3-large")
     chat_model: str = Field(default="gpt-4o-mini")
@@ -47,9 +49,7 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def resolved_contracts_root(self) -> Path:
-        root = Path(__file__).resolve().parents[4]
-        configured = self.contracts_root
-        return configured if configured.is_absolute() else (root / configured).resolve()
+        return resolve_contracts_root(self.contracts_root)
 
     @property
     def resolved_asset_root(self) -> Path:

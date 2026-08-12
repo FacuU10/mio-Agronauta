@@ -1,4 +1,4 @@
-import type { HydrologyFreshness, HydrologyQuality, HydrologySource, HydrologyTargetZone } from '@repo/zod-schemas'
+import type { HydrologyFreshness, HydrologyGovernmentIngestDiagnostic, HydrologyIberaRunStatus, HydrologyIberaSourceResult, HydrologyQuality, HydrologySource, HydrologyTargetZone } from '@repo/zod-schemas'
 
 export type HydrologyMetric = 'river_height_m' | 'rain_mm' | 'storm_alert'
 export type ForecastConfidence = 'normal' | 'speculative'
@@ -50,6 +50,29 @@ export interface IngestionRunInput {
   excludedMetrics?: string[]
   errorMessage?: string
   provenanceUrl?: string
+  iberaRunId?: string
+  diagnostics?: HydrologyGovernmentIngestDiagnostic
+}
+
+export interface IberaIngestRunInput {
+  id: string
+  proofRunId: string
+  status: HydrologyIberaRunStatus
+  requestedSources: HydrologySource[]
+  sourceResults: HydrologyIberaSourceResult[]
+  diagnostics: Record<string, unknown>
+  scheduledSlot?: string
+  leaseOwner?: string
+  leaseExpiresAt?: Date
+  reason?: string
+  startedAt: Date
+  finishedAt?: Date
+  expiresAt: Date
+}
+
+export interface IberaIngestRunRecord extends IberaIngestRunInput {
+  createdAt?: Date
+  updatedAt?: Date
 }
 
 export interface FieldHydrologyMapping {

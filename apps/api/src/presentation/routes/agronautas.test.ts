@@ -10,20 +10,78 @@ import { createAgronautasRouter } from './agronautas'
 type HydrologyDenseContextV1 = Awaited<ReturnType<NonNullable<NonNullable<Parameters<typeof createAgronautasRouter>[0]>['hydrologyRepository']>['getDenseContextForField']>>
 
 test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  const app = createTestApp()
+
   process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  try {
+    const response = await request(app, '/agronautas/fields/field-1/risk/current')
+    assert.equal(response.status, 401)
+    assert.deepEqual(await response.json(), {
+      contractVersion: '1.0.0',
+      code: 'UNAUTHORIZED',
+      message: 'Missing or invalid bearer token',
+      retryable: false,
+    })
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
 
-  const response = await request(createTestApp(), '/agronautas/fields/field-1/risk/current')
-  assert.equal(response.status, 401)
-  assert.deepEqual(await response.json(), {
-    contractVersion: '1.0.0',
-    code: 'UNAUTHORIZED',
-    message: 'Missing or invalid bearer token',
-    retryable: false,
+test('Agronautas auth reloads enabled state and tokens at request time after router construction', { concurrency: false }, async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  const previousOperatorToken = process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR']
+  const fieldStore = new Map<string, Field>([['field-auth-lifecycle', testField('field-auth-lifecycle')]])
+  const app = createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    geometryRepository: {
+      async getGeometry() { return null },
+      async updateGeometry() {
+        return {
+          polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))',
+          centroid: { lat: -29.1966, lng: -58.0966 }, areaM2: 1_000_000, hectares: 100, perimeterM: 4_000,
+          status: 'saved' as const, source: 'operator' as const, updatedAt: new Date('2026-08-12T00:00:00.000Z'),
+        }
+      },
+    },
   })
 
   delete process.env['AGRONAUTAS_AUTH_ENABLED']
   delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  delete process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR']
+  try {
+    const initiallyOpen = await request(app, '/agronautas/fields/field-auth-lifecycle/geometry')
+    assert.equal(initiallyOpen.status, 404)
+
+    process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+    process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token-v2'
+    process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR'] = 'operator-token-v2'
+
+    const readerPatch = await request(app, '/agronautas/fields/field-auth-lifecycle/geometry', {
+      method: 'PATCH', headers: { authorization: 'Bearer reader-token-v2', 'content-type': 'application/json' },
+      body: JSON.stringify({ polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))' }),
+    })
+    const operatorPatch = await request(app, '/agronautas/fields/field-auth-lifecycle/geometry', {
+      method: 'PATCH', headers: { authorization: 'Bearer operator-token-v2', 'content-type': 'application/json' },
+      body: JSON.stringify({ polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))' }),
+    })
+
+    assert.equal(readerPatch.status, 403)
+    assert.equal(operatorPatch.status, 200)
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+    if (previousOperatorToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR'] = previousOperatorToken
+  }
 })
 
 test('POST /fields/:id/recompute devuelve 403 contractual para rol reader', async () => {
@@ -168,14 +226,85 @@ test('POST /fields acepta alta válida en Corrientes', async () => {
   const response = await request(app, '/agronautas/fields', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-1', crop: 'rice', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
+    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-1', cropCategory: 'cereal', crop: 'maize', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
   })
 
   assert.equal(response.status, 201)
   const json = (await response.json()) as { coverage: { locality: string } }
   assert.equal(json.coverage.locality, 'Mercedes')
   assert.equal(fieldStore.size, 1)
+  assert.equal([...fieldStore.values()][0]?.props.crop, 'maize')
   assert.equal(contextStore.size, 1)
+})
+
+test('POST /fields labels a point inside the boundary with no PostGIS locality as unsupported locality', async () => {
+  const response = await request(createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, provinceCode: 'AR-W', staleCause: 'unsupported_locality' }, fieldStore: new Map() }),
+  }), '/agronautas/fields', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-locality', cropCategory: 'cereal', crop: 'maize', hectares: 10, locality: 'Unknown', location: { lat: -29.2, lng: -58.1 } }),
+  })
+
+  assert.equal(response.status, 422)
+  const json = await response.json() as { code: string; details: { reason: string } }
+  assert.equal(json.code, 'OUT_OF_SUPPORTED_AREA')
+  assert.equal(json.details.reason, 'unsupported_locality')
+})
+
+test('geometry routes preserve submitted crop and enforce read/write auth', { concurrency: false }, async () => {
+  const fieldStore = new Map<string, Field>([['field-geometry', testField('field-geometry')]])
+  const app = createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    geometryRepository: {
+      async getGeometry() {
+        return { fieldId: 'field-geometry', polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))', centroid: { lat: -29.1966, lng: -58.0966 }, areaM2: 1_000_000, hectares: 100, perimeterM: 4_000, status: 'saved', source: 'operator', updatedAt: new Date('2026-08-12T00:00:00.000Z') }
+      },
+      async updateGeometry() {
+        return { polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))', centroid: { lat: -29.1966, lng: -58.0966 }, areaM2: 1_000_000, hectares: 100, perimeterM: 4_000, status: 'saved', source: 'operator', updatedAt: new Date('2026-08-12T00:00:00.000Z') }
+      },
+    },
+  })
+
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR'] = 'operator-token'
+  try {
+    const read = await request(app, '/agronautas/fields/field-geometry/geometry', { headers: { authorization: 'Bearer reader-token' } })
+    const write = await request(app, '/agronautas/fields/field-geometry/geometry', {
+      method: 'PATCH', headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))' }),
+    })
+    const forbidden = await request(app, '/agronautas/fields/field-geometry/geometry', {
+      method: 'PATCH', headers: { authorization: 'Bearer reader-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))' }),
+    })
+
+    assert.equal(read.status, 200)
+    assert.equal((await read.json() as { hectares: number }).hectares, 100)
+    assert.equal(write.status, 200)
+    assert.equal(forbidden.status, 403)
+  } finally {
+    delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    delete process.env['AGRONAUTAS_AUTH_TOKEN_OPERATOR']
+  }
+})
+
+test('PATCH /fields/:id/geometry rejects invalid geometry and unsupported coverage without saving', async () => {
+  let updates = 0
+  const app = createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: false, staleCause: 'outside_supported_area' }, fieldStore: new Map([['field-invalid', testField('field-invalid')]]) }),
+    geometryRepository: { async getGeometry() { return null }, async updateGeometry() { updates += 1; throw new Error('should not persist') } },
+  })
+
+  const response = await request(app, '/agronautas/fields/field-invalid/geometry', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19))' }),
+  })
+
+  assert.equal(response.status, 422)
+  assert.equal(updates, 0)
 })
 
 test('POST /contact/demo persiste solicitudes válidas', async () => {
@@ -967,6 +1096,7 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     jobRunRepository: overrides.jobRunRepository ?? { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
     alertSnapshotRepository: overrides.alertSnapshotRepository ?? { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
     demoContactSubmissionRepository: overrides.demoContactSubmissionRepository ?? createDemoContactSubmissionRepository(),
+    geometryRepository: overrides.geometryRepository ?? { async getGeometry() { return null }, async updateGeometry() { throw new Error('geometry repository not configured') } },
     hydrologyRepository: overrides.hydrologyRepository ?? { async getDenseContextForField(fieldId: string) { return hydrologyContext(fieldId) } },
     hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: DEFAULT_GROQ_MODEL } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: DEFAULT_GROQ_MODEL } } } },
   }))

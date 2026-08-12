@@ -35,6 +35,41 @@ test('HydrologyCopilotService streams metadata and Groq tokens with official con
     sources: ['PNA', 'INA', 'INMET', 'SMN'],
     lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z',
     telemetryCount: 1,
+    citationMode: 'validated-context',
+    citations: [{
+      id: 'PNA:pna-mercedes:river_height_m:2026-06-23T10:30:00.000Z',
+      source: 'PNA',
+      stationId: 'pna-mercedes',
+      observedAt: '2026-06-23T10:30:00.000Z',
+      kind: 'observed',
+      freshness: 'degraded',
+    }],
+    unverifiedClaims: false,
+    citationUnavailable: false,
+  })
+})
+
+test('hydrology copilot marks citation-unavailable metadata when context has no verified evidence', async () => {
+  const service = new HydrologyCopilotService({
+    chat: { completions: { async create() { return (async function * () {})() } } },
+  })
+
+  const iterator = service.streamChat({ message: '¿Qué ocurre?', context: { ...denseContext(), zone: null, sources: [], stations: [], telemetry: [] } })[Symbol.asyncIterator]()
+  const metadata = await iterator.next()
+
+  assert.deepEqual(metadata.value?.data, {
+    contractVersion: 'hydrology-dense-context-v1',
+    model: DEFAULT_GROQ_MODEL,
+    fieldId: 'field-1',
+    zone: null,
+    sources: [],
+    lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z',
+    telemetryCount: 0,
+    citationMode: 'none',
+    citations: [],
+    unverifiedClaims: true,
+    citationUnavailable: true,
+    unavailableReason: 'No hay una referencia oficial verificable para esta respuesta.',
   })
 })
 

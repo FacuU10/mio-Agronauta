@@ -17,19 +17,34 @@ interface ReceiptEvent {
   retry: null
 }
 
+export interface HydrologyCronConfig {
+  token: string
+  ownerId: string
+}
+
+export function getHydrologyCronConfig(env: NodeJS.ProcessEnv = process.env): HydrologyCronConfig {
+  const token = env['HYDROLOGY_INGEST_TOKEN']?.trim()
+  if (!token) throw new Error('HYDROLOGY_INGEST_TOKEN is required for the authenticated hydrology Cron')
+  const ownerId = env['HYDROLOGY_CRON_OWNER_ID']?.trim()
+  if (!ownerId) throw new Error('HYDROLOGY_CRON_OWNER_ID is required for the hydrology Cron owner')
+  return { token, ownerId }
+}
+
 async function main(): Promise<void> {
   dotenv.config({ path: resolve(process.cwd(), '../../.env'), override: true })
+  const cronConfig = getHydrologyCronConfig()
   const proofRunId = `scheduler-proof-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15)}Z`
   const events: ReceiptEvent[] = []
   const ingestionRunner = createGovernmentIngestionRunner()
   const runner: HydrologyIngestionRunner = {
     async run(source, metadata) {
-      const result = await ingestionRunner({ source, proofRunId: metadata.proofRunId })
+      const result = await ingestionRunner({ source, proofRunId: metadata.proofRunId, runId: `scheduled-${metadata.scheduledSlot}`, scheduledSlot: metadata.scheduledSlot, leaseOwner: metadata.ownerId })
       const sourceResult = result.results.find((item) => item.source === source)
       return { inserted: sourceResult?.recordsIngested ?? 0, unchanged: 0 }
     },
   }
   const scheduler = new HydrologyIngestionScheduler(runner, {
+    ownerId: cronConfig.ownerId,
     onRunResult: ({ source, scheduledFor, attempt, result }) => events.push({ source, scheduledFor: scheduledFor.toISOString(), attempt, ...result }),
   })
   const scheduledFor = new Date()

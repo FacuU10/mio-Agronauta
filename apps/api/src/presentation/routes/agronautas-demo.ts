@@ -37,10 +37,12 @@ export function createDemoFieldOverview(fieldId: string) {
 export function createDemoFieldCreated(input: FieldIntake) {
   return {
     fieldId: `demo-${input.fieldId}`,
+    crop: input.crop,
     coverage: {
       locality: input.locality,
       provinceCode: input.provinceCode,
       boundaryVersion: 'demo-v1',
+      status: 'supported' as const,
     },
   }
 }

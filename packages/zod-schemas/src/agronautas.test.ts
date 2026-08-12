@@ -5,10 +5,15 @@ import {
   dashboardSnapshotSchema,
   demoContactSubmissionSchema,
   fieldIntakeSchema,
+  fieldGeometryUpdateSchema,
+  fieldGeometryResponseSchema,
   groundedChatRequestSchema,
   hydrologyGovernmentIngestDiagnosticSchema,
   hydrologyDenseContextV1Schema,
   hydrologyGovernmentIngestResponseSchema,
+  hydrologyIberaCopilotMetadataSchema,
+  hydrologyIberaCitationSchema,
+  hydrologyIberaSourceResultSchema,
   hydrologyOperatorReceiptSchema,
   hydrologyProviderPayloadGuardSchema,
   hydrologyTelemetrySchema,
@@ -98,6 +103,48 @@ test('hydrology government ingest schema carries proof run id and safe http summ
   assert.equal(parsed.proofRunId, 'proof-20260714T000000Z')
   assert.equal(parsed.results[0]?.httpSummary?.host, 'www.ina.gob.ar')
   assert.equal(parsed.results[0]?.httpSummary?.attempts, 2)
+})
+
+test('Iberá ledger schemas preserve source diagnostics and reject unsupported citation sources', () => {
+  const sourceResult = hydrologyIberaSourceResultSchema.parse({
+    source: 'PNA',
+    status: 'failed',
+    recordsIngested: 0,
+    errorMessage: 'provider unavailable',
+    diagnostic: {
+      failureKind: 'network_failure',
+      reason: 'upstream unavailable',
+      attempts: 1,
+      providerHost: 'pna.example.gov.ar',
+      providerPath: '/alturas',
+    },
+  })
+  const citation = hydrologyIberaCitationSchema.parse({
+    id: 'citation-pna-1',
+    source: 'PNA',
+    stationId: 'corrientes',
+    observedAt: '2026-08-11T12:00:00.000Z',
+    sourceUrl: 'https://pna.example.gov.ar/alturas',
+    kind: 'observed',
+    freshness: 'fresh',
+  })
+  const metadata = hydrologyIberaCopilotMetadataSchema.parse({
+    citationMode: 'validated-context',
+    citations: [citation],
+    unverifiedClaims: false,
+  })
+  const unavailable = hydrologyIberaCopilotMetadataSchema.parse({
+    citationMode: 'none',
+    citations: [],
+    unverifiedClaims: true,
+    citationUnavailable: true,
+    unavailableReason: 'No hay una referencia oficial verificable para esta respuesta.',
+  })
+
+  assert.equal(sourceResult.diagnostic?.failureKind, 'network_failure')
+  assert.equal(metadata.citations[0]?.source, 'PNA')
+  assert.equal(unavailable.citationUnavailable, true)
+  assert.throws(() => hydrologyIberaCitationSchema.parse({ ...citation, source: 'DMH_PARAGUAY' }), /Invalid enum value/)
 })
 
 test('hydrology operator receipt records redacted Cron, source, chat and row correlation evidence', () => {
@@ -400,6 +447,53 @@ test('field intake devuelve errores tipados para provincia o cultivo no soportad
   assert.equal(unsupportedRegion.error.issues[0]?.message, 'OUT_OF_SUPPORTED_AREA')
   assert.equal(unsupportedCrop.success, false)
   assert.equal(unsupportedCrop.error.issues[0]?.message, 'UNSUPPORTED_CROP')
+})
+
+test('field geometry schema accepts closed WKT and GeoJSON polygon updates', () => {
+  const wkt = fieldGeometryUpdateSchema.parse({
+    polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))',
+  })
+  const geoJson = fieldGeometryUpdateSchema.parse({
+    geoJson: {
+      type: 'Polygon',
+      coordinates: [[[-58.10, -29.20], [-58.09, -29.20], [-58.09, -29.19], [-58.10, -29.20]]],
+    },
+  })
+
+  assert.equal(wkt.polygonWkt?.startsWith('POLYGON'), true)
+  assert.equal(geoJson.geoJson?.type, 'Polygon')
+})
+
+test('field geometry schema rejects missing or ambiguous geometry inputs', () => {
+  const missing = fieldGeometryUpdateSchema.safeParse({})
+  const ambiguous = fieldGeometryUpdateSchema.safeParse({
+    polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))',
+    geoJson: {
+      type: 'Polygon',
+      coordinates: [[[-58.10, -29.20], [-58.09, -29.20], [-58.09, -29.19], [-58.10, -29.20]]],
+    },
+  })
+
+  assert.equal(missing.success, false)
+  assert.equal(ambiguous.success, false)
+})
+
+test('field geometry response preserves server-derived area, centroid, perimeter and status', () => {
+  const parsed = fieldGeometryResponseSchema.parse({
+    fieldId: 'field-1',
+    polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))',
+    centroid: { lat: -29.1966, lng: -58.0966 },
+    areaM2: 1_000_000,
+    hectares: 100,
+    perimeterM: 4_000,
+    status: 'saved',
+    source: 'operator',
+    updatedAt: '2026-08-12T00:00:00.000Z',
+  })
+
+  assert.equal(parsed.hectares, 100)
+  assert.equal(parsed.centroid.lng, -58.0966)
+  assert.equal(parsed.status, 'saved')
 })
 
 test('evidence, cadence, scheduler, dashboard y PDF contract fields are explicit', () => {
