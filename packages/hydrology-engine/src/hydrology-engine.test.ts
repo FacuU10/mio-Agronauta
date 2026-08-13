@@ -120,6 +120,19 @@ test('Iberá ledger schema repair is additive and heals partially applied deploy
   assert.doesNotMatch(sql, /DROP TABLE|DROP COLUMN|DELETE FROM hydrology_(telemetry|ingestion_runs)/i)
 })
 
+test('Iberá ingest run listing is bounded, newest-first, and read-only', async () => {
+  const calls: string[] = []
+  const db = { async query(sql: string) {
+    calls.push(sql)
+    return { rows: [{ id: 'run-2', proof_run_id: 'proof-2', status: 'completed', requested_sources: ['PNA'], source_results: [], diagnostics: {}, reason: null, started_at: '2026-08-13T10:00:00.000Z', finished_at: '2026-08-13T10:01:00.000Z', expires_at: '2026-08-14T10:00:00.000Z', created_at: '2026-08-13T10:00:00.000Z', updated_at: '2026-08-13T10:01:00.000Z' }], rowCount: 1, command: 'SELECT', oid: 0, fields: [] }
+  } }
+  const result = await new HydrologyRepository(db).listIberaIngestRuns({ limit: 1 })
+  assert.equal(result.items[0]?.id, 'run-2')
+  assert.match(calls[0] ?? '', /FROM ibera_ingest_runs/)
+  assert.match(calls[0] ?? '', /ORDER BY started_at DESC, id DESC/)
+  assert.doesNotMatch(calls.join('\n'), /(?:^|\s)(INSERT|UPDATE|DELETE)(?:\s|$)/i)
+})
+
 
 test('HydrologyRepository persists and reconstructs an Iberá run with stable source diagnostics', async () => {
   const calls: Array<{ sql: string; params: unknown[] }> = []

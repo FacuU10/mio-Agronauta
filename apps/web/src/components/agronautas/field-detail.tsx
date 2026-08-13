@@ -150,8 +150,11 @@ export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId:
      { queryKey: ['agronautas', 'detail-geometry', fieldId], queryFn: () => resolvedService.getFieldGeometry?.(fieldId), enabled: Boolean(resolvedService.getFieldGeometry) },
   ] })
   const recompute = useMutation({ mutationFn: () => resolvedService.requestRecompute(fieldId) })
-  const hasError = queries.find((query) => query.error)
-  const isLoading = queries.some((query) => query.isLoading)
+  // Geometry is an optional provider-neutral enhancement; its absence must not
+  // hide the contract-backed risk and evidence detail.
+  const requiredQueries = queries.slice(0, 8)
+  const hasError = requiredQueries.find((query) => query.error)
+  const isLoading = requiredQueries.some((query) => query.isLoading)
   const field = queries[0]?.data as FieldOverview | undefined
   const risk = queries[1]?.data as RiskCurrent | undefined
   const alerts = queries[2]?.data as AlertsCurrent | undefined

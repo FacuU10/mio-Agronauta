@@ -22,6 +22,8 @@ type DashboardPayload = {
   alerts: TelemetryCard[]
   provenance: Provenance[]
   coverageGaps?: string[]
+  explanation?: { threshold: { alertHeightM: number | null; evacuationHeightM: number | null }; observed: { value: number | null; comparison: string; source: string | null; observedAt: string | null; freshness: string | null }; tendency: { value: string | null; window: string }; forecast: { horizonDays: number; confidence: string; label: string } | null; relationLabel: string }
+  timeline?: { events: Array<{ id: string; kind: string; occurredAt: string; source: string; title: string; detail: string; evidenceState: string }> }
 }
 
 export function GovernmentDetail({ municipalityId, initialData = null }: { municipalityId: string; initialData?: DashboardPayload | null }) {
@@ -111,6 +113,7 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
             </div>
           </section>
            <MunicipalEvidenceStatePanel data={data} />
+           <MunicipalityExplanationPanel data={data} />
            {data && data.coverageGaps?.length ? <section aria-label="Brechas de cobertura local" className="mt-6 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4 text-sm text-amber-100"><strong>Brechas de cobertura local:</strong> {data.coverageGaps.join(' · ')}</section> : null}
 
           <section aria-labelledby="mappings-heading" className="mt-10 rounded-[2rem] border border-white/10 bg-white/[0.07] p-5 shadow-2xl">
@@ -151,6 +154,10 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
       </section>
     </main>
   )
+}
+
+function MunicipalityExplanationPanel({ data }: { data: DashboardPayload | null }) {
+  return <section className="mt-10 rounded-[2rem] border border-lime-200/20 bg-lime-200/10 p-5" aria-label="Explicación municipal"><h2 className="text-2xl font-black">Explicación verificable</h2>{data?.explanation ? <><p className="mt-2 text-sm text-lime-100">Relación: {data.explanation.relationLabel}</p><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><div><dt className="text-stone-300">Umbral de alerta</dt><dd className="font-black">{data.explanation.threshold.alertHeightM ?? '—'} m</dd></div><div><dt className="text-stone-300">Comparación</dt><dd className="font-black">{data.explanation.observed.comparison}</dd></div><div><dt className="text-stone-300">Tendencia</dt><dd className="font-black">{data.explanation.tendency.value ?? 'Sin dato'} · {data.explanation.tendency.window}</dd></div><div><dt className="text-stone-300">Pronóstico</dt><dd className="font-black">{data.explanation.forecast ? `${data.explanation.forecast.horizonDays} días · ${data.explanation.forecast.label}` : 'No disponible'}</dd></div></dl><p className="mt-3 text-xs text-stone-300">Fuente: {data.explanation.observed.source ?? 'No disponible'} · observado: {data.explanation.observed.observedAt ?? 'No disponible'} · frescura: {data.explanation.observed.freshness ?? 'No disponible'}</p></> : <p className="mt-3 text-stone-300">Explicación no disponible sin evidencia oficial suficiente.</p>}{data?.timeline?.events.length ? <ol className="mt-5 space-y-3 border-l border-lime-200/30 pl-4">{data.timeline.events.map((event) => <li key={event.id}><p className="text-xs uppercase tracking-wide text-lime-200">{event.occurredAt} · {event.source} · {event.evidenceState}</p><p className="font-bold">{event.title}</p><p className="text-sm text-stone-300">{event.detail}</p></li>)}</ol> : <p className="mt-5 text-sm text-stone-300">Sin eventos municipales persistidos para mostrar.</p>}</section>
 }
 
 function CopilotPanel(props: { message: string; view: ReturnType<typeof createChatViewModelFromStream>; onMessageChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onRetry?: () => void }) {

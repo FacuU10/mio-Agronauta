@@ -1,6 +1,6 @@
 import type { QueryResult } from 'pg'
 import type { HydrologyDenseContextV1, HydrologyIberaRunStatus, HydrologyIberaSourceResult, HydrologyStationReference, HydrologyTelemetry, HydrologySource } from '@repo/zod-schemas'
-import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IberaIngestRunInput, type IberaIngestRunRecord, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
+import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IberaIngestRunInput, type IberaIngestRunRecord, type IberaIngestRunPage, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
 
 interface DbExecutor { query(sql: string, params?: unknown[]): Promise<QueryResult> }
 interface Db extends DbExecutor { connect?: () => Promise<DbClient> }
@@ -226,6 +226,20 @@ export class HydrologyRepository {
       [id],
     ) as QueryResult<IberaIngestRunRow>
     return result.rows[0] ? toIberaIngestRunRecord(result.rows[0]) : null
+  }
+
+  async listIberaIngestRuns(input: { limit: number; cursor?: string }): Promise<IberaIngestRunPage> {
+    const limit = Math.min(100, Math.max(1, Math.floor(input.limit)))
+    const result = await this.db.query(
+      `SELECT id, proof_run_id, status, requested_sources, scheduled_slot, lease_owner, lease_expires_at, source_results, diagnostics, reason, started_at, finished_at, expires_at, created_at, updated_at
+         FROM ibera_ingest_runs
+        WHERE expires_at > now() AND ($2::timestamptz IS NULL OR started_at < $2::timestamptz)
+        ORDER BY started_at DESC, id DESC
+        LIMIT $1`,
+      [limit + 1, input.cursor ? new Date(input.cursor) : null],
+    ) as QueryResult<IberaIngestRunRow>
+    const rows = result.rows.slice(0, limit)
+    return { items: rows.map(toIberaIngestRunRecord), nextCursor: result.rows.length > limit ? rows.at(-1)?.started_at ? new Date(rows.at(-1)!.started_at).toISOString() : null : null }
   }
 
   async getSourceFreshness(): Promise<HydrologySourceFreshness[]> {

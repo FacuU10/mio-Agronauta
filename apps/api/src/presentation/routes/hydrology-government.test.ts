@@ -76,6 +76,9 @@ test('GET /api/hydrology/municipalities/:id/dashboard truncates long official al
   const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
   assert.ok((json.municipality.officialAlerts[0]?.message.length ?? 0) <= 300)
   assert.match(json.municipality.officialAlerts[0]?.message ?? '', /^INMET: alerta útil/)
+  const timelineAlert = json.timeline?.events.find((event) => event.detail.startsWith('INMET: alerta útil'))
+  assert.ok((timelineAlert?.detail.length ?? 0) <= 300)
+  assert.match(timelineAlert?.detail ?? '', /^INMET: alerta útil/)
 })
 
 test('GET /api/hydrology/municipalities returns classified error when repository query fails', async () => {
@@ -1182,6 +1185,7 @@ function createTestApp(overrides: Partial<Parameters<typeof createHydrologyGover
     hydrologyRepository: overrides.hydrologyRepository ?? {
       async getMunicipalityTelemetryOverview() { return [municipalityView()] },
       async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+      async listIberaIngestRuns() { return { items: [], nextCursor: null } },
     },
     hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: 'test' } }; yield { type: 'token' as const, data: 'Respuesta oficial.' }; yield { type: 'done' as const, data: { model: 'test' } } } },
     ingestionRunner: overrides.ingestionRunner,

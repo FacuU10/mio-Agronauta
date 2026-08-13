@@ -11,6 +11,9 @@ import {
   groundedChatRequestSchema,
   monitoringStatusSchema,
   riskSnapshotSchema,
+  agronautasFieldIndexResponseSchema,
+  agronautasReportMetadataSchema,
+  agronautasRiskClimateExplanationSchema,
 } from '@repo/zod-schemas'
 import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
@@ -48,6 +51,7 @@ import type { Field } from '../../domain/entities/agronautas'
 import { ProviderEvidencePort, RealProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
 import { UpdateFieldGeometryUseCase } from '../../application/usecases/update-field-geometry-usecase'
 import type { FieldGeometryRepository } from '../../domain/repositories/agronautas'
+import { toAgronautasFieldIndexItem } from '../../application/viewmodels/agronautas-pilot'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -169,6 +173,16 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       }
 
       return respondContractError(res, 500, 'INVALID_CONTRACT', 'No se pudo crear el lote', { reason: message })
+    }
+  })
+
+  router.get('/fields', requireRead, async (req, res) => {
+    if (!resolved.fieldRepository.list) return res.status(503).json({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null, unavailable: true })
+    try {
+      const page = await resolved.fieldRepository.list({ limit: parseLimit(req), cursor: typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined })
+      return res.json(agronautasFieldIndexResponseSchema.parse({ contractVersion: 'agronautas-field-index-v1', items: page.items.map(toAgronautasFieldIndexItem), nextCursor: page.nextCursor }))
+    } catch {
+      return res.status(503).json({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null, unavailable: true })
     }
   })
 
@@ -338,13 +352,14 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       const dashboard = createDemoDashboardSnapshot(fieldId)
       res.setHeader('Content-Type', 'application/pdf')
       res.setHeader('Content-Disposition', `attachment; filename="agronautas-${fieldId}.pdf"`)
-      return res.send(Buffer.from(renderDashboardPdfText(dashboard), 'utf8'))
+      return res.send(Buffer.from(renderDashboardPdfText(dashboard, { geometryStatus: 'point_only', geometryUpdatedAt: null }), 'utf8'))
     }
     const dashboard = await buildDashboardPayload(fieldId)
     if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="agronautas-${fieldId}.pdf"`)
-    return res.send(Buffer.from(renderDashboardPdfText(dashboard), 'utf8'))
+    const geometry = await resolved.geometryRepository.getGeometry(fieldId)
+    return res.send(Buffer.from(renderDashboardPdfText(dashboard, { geometryStatus: geometry?.status ?? 'point_only', geometryUpdatedAt: geometry?.updatedAt?.toISOString() ?? null }), 'utf8'))
   })
 
   router.get('/fields/:fieldId/weather/timeline', requireRead, async (req, res) => {
@@ -661,8 +676,9 @@ function toConfidenceLabel(confidence: number): 'alta' | 'media' | 'baja' {
   return 'baja'
 }
 
-function renderDashboardPdfText(dashboard: { snapshotId: string; field: { fieldId: string }; risk: { score: number; level: string; confidence: number }; freshness: string; provenance: Array<{ evidenceId: string }>; generatedAt: string; lastDataFetchedAt: string; presentation: { disclaimer: string; confidenceLabel: string; sourcesUnavailable: boolean } }) {
-  const text = `Agronautas dashboard report\nfield=${dashboard.field.fieldId}\nsnapshot=${dashboard.snapshotId}\nscore=${dashboard.risk.score}\nlevel=${dashboard.risk.level}\nriskConfidence=${dashboard.risk.confidence}\nFrescura=${dashboard.freshness}\nÚltimo dato obtenido=${dashboard.lastDataFetchedAt}\nConfianza=${dashboard.presentation.confidenceLabel}\nFuentes degradadas o no disponibles=${dashboard.presentation.sourcesUnavailable}\nDisclaimers: ${dashboard.presentation.disclaimer}\ngeneratedAt=${dashboard.generatedAt}\nevidence=${dashboard.provenance.map((item) => item.evidenceId).join(',')}`
+function renderDashboardPdfText(dashboard: { snapshotId: string; field: { fieldId: string }; risk: { score: number; level: string; confidence: number }; freshness: string; provenance: Array<{ evidenceId: string }>; generatedAt: string; lastDataFetchedAt: string; presentation: { disclaimer: string; confidenceLabel: string; sourcesUnavailable: boolean } }, geometry: { geometryStatus: 'saved' | 'point_only' | 'unavailable'; geometryUpdatedAt: string | null }) {
+  const reportMetadata = agronautasReportMetadataSchema.parse({ contractVersion: 'agronautas-report-v1', fieldId: dashboard.field.fieldId, snapshotId: dashboard.snapshotId, snapshotAt: dashboard.generatedAt, evidenceState: dashboard.presentation.sourcesUnavailable ? 'degraded' : 'observed', geometryStatus: geometry.geometryStatus, geometryUpdatedAt: geometry.geometryUpdatedAt, sourceRunIds: [] })
+  const text = `Agronautas dashboard report\nfield=${dashboard.field.fieldId}\nsnapshot=${dashboard.snapshotId}\nsnapshotAt=${reportMetadata.snapshotAt}\ngeometry=${reportMetadata.geometryStatus}\ngeometryUpdatedAt=${reportMetadata.geometryUpdatedAt ?? 'not_saved'}\nscore=${dashboard.risk.score}\nlevel=${dashboard.risk.level}\nriskConfidence=${dashboard.risk.confidence}\nFrescura=${dashboard.freshness}\nÚltimo dato obtenido=${dashboard.lastDataFetchedAt}\nConfianza=${dashboard.presentation.confidenceLabel}\nFuentes degradadas o no disponibles=${dashboard.presentation.sourcesUnavailable}\nDisclaimers: ${dashboard.presentation.disclaimer}\ngeneratedAt=${dashboard.generatedAt}\nevidence=${dashboard.provenance.map((item) => item.evidenceId).join(',')}`
   const stream = `BT /F1 12 Tf 72 720 Td (${text.replace(/[()]/g, '')}) Tj ET`
   const objects = ['1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj', '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj', '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj', '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj', `5 0 obj << /Length ${stream.length} >> stream\n${stream}\nendstream endobj`]
   let pdf = '%PDF-1.4\n'

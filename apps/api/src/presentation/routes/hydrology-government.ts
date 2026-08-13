@@ -8,18 +8,21 @@ import {
   hydrologyGovernmentIngestRequestSchema,
   hydrologyGovernmentIngestResponseSchema,
   hydrologyGovernmentMunicipalitiesResponseSchema,
+  hydrologyMunicipalityExplanationSchema,
+  hydrologyMunicipalityTimelineSchema,
+  hydrologyIberaRunHistoryResponseSchema,
   type HydrologyDenseContextV1,
   type HydrologyGovernmentHttpSummary,
   type HydrologyGovernmentIngestDiagnostic,
   type HydrologySource,
   type HydrologyTelemetry,
 } from '@repo/zod-schemas'
-import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, type HydrologySourceFreshness, type IberaIngestRunInput, type IberaIngestRunRecord, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperAttemptLog, type ScraperResult } from '@repo/hydrology-engine'
+import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, forecastConfidenceForHorizon, type HydrologySourceFreshness, type IberaIngestRunInput, type IberaIngestRunRecord, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperAttemptLog, type ScraperResult } from '@repo/hydrology-engine'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
 interface HydrologyGovernmentRouterDeps {
-  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun' | 'getSourceFreshness' | 'findUnmappedAlertCoverageKeys' | 'createIberaIngestRun' | 'updateIberaIngestRun' | 'getIberaIngestRun' | 'claimIberaIngestLease'>>
+  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun' | 'getSourceFreshness' | 'findUnmappedAlertCoverageKeys' | 'createIberaIngestRun' | 'updateIberaIngestRun' | 'getIberaIngestRun' | 'claimIberaIngestLease'> & { listIberaIngestRuns: HydrologyRepository['listIberaIngestRuns'] }>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
   ingestionRunner: (input: HydrologyIngestionInput) => Promise<GovernmentIngestionResponse>
   ingestionCoordinator: HydrologyIngestionCoordinator
@@ -190,6 +193,8 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       alerts: municipality.latestTelemetry.filter((item) => item.metric === 'storm_alert'),
       provenance: await sourceFreshnessFromRepository(resolved.hydrologyRepository, municipality.latestTelemetry),
       coverageGaps: coverageGapsFor(municipality.gaugeMappings),
+      explanation: hydrologyMunicipalityExplanationSchema.parse(buildMunicipalityExplanation(municipality)),
+      timeline: hydrologyMunicipalityTimelineSchema.parse(buildMunicipalityTimeline(municipality)),
     })
     return res.json(payload)
   })
@@ -211,6 +216,18 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       .setHeader('x-request-id', requestId)
       .setHeader('Cache-Control', 'no-store')
       .json(hydrologyGovernmentIngestResponseSchema.parse({ ...observed, contractVersion: 'hydrology-government-ingest-v1' }))
+  })
+
+  router.get('/ingest/runs', async (req, res) => {
+    if (!isHydrologyIngestAuthorized(req)) return respondHydrologyIngestUnauthorized(res)
+    const list = resolved.hydrologyRepository.listIberaIngestRuns
+    if (!list) return res.status(503).json({ contractVersion: 'ibera-ingest-run-history-v1', items: [], nextCursor: null })
+    try {
+      const page = await list({ limit: boundedListLimit(req.query['limit']), cursor: typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined })
+      return res.setHeader('Cache-Control', 'no-store').json(hydrologyIberaRunHistoryResponseSchema.parse({ contractVersion: 'ibera-ingest-run-history-v1', items: page.items.map(toSafeRunHistoryItem), nextCursor: page.nextCursor }))
+    } catch {
+      return res.status(503).json({ contractVersion: 'ibera-ingest-run-history-v1', items: [], nextCursor: null })
+    }
   })
 
   router.post('/ingest', async (req, res) => {
@@ -514,6 +531,53 @@ export async function waitForObservation(promise: Promise<GovernmentIngestionRes
 function boundedObservationWait(value: unknown): number {
   const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : 0
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, INGEST_OBSERVATION_WAIT_CAP_MS) : 0
+}
+
+function buildMunicipalityExplanation(municipality: MunicipalityTelemetryDashboard) {
+  const observed = municipality.latestTelemetry.find((item) => item.metric === 'river_height_m' && item.forecastHorizonDays == null)
+  const forecast = municipality.latestTelemetry.find((item) => item.source === 'INA' && item.forecastHorizonDays != null)
+  const comparison = observed?.value == null || municipality.municipality.alertHeightM == null ? 'unknown' : observed.value >= municipality.municipality.alertHeightM ? 'at_or_above_alert' : 'below_alert'
+  return {
+    contractVersion: 'ibera-municipality-explanation-v1', municipalityId: municipality.municipality.id, evidenceState: observed?.freshness === 'fresh' ? 'observed' : observed ? 'degraded' : 'missing', relationLabel: 'source mapping / threshold comparison',
+    threshold: { alertHeightM: municipality.municipality.alertHeightM ?? null, evacuationHeightM: municipality.municipality.evacuationHeightM ?? null },
+    observed: { value: observed?.value ?? null, unit: observed?.unit ?? 'm', observedAt: observed?.observedAt ?? null, source: observed?.source ?? null, sourceUrl: observed?.sourceUrl ?? null, freshness: observed?.freshness ?? null, comparison },
+    tendency: { value: observed?.tendency ?? null, window: 'latest observed record' },
+    forecast: forecast?.forecastHorizonDays != null ? { horizonDays: forecast.forecastHorizonDays, confidence: forecast.confidence ?? forecastConfidenceForHorizon(forecast.forecastHorizonDays) ?? 'normal', label: forecast.forecastHorizonDays > 14 ? 'planning_only' : 'operational', source: forecast.source, sourceUrl: forecast.sourceUrl ?? null, observedAt: forecast.observedAt } : null,
+    lastSuccessfulObservedAt: observed?.lastSuccessfulObservedAt ?? null, runId: null,
+  }
+}
+
+function buildMunicipalityTimeline(municipality: MunicipalityTelemetryDashboard) {
+  const telemetryEvents = municipality.latestTelemetry.filter((item) => item.observedAt).map((item) => ({ id: `${item.source}-${item.stationId}-${item.observedAt}`, kind: item.metric === 'storm_alert' ? 'official_alert' as const : 'telemetry' as const, occurredAt: item.observedAt, source: item.source, sourceUrl: item.sourceUrl ?? null, evidenceState: item.forecastHorizonDays != null ? 'forecast' as const : item.freshness === 'fresh' ? 'observed' as const : 'degraded' as const, title: item.metric === 'storm_alert' ? 'Alerta oficial' : 'Telemetría observada', detail: boundTimelineDetail(item.value == null ? 'Valor no disponible; conservar estado degradado.' : `${item.value} ${item.unit}`) }))
+  const alerts = (municipality.officialAlerts ?? []).map((alert) => ({ id: `${alert.source}-${alert.coverageKey}-${alert.observedAt}`, kind: 'official_alert' as const, occurredAt: alert.observedAt, source: alert.source, sourceUrl: alert.sourceUrl ?? null, evidenceState: alert.freshness === 'fresh' ? 'observed' as const : 'degraded' as const, title: 'Alerta oficial', detail: boundTimelineDetail(sanitizeOfficialAlertMessage(alert.message)) }))
+  return { contractVersion: 'ibera-municipality-timeline-v1', municipalityId: municipality.municipality.id, events: [...telemetryEvents, ...alerts].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, 30) }
+}
+
+function boundTimelineDetail(value: string): string {
+  const normalized = value.replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim()
+  return normalized.length > 300 ? `${normalized.slice(0, 299).trimEnd()}…` : normalized
+}
+
+function boundedListLimit(value: unknown): number {
+  const parsed = typeof value === 'string' ? Number(value) : 25
+  return Number.isFinite(parsed) ? Math.min(50, Math.max(1, Math.floor(parsed))) : 25
+}
+
+function toSafeRunHistoryItem(run: IberaIngestRunRecord) {
+  const successful = run.sourceResults.some((result) => result.status === 'success')
+  return {
+    id: run.id,
+    proofRunId: run.proofRunId,
+    status: run.status,
+    requestedSources: run.requestedSources,
+    sourceResults: run.sourceResults,
+    diagnostics: Object.keys(run.diagnostics).slice(0, 8),
+    startedAt: run.startedAt.toISOString(),
+    finishedAt: run.finishedAt?.toISOString() ?? null,
+    expiresAt: run.expiresAt.toISOString(),
+    freshness: run.status === 'completed' && successful ? 'fresh' : run.status === 'queued' || run.status === 'started' ? 'missing' : 'degraded',
+    lastSuccessfulObservedAt: null,
+  }
 }
 
 function formatArgentinaDateTime(iso: string): string {

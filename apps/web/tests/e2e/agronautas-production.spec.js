@@ -119,6 +119,51 @@ test('agronautas smoke documenta que la release gate real vive en API/readiness 
     })
   })
 
+  await page.route('**/fields/field-prod-1/dashboard', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contractVersion: '1.0.0',
+        snapshotId: 'snap-prod-1',
+        field: { fieldId: 'field-prod-1', cropCategory: 'cereal', crop: 'rice', provinceCode: 'AR-W', locality: 'Mercedes' },
+        status: 'degraded',
+        freshness: 'degraded',
+        signals: [
+          { signalType: 'weather', status: 'degraded', evidenceRefs: ['signal_ingestion_runs:weather-api:climate:run-prod-1'], confidence: 0.72, degradationReasons: ['satellite_data_stale'] },
+          { signalType: 'satellite_vegetation', status: 'missing', evidenceRefs: ['signal_ingestion_runs:weather-api:climate:run-prod-1'], confidence: 0.2, degradationReasons: ['satellite_data_unavailable'] },
+        ],
+        risk: { score: 81, level: 'high', confidence: 0.72, drivers: [{ key: 'rainfall_load', label: 'Carga de lluvia', weight: 0.4, value: 0.8 }] },
+        alerts: [],
+        provenance: [{
+          evidenceId: 'weather-api-weather-prod-1',
+          provider: 'weather-api',
+          signalType: 'weather',
+          observedAt: '2026-06-03T00:00:00.000Z',
+          ingestedAt: '2026-06-03T00:05:00.000Z',
+          sourceUrl: 'https://example.com/weather',
+          rawHash: 'fixture-hash-prod-1',
+          confidence: 0.72,
+          freshness: 'degraded',
+          providerMode: 'seam',
+          lastSuccessfulObservedAt: '2026-06-03T00:00:00.000Z',
+          nextDueAt: '2026-06-03T06:00:00.000Z',
+          failureReason: 'satellite_data_stale',
+          degradationReasons: ['satellite_data_stale'],
+        }],
+        scheduler: { lastRunAt: '2026-06-03T00:00:00.000Z', nextRunAt: '2026-06-03T06:00:00.000Z', lockStatus: 'available', failures: [], nextDueBySource: [] },
+        generatedAt: '2026-06-03T00:05:00.000Z',
+        lastDataFetchedAt: '2026-06-03T00:00:00.000Z',
+        presentation: {
+          disclaimer: 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.',
+          confidenceLabel: 'media',
+          sourcesUnavailable: true,
+          staleFlags: ['satellite_data_stale'],
+        },
+      }),
+    })
+  })
+
   await page.goto('/demo')
   await page.getByTestId('agronautas-submit-intake').click()
 

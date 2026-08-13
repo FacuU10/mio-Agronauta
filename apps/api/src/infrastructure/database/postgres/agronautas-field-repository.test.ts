@@ -165,3 +165,25 @@ test('geometry persistence uses PostGIS geography metrics and canonical geometry
   assert.match(capturedSql, /boundary_area_m2/)
   assert.match(capturedSql, /geometry_source/)
 })
+
+test('field list query is bounded and deterministic by updated timestamp and id', async () => {
+  let capturedSql = ''
+  let capturedParams: unknown[] = []
+  const repository = new PostgresFieldRepository({
+    async query(sql: string, params?: unknown[]) {
+      capturedSql = sql
+      capturedParams = params ?? []
+      return { rows: [{ id: 'field-2', external_field_id: 'external-2', crop: 'rice', hectares: '12.5', locality_name: 'Mercedes', province_code: 'AR-W', centroid_lat: '-29.1', centroid_lng: '-58.1', boundary_source: {}, boundary_version: 'v1', polygon_wkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))', geometry_source: 'operator', geometry_updated_at: null, created_at: '2026-08-13T10:00:00.000Z', updated_at: '2026-08-13T10:00:00.000Z' }], rowCount: 1 }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresFieldRepository>[0])
+
+  const result = await repository.list?.({ limit: 1 })
+  assert.equal(result?.items.length, 1)
+  assert.match(capturedSql, /ORDER BY updated_at DESC, id DESC/)
+  assert.match(capturedSql, /LIMIT \$1/)
+  assert.equal(capturedParams[0], 2)
+  assert.equal(result?.items[0]?.field.props.id, 'field-2')
+  assert.match(capturedSql, /ST_AsText\(boundary\)\s+AS\s+polygon_wkt/i)
+  assert.equal(result?.items[0]?.field.props.polygonWkt, 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))')
+  assert.equal(result?.items[0]?.field.props.geometrySource, 'operator')
+})

@@ -75,6 +75,8 @@ export interface IberaIngestRunRecord extends IberaIngestRunInput {
   updatedAt?: Date
 }
 
+export interface IberaIngestRunPage { items: IberaIngestRunRecord[]; nextCursor: string | null }
+
 export interface FieldHydrologyMapping {
   fieldId: string
   zone: HydrologyTargetZone | null

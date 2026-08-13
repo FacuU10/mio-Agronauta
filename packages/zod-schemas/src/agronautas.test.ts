@@ -21,7 +21,44 @@ import {
   schedulerStatusSchema,
   signalEvidenceSchema,
   sourceCadenceSchema,
+  agronautasFieldIndexResponseSchema,
+  agronautasEvidenceSchema,
+  agronautasReportMetadataSchema,
+  agronautasRiskClimateExplanationSchema,
+  hydrologyIberaRunHistoryResponseSchema,
+  hydrologyMunicipalityExplanationSchema,
+  hydrologyMunicipalityTimelineSchema,
 } from './agronautas.js'
+
+test('product completion contracts are namespaced, versioned, and preserve unavailable evidence', () => {
+  const fieldIndex = agronautasFieldIndexResponseSchema.parse({
+    contractVersion: 'agronautas-field-index-v1',
+    items: [{ fieldId: 'field-1', externalFieldId: 'lot-1', crop: 'rice', hectares: 12, locality: 'Mercedes', provinceCode: 'AR-W', centroid: { lat: -29, lng: -58 }, geometryStatus: 'point_only', geometrySource: 'fallback', createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z', sourceRunIds: [] }],
+    nextCursor: null,
+  })
+  const evidence = agronautasEvidenceSchema.parse({ state: 'unavailable', label: 'Clima', source: null, observedAt: null, lastSuccessfulObservedAt: null, sourceRunIds: [], detail: 'No hay datos' })
+  const report = agronautasReportMetadataSchema.parse({ contractVersion: 'agronautas-report-v1', fieldId: 'field-1', snapshotId: 'snapshot-1', snapshotAt: '2026-08-13T10:00:00.000Z', evidenceState: 'degraded', geometryStatus: 'point_only', geometryUpdatedAt: null, sourceRunIds: [] })
+  const explanation = agronautasRiskClimateExplanationSchema.parse({ contractVersion: 'agronautas-risk-climate-v1', fieldId: 'field-1', score: 42, level: 'medium', drivers: [], validFrom: '2026-08-13T10:00:00.000Z', validUntil: '2026-08-13T11:00:00.000Z', nextReviewAction: 'Revisar fuentes antes de decidir', evidence: [evidence], engine: { id: 'risk-v0', version: '1', selectionStatus: 'undecided' }, sourceRunIds: [] })
+
+  assert.equal(fieldIndex.items[0]?.geometryStatus, 'point_only')
+  assert.equal(evidence.state, 'unavailable')
+  assert.equal(report.geometryStatus, 'point_only')
+  assert.equal(explanation.engine.selectionStatus, 'undecided')
+})
+
+test('Iberá history and municipality contracts retain safe degraded states and speculative horizon labels', () => {
+  const history = hydrologyIberaRunHistoryResponseSchema.parse({
+    contractVersion: 'ibera-ingest-run-history-v1',
+    items: [{ id: 'run-1', proofRunId: 'proof-1', status: 'partial', requestedSources: ['PNA'], sourceResults: [{ source: 'PNA', status: 'failed', recordsIngested: 0, errorMessage: 'timeout' }], diagnostics: [], startedAt: '2026-08-13T10:00:00.000Z', finishedAt: '2026-08-13T10:01:00.000Z', expiresAt: '2026-08-14T10:00:00.000Z', freshness: 'degraded', lastSuccessfulObservedAt: null }],
+    nextCursor: null,
+  })
+  const explanation = hydrologyMunicipalityExplanationSchema.parse({ contractVersion: 'ibera-municipality-explanation-v1', municipalityId: 'mercedes', evidenceState: 'observed', relationLabel: 'source mapping / threshold comparison', threshold: { alertHeightM: 4.8, evacuationHeightM: null }, observed: { value: 3.2, unit: 'm', observedAt: '2026-08-13T10:00:00.000Z', source: 'PNA', sourceUrl: 'https://example.com', freshness: 'fresh', comparison: 'below_alert' }, tendency: { value: 'creciente', window: 'latest observed record' }, forecast: { horizonDays: 20, confidence: 'speculative', label: 'planning_only', source: 'INA', sourceUrl: 'https://example.com/ina', observedAt: '2026-08-13T10:00:00.000Z' }, lastSuccessfulObservedAt: '2026-08-13T10:00:00.000Z', runId: null })
+  const timeline = hydrologyMunicipalityTimelineSchema.parse({ contractVersion: 'ibera-municipality-timeline-v1', municipalityId: 'mercedes', events: [{ id: 'event-1', kind: 'telemetry', occurredAt: '2026-08-13T10:00:00.000Z', source: 'PNA', sourceUrl: 'https://example.com', evidenceState: 'observed', title: 'Altura observada', detail: '3.2 m' }] })
+
+  assert.equal(history.items[0]?.freshness, 'degraded')
+  assert.equal(explanation.forecast?.label, 'planning_only')
+  assert.equal(timeline.events[0]?.kind, 'telemetry')
+})
 
 test('hydrology government ingest schema acepta completed, partial y failed', () => {
   const base = { contractVersion: 'hydrology-government-ingest-v1' as const, requestedSources: ['PNA', 'SMN'] }

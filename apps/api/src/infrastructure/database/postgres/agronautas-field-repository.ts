@@ -123,6 +123,23 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
     })
   }
 
+  async list(input: { limit: number; cursor?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }> {
+    const limit = Math.min(100, Math.max(1, Math.floor(input.limit)))
+    const result = await this.pool.query(
+       `SELECT id, external_field_id, crop, hectares, locality_name, province_code, centroid_lat, centroid_lng, boundary_source, boundary_version, ST_AsText(boundary) AS polygon_wkt, geometry_source, geometry_updated_at, created_at, updated_at
+         FROM fields
+        WHERE ($2::timestamptz IS NULL OR updated_at < $2::timestamptz)
+        ORDER BY updated_at DESC, id DESC
+        LIMIT $1`,
+      [limit + 1, input.cursor ? new Date(input.cursor) : null],
+    )
+    const rows = result.rows.slice(0, limit)
+    return {
+     items: rows.map((row) => ({ field: new Field({ id: row.id, externalFieldId: row.external_field_id, crop: row.crop, hectares: Number(row.hectares), localityName: row.locality_name, provinceCode: row.province_code, centroid: { lat: Number(row.centroid_lat), lng: Number(row.centroid_lng) }, boundaryMetadata: (row.boundary_source as typeof corrientesRiceZoneBoundarySource) ?? corrientesRiceZoneBoundarySource, polygonWkt: row.polygon_wkt ?? undefined, geometrySource: row.geometry_source ?? undefined }), createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at), geometryUpdatedAt: row.geometry_updated_at ? new Date(row.geometry_updated_at) : null })),
+      nextCursor: result.rows.length > limit ? rows.at(-1)?.updated_at?.toISOString() ?? null : null,
+    }
+  }
+
   async findById(fieldId: string): Promise<Field | null> {
     const result = await this.pool.query(
        `SELECT id, external_field_id, crop, hectares, locality_name, province_code, centroid_lat, centroid_lng, boundary_source, ST_AsText(boundary) AS polygon_wkt, geometry_source

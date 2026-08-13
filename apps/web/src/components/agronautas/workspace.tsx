@@ -3,7 +3,7 @@
 import { createElement, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
-import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasFieldIndexResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
@@ -28,6 +28,7 @@ interface WorkspaceProps {
   runtimeStatus: 'loading' | 'ready' | 'error'
   runtimeError: string | null
   selectedFieldId: string | null
+  fieldIndex?: AgronautasFieldIndexResponse
   lastCreatedFieldId: string | null
   intakeError: string | null
   isSubmitting: boolean
@@ -94,6 +95,7 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
       </section>
 
       <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
+        <FieldIndexPanel index={props.fieldIndex} onSelectField={props.onSelectField} />
         <IntakePanel {...props} />
         <DashboardPanel {...props} />
       </section>
@@ -101,6 +103,10 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
     </main>
     </ProductShell>
   )
+}
+
+function FieldIndexPanel({ index, onSelectField }: { index?: AgronautasFieldIndexResponse; onSelectField: (fieldId: string) => void }) {
+  return <Card className="xl:col-span-2" aria-label="Índice de lotes Agronautas"><CardHeader><CardTitle>Índice de lotes</CardTitle><CardDescription>Registros persistidos, ordenados por última actualización. No se inventan lotes cuando la fuente está vacía.</CardDescription></CardHeader><CardContent>{!index ? <p role="status">Cargando lotes…</p> : index.items.length === 0 ? <p role="status">No hay lotes disponibles.</p> : <ul className="grid gap-3 md:grid-cols-2">{index.items.map((item) => <li key={item.fieldId} className="rounded-2xl border border-stone-200 p-4"><p className="font-semibold">{item.externalFieldId}</p><p className="text-sm text-stone-600">{item.locality} · {item.crop} · {item.hectares} ha</p><p className="mt-2 text-xs uppercase tracking-wide text-stone-500">Geometría: {item.geometryStatus === 'saved' ? 'guardada' : 'sólo punto'}</p><Button type="button" variant="outline" className="mt-3" onClick={() => onSelectField(item.fieldId)}>Abrir detalle</Button></li>)}</ul>}</CardContent></Card>
 }
 
 function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspaceProps) {

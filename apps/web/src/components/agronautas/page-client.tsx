@@ -30,6 +30,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const [chatError, setChatError] = useState<string | null>(null)
   const [lastChatMessage, setLastChatMessage] = useState<string | null>(null)
   const [lastHydrologyMessage, setLastHydrologyMessage] = useState<string | null>(null)
+  const fieldsQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'fields'], queryFn: () => resolvedService.listFields(), retry: false }] })[0]
   const geometryQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'geometry', selectedFieldId], queryFn: () => resolvedService.getFieldGeometry?.(selectedFieldId as string), enabled: Boolean(selectedFieldId && resolvedService.getFieldGeometry) }] })[0]
   const geometryMutation = useMutation({ mutationFn: async (input: { polygonWkt: string; expectedUpdatedAt?: string }) => {
     if (!selectedFieldId || !resolvedService.updateFieldGeometry) throw new Error('La edición de geometría no está disponible')
@@ -167,7 +168,8 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       runtimeMode={runtimeQuery.data?.mode ?? 'real'}
       runtimeStatus={runtimeQuery.isLoading ? 'loading' : runtimeQuery.error ? 'error' : 'ready'}
       runtimeError={runtimeQuery.error instanceof Error ? runtimeQuery.error.message : null}
-      selectedFieldId={selectedFieldId}
+       selectedFieldId={selectedFieldId}
+       fieldIndex={fieldsQuery.data}
       lastCreatedFieldId={lastCreatedFieldId}
       intakeError={intakeError}
       isSubmitting={intakeMutation.isPending}
@@ -188,7 +190,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       recomputeStatus={recomputeRequestResultSchema.safeParse(recomputeMutation.data).success ? recomputeMutation.data : undefined}
       isRecomputePending={recomputeMutation.isPending}
        isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || dashboardQuery.isLoading}
-      queryErrors={queryErrors}
+       queryErrors={[...queryErrors, ...(fieldsQuery.error ? [fieldsQuery.error instanceof Error ? fieldsQuery.error.message : 'No se pudo cargar el índice de lotes'] : [])]}
       onRetrySync={retrySync}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}

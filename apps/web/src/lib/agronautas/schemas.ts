@@ -16,6 +16,9 @@ import {
   weatherTimelineResponseSchema,
   fieldGeometryResponseSchema,
   fieldGeometryUpdateSchema,
+  agronautasFieldIndexResponseSchema,
+  hydrologyGovernmentDashboardResponseSchema,
+  agronautasRiskClimateExplanationSchema,
 } from '@repo/zod-schemas'
 
 export {
@@ -34,6 +37,9 @@ export {
   dashboardSnapshotSchema,
   fieldGeometryResponseSchema,
   fieldGeometryUpdateSchema,
+  agronautasFieldIndexResponseSchema,
+  hydrologyGovernmentDashboardResponseSchema,
+  agronautasRiskClimateExplanationSchema,
 }
 
 export const fieldCreatedSchema = z.object({
@@ -162,5 +168,7 @@ export type WeatherTimelineResponse = z.infer<typeof weatherTimelineResponseSche
 export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
 export type FieldGeometryResponse = z.infer<typeof fieldGeometryResponseSchema>
 export type FieldGeometryUpdate = z.infer<typeof fieldGeometryUpdateSchema>
+export type AgronautasFieldIndexResponse = z.infer<typeof agronautasFieldIndexResponseSchema>
+export type AgronautasRiskClimateExplanation = z.infer<typeof agronautasRiskClimateExplanationSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>

@@ -25,6 +25,7 @@ export interface FieldRepository {
   findById(fieldId: string): Promise<Field | null>
   findByExternalFieldId(fieldId: string): Promise<Field | null>
   resolveCoverage(point: GeoPoint): Promise<SupportedCoverageResult>
+  list?(input: { limit: number; cursor?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
 }
 
 export interface FieldContextRepository {

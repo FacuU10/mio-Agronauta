@@ -20,6 +20,7 @@ import {
   runtimeInfoSchema,
   fieldGeometryResponseSchema,
   fieldGeometryUpdateSchema,
+  agronautasFieldIndexResponseSchema,
 } from './schemas'
 import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
@@ -60,6 +61,7 @@ export interface AgronautasService {
   requestRecompute(fieldId: string): Promise<RecomputeRequestResult>
   askFieldChat(fieldId: string, input: GroundedChatRequest): Promise<GroundedChatResponse>
   askHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onEvent: (event: SseEvent) => void): Promise<void>
+  listFields(): Promise<import('./schemas').AgronautasFieldIndexResponse>
 }
 
 export function createAgronautasApiService(options: AgronautasApiServiceOptions = {}): AgronautasService {
@@ -68,6 +70,7 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
   return {
     getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
     createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
+    listFields: async () => agronautasFieldIndexResponseSchema.parse(await apiClient('/fields')),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
     getFieldGeometry: async (fieldId) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'))),
     updateFieldGeometry: async (fieldId, input) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'), { method: 'PATCH', body: JSON.stringify(fieldGeometryUpdateSchema.parse(input)) })),
@@ -102,6 +105,7 @@ export function createAgronautasMockService(): AgronautasService {
   })
 
   return {
+    async listFields() { return agronautasFieldIndexResponseSchema.parse({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null }) },
     async getRuntime() {
       return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
     },

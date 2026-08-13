@@ -1138,6 +1138,7 @@ function createFieldRepository(input: { coverage: SupportedCoverageResult; field
     async findById(fieldId) { return input.fieldStore.get(fieldId) ?? null },
     async findByExternalFieldId(fieldId) { return [...input.fieldStore.values()].find((field) => field.props.externalFieldId === fieldId) ?? null },
     async resolveCoverage() { return input.coverage },
+    async list() { return { items: [...input.fieldStore.values()].map((field, index) => ({ field, createdAt: new Date(`2026-08-13T10:0${index}:00.000Z`), updatedAt: new Date(`2026-08-13T10:0${index}:00.000Z`), geometryUpdatedAt: null })), nextCursor: null } },
   }
 }
 

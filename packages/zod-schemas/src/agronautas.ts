@@ -143,6 +143,9 @@ const geoJsonPolygonSchema = z.object({
   coordinates: z.array(z.array(z.array(z.number().finite()).length(2)).min(4)).length(1),
 })
 
+const evidenceStateSchema = z.enum(['observed', 'forecast', 'degraded', 'missing', 'point_only', 'unavailable'])
+const cursorSchema = z.string().trim().min(1).max(240).nullable()
+
 export const fieldIntakeSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
@@ -300,6 +303,25 @@ export const fieldGeometryResponseSchema = z.object({
   source: z.enum(agronautasFieldGeometrySources),
   updatedAt: z.string().datetime().nullable(),
 })
+
+export const agronautasEvidenceSchema = z.object({
+  state: evidenceStateSchema,
+  label: z.string().min(1).max(120),
+  source: z.string().min(1).max(160).nullable(),
+  observedAt: z.string().datetime().nullable(),
+  lastSuccessfulObservedAt: z.string().datetime().nullable(),
+  sourceRunIds: z.array(z.string().min(1).max(120)).default([]),
+  detail: z.string().min(1).max(300).nullable(),
+})
+
+export const agronautasFieldIndexItemSchema = z.object({
+  fieldId: z.string().min(1).max(80), externalFieldId: z.string().min(1).max(120), crop: z.string().min(1).max(80), hectares: z.number().positive(), locality: z.string().min(1).max(120), provinceCode: z.string().min(1).max(16), centroid: geoPointSchema,
+  geometryStatus: z.enum(agronautasFieldGeometryStatuses), geometrySource: z.enum(agronautasFieldGeometrySources), geometryUpdatedAt: z.string().datetime().nullable().optional(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(), sourceRunIds: z.array(z.string().min(1).max(120)).default([]),
+})
+
+export const agronautasFieldIndexResponseSchema = z.object({ contractVersion: z.literal('agronautas-field-index-v1'), items: z.array(agronautasFieldIndexItemSchema), nextCursor: cursorSchema })
+export const agronautasReportMetadataSchema = z.object({ contractVersion: z.literal('agronautas-report-v1'), fieldId: z.string().min(1).max(80), snapshotId: z.string().min(1).max(80), snapshotAt: z.string().datetime(), evidenceState: evidenceStateSchema, geometryStatus: z.enum(agronautasFieldGeometryStatuses), geometryUpdatedAt: z.string().datetime().nullable(), sourceRunIds: z.array(z.string().min(1).max(120)).default([]) })
+export const agronautasRiskClimateExplanationSchema = z.object({ contractVersion: z.literal('agronautas-risk-climate-v1'), fieldId: z.string().min(1).max(80), score: z.number().min(0).max(100), level: z.enum(agronautasRiskLevels), drivers: z.array(riskDriverSchema), validFrom: z.string().datetime(), validUntil: z.string().datetime(), nextReviewAction: z.string().min(1).max(240), evidence: z.array(agronautasEvidenceSchema), engine: z.object({ id: z.string().min(1).max(80), version: z.string().min(1).max(80), selectionStatus: z.literal('undecided') }), sourceRunIds: z.array(z.string().min(1).max(120)).default([]) })
 
 export const pdfReportRequestSchema = z.object({
   fieldId: z.string().min(1).max(80),
@@ -529,6 +551,8 @@ export const hydrologyGovernmentDashboardResponseSchema = z.object({
   alerts: z.array(hydrologyTelemetrySchema.refine((value) => value.source === 'SMN' || value.source === 'INMET', 'Las alertas municipales provienen de SMN/INMET en Fase 1')).default([]),
   provenance: z.array(hydrologyGovernmentFreshnessSchema).default([]),
   coverageGaps: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
+  explanation: z.lazy(() => hydrologyMunicipalityExplanationSchema).optional(),
+  timeline: z.lazy(() => hydrologyMunicipalityTimelineSchema).optional(),
 })
 
 export const hydrologyGovernmentIngestRequestSchema = z.object({
@@ -600,6 +624,15 @@ export const hydrologyIberaSourceResultSchema = z.object({
   httpSummary: hydrologyGovernmentHttpSummarySchema.optional(),
   diagnostic: hydrologyGovernmentIngestDiagnosticSchema.optional(),
 })
+
+export const hydrologyIberaRunHistoryItemSchema = z.object({
+  id: z.string().min(1).max(120), proofRunId: z.string().min(1).max(120), status: z.enum(hydrologyIberaRunStatuses), requestedSources: z.array(hydrologySourceSchema), sourceResults: z.array(hydrologyIberaSourceResultSchema), diagnostics: z.array(z.string().min(1).max(160)).default([]), startedAt: z.string().datetime(), finishedAt: z.string().datetime().nullable(), expiresAt: z.string().datetime(), freshness: z.enum(['fresh', 'degraded', 'missing']), lastSuccessfulObservedAt: z.string().datetime().nullable(),
+})
+export const hydrologyIberaRunHistoryResponseSchema = z.object({ contractVersion: z.literal('ibera-ingest-run-history-v1'), items: z.array(hydrologyIberaRunHistoryItemSchema), nextCursor: cursorSchema })
+export const hydrologyMunicipalityExplanationSchema = z.object({
+  contractVersion: z.literal('ibera-municipality-explanation-v1'), municipalityId: z.string().min(1).max(80), evidenceState: evidenceStateSchema, relationLabel: z.literal('source mapping / threshold comparison'), threshold: z.object({ alertHeightM: z.number().nullable(), evacuationHeightM: z.number().nullable() }), observed: z.object({ value: z.number().nullable(), unit: z.string().min(1).max(24), observedAt: z.string().datetime().nullable(), source: hydrologySourceSchema.nullable(), sourceUrl: z.string().url().nullable(), freshness: hydrologyFreshnessSchema.nullable(), comparison: z.enum(['below_alert', 'at_or_above_alert', 'unknown']) }), tendency: z.object({ value: z.string().min(1).max(80).nullable(), window: z.string().min(1).max(120) }), forecast: z.object({ horizonDays: z.number().int().min(0).max(30), confidence: z.enum(hydrologyForecastConfidence), label: z.enum(['operational', 'planning_only']), source: hydrologySourceSchema, sourceUrl: z.string().url().nullable(), observedAt: z.string().datetime() }).nullable(), lastSuccessfulObservedAt: z.string().datetime().nullable(), runId: z.string().min(1).max(120).nullable(),
+})
+export const hydrologyMunicipalityTimelineSchema = z.object({ contractVersion: z.literal('ibera-municipality-timeline-v1'), municipalityId: z.string().min(1).max(80), events: z.array(z.object({ id: z.string().min(1).max(160), kind: z.enum(['telemetry', 'official_alert']), occurredAt: z.string().datetime(), source: hydrologySourceSchema, sourceUrl: z.string().url().nullable(), evidenceState: evidenceStateSchema, title: z.string().min(1).max(160), detail: z.string().min(1).max(300) })) })
 
 export const hydrologyIberaCitationSchema = z.object({
   id: z.string().trim().min(1).max(120),
@@ -764,6 +797,11 @@ export type AgronautasProviderMode = z.infer<typeof providerModeSchema>
 export type SourceCadence = z.infer<typeof sourceCadenceSchema>
 export type SchedulerStatus = z.infer<typeof schedulerStatusSchema>
 export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
+export type AgronautasEvidence = z.infer<typeof agronautasEvidenceSchema>
+export type AgronautasFieldIndexItem = z.infer<typeof agronautasFieldIndexItemSchema>
+export type AgronautasFieldIndexResponse = z.infer<typeof agronautasFieldIndexResponseSchema>
+export type AgronautasReportMetadata = z.infer<typeof agronautasReportMetadataSchema>
+export type AgronautasRiskClimateExplanation = z.infer<typeof agronautasRiskClimateExplanationSchema>
 export type PdfReportRequest = z.infer<typeof pdfReportRequestSchema>
 export type RiskSnapshot = z.infer<typeof riskSnapshotSchema>
 export type AlertSnapshot = z.infer<typeof alertSnapshotSchema>
@@ -792,6 +830,10 @@ export type HydrologyIberaRunStatus = (typeof hydrologyIberaRunStatuses)[number]
 export type HydrologyIberaSourceResult = z.infer<typeof hydrologyIberaSourceResultSchema>
 export type HydrologyIberaCitation = z.infer<typeof hydrologyIberaCitationSchema>
 export type HydrologyIberaCopilotMetadata = z.infer<typeof hydrologyIberaCopilotMetadataSchema>
+export type HydrologyIberaRunHistoryItem = z.infer<typeof hydrologyIberaRunHistoryItemSchema>
+export type HydrologyIberaRunHistoryResponse = z.infer<typeof hydrologyIberaRunHistoryResponseSchema>
+export type HydrologyMunicipalityExplanation = z.infer<typeof hydrologyMunicipalityExplanationSchema>
+export type HydrologyMunicipalityTimeline = z.infer<typeof hydrologyMunicipalityTimelineSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>

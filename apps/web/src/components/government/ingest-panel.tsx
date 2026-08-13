@@ -32,6 +32,7 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
   const [result, setResult] = useState<SafeIngestView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  const [history, setHistory] = useState<Array<{ id: string; status: string; proofRunId: string; startedAt: string; freshness: string }>>([])
 
   useEffect(() => {
     mountedRef.current = true
@@ -41,6 +42,14 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
       setAuthorized(false)
     }
   }, [])
+
+  async function loadHistory() {
+    if (!token.trim()) return
+    const response = await fetch('/api/hydrology/ingest/runs?limit=10', { headers: { 'x-hydrology-ingest-token': token }, cache: 'no-store' })
+    if (!response.ok) return
+    const payload = await response.json() as { items?: Array<{ id: string; status: string; proofRunId: string; startedAt: string; freshness: string }> }
+    if (mountedRef.current) setHistory(payload.items ?? [])
+  }
 
   async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -65,7 +74,7 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
       if (payload.contractVersion !== '1.0.0' || payload.authorized !== true) {
         throw new IngestRequestError('No se pudo verificar el acceso a la ingesta.')
       }
-      if (mountedRef.current) setAuthorized(true)
+       if (mountedRef.current) setAuthorized(true)
     } catch (cause) {
       if (mountedRef.current) {
         setToken('')
@@ -171,6 +180,7 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
 
         {error ? <p className="mt-4 rounded-2xl border border-red-300/30 bg-red-950/60 px-4 py-3 text-red-100" role="alert">{error}</p> : null}
         {result ? <SafeResultView result={result} onRetry={() => { setResult(null); setError(null); setAuthorized(false) }} /> : null}
+        {authorized ? <section className="mt-6 rounded-[2rem] border border-white/10 bg-slate-900/80 p-6" aria-label="Historial de corridas"><div className="flex items-center justify-between gap-3"><h2 className="text-2xl font-black">Historial durable</h2><button type="button" onClick={() => void loadHistory()} className="rounded-full border border-amber-300 px-3 py-2 text-sm font-bold text-amber-100">Actualizar</button></div>{history.length ? <ul className="mt-4 space-y-3">{history.map((run) => <li key={run.id} className="rounded-2xl bg-white/5 p-3 text-sm"><p className="font-bold">{run.id} · {run.status} · {run.freshness}</p><p className="text-slate-300">Proof: {run.proofRunId} · {run.startedAt}</p></li>)}</ul> : <p className="mt-3 text-slate-300">No hay corridas durables disponibles.</p>}</section> : null}
       </div>
     </main>
   )
