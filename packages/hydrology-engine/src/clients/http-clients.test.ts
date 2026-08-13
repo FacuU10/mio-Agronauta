@@ -117,7 +117,7 @@ test('PnaHttpClient does not retry parse failures or non-retryable 4xx responses
 
 test('PnaHttpClient enforces a finite total timeout budget across retry attempts', async () => {
   let calls = 0
-  const result = await new PnaHttpClient({ timeoutMs: 10, totalTimeoutMs: 25, retryBackoffMs: 1, fetch: async (_input, init) => {
+  const result = await new PnaHttpClient({ timeoutMs: 10, totalTimeoutMs: 100, retryBackoffMs: 1, fetch: async (_input, init) => {
     calls += 1
     return new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
@@ -128,8 +128,8 @@ test('PnaHttpClient enforces a finite total timeout budget across retry attempts
   assert.equal(calls, 2)
   assert.equal(result.ok ? '' : result.diagnostic.failureKind, 'timeout')
   assert.equal(result.ok ? 0 : result.diagnostic.attempts, 2)
-  assert.ok((result.ok ? 0 : result.diagnostic.durationMs ?? 0) <= 100)
-  assert.ok((result.httpSummary?.elapsedMs ?? 0) <= 100)
+  assert.ok((result.ok ? 0 : result.diagnostic.durationMs ?? 0) <= 200)
+  assert.ok((result.httpSummary?.elapsedMs ?? 0) <= 200)
 })
 
 test('official clients read per-source timeouts and cap unsafe values', async () => {

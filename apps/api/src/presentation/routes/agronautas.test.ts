@@ -870,6 +870,11 @@ test('POST /fields/:id/chat cae a modo degradado cuando Groq no está disponible
 
   const response = await request(createTestApp({
     fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }),
+    groqProvider: {
+      enabled: false,
+      async selectAction() { throw new Error('groq_disabled_fixture') },
+      async finalizeResponse() { throw new Error('groq_disabled_fixture') },
+    },
   }), `/agronautas/fields/${field.props.id}/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1099,6 +1104,7 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     geometryRepository: overrides.geometryRepository ?? { async getGeometry() { return null }, async updateGeometry() { throw new Error('geometry repository not configured') } },
     hydrologyRepository: overrides.hydrologyRepository ?? { async getDenseContextForField(fieldId: string) { return hydrologyContext(fieldId) } },
     hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: DEFAULT_GROQ_MODEL } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: DEFAULT_GROQ_MODEL } } } },
+    groqProvider: overrides.groqProvider ?? { enabled: false, async selectAction() { throw new Error('groq_disabled_fixture') }, async finalizeResponse() { throw new Error('groq_disabled_fixture') } },
   }))
   return app
 }

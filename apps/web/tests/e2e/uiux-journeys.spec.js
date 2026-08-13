@@ -4,6 +4,7 @@ const observedAt = '2026-06-23T13:40:00.000Z'
 const validUntil = '2026-06-23T19:40:00.000Z'
 const fieldId = 'field-uiux-1'
 const snapshotId = 'snapshot-uiux-1'
+const apiPort = process.env.PLAYWRIGHT_API_PORT ?? '3001'
 
 const riskSnapshot = {
   contractVersion: '1.0.0',
@@ -127,7 +128,7 @@ const hydrologyDashboard = {
 async function mockAgronautas(page, { partialCopilot = true } = {}) {
   const registerApiRoute = async (suffix, handler) => {
     await page.route(`**/api/agronautas/**${suffix}`, handler)
-    await page.route(`**:3001${suffix}`, handler)
+    await page.route(`**:${apiPort}${suffix}`, handler)
   }
 
   await registerApiRoute('/runtime', (route) => route.fulfill({

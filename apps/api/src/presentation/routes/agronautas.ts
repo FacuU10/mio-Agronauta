@@ -17,6 +17,7 @@ import { CreateFieldIntakeUseCase } from '../../application/usecases/create-fiel
 import { GenerateAlertsUseCase, toAlertContracts, toStaleAlertContracts, toStoredAlertContracts } from '../../application/usecases/generate-alerts-usecase'
 import { RequestRiskRecomputeUseCase } from '../../application/usecases/request-risk-recompute-usecase'
 import { GroundedChatUseCase } from '../../application/usecases/grounded-chat-usecase'
+import type { GroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import type {
   AgronautasJobRunRepository,
   AgronautasRuntimeDispatcher,
@@ -63,6 +64,7 @@ interface AgronautasRouterDeps {
   demoContactSubmissionRepository: DemoContactSubmissionRepository
   hydrologyRepository: Pick<HydrologyRepository, 'getDenseContextForField'>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
+  groqProvider: GroqChatProvider
   isVersionedNamespace: boolean
   providerEvidencePort: ProviderEvidencePort
   geometryRepository: FieldGeometryRepository
@@ -82,6 +84,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     demoContactSubmissionRepository: deps.demoContactSubmissionRepository ?? new PostgresDemoContactSubmissionRepository(),
     hydrologyRepository: deps.hydrologyRepository ?? new HydrologyRepository(getPostgresPool()),
     hydrologyCopilotService: deps.hydrologyCopilotService ?? new HydrologyCopilotService(),
+    groqProvider: deps.groqProvider ?? createGroqChatProvider(),
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
     providerEvidencePort: deps.providerEvidencePort ?? new RealProviderEvidencePort(),
     geometryRepository: deps.geometryRepository ?? (fieldRepository as unknown as FieldGeometryRepository),
@@ -96,7 +99,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     fieldRepository: resolved.fieldRepository,
     riskSnapshotRepository: resolved.riskSnapshotRepository,
     alertSnapshotRepository: resolved.alertSnapshotRepository,
-    groqProvider: createGroqChatProvider(),
+    groqProvider: resolved.groqProvider,
   })
   const runtimeConfig = getAgronautasRuntimeConfig()
   const chatRateLimitMiddleware = createChatRateLimitMiddleware()
