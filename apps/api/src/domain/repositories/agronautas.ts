@@ -25,7 +25,34 @@ export interface FieldRepository {
   findById(fieldId: string): Promise<Field | null>
   findByExternalFieldId(fieldId: string): Promise<Field | null>
   resolveCoverage(point: GeoPoint): Promise<SupportedCoverageResult>
-  list?(input: { limit: number; cursor?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
+  list?(input: { limit: number; cursor?: string; workspaceId?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
+}
+
+export const DEFAULT_AGRONAUTAS_WORKSPACE_ID = 'agronautas-default-workspace'
+
+export interface AgronautasWorkspaceContextRecord {
+  workspaceId: string
+  name: string
+  status: 'active'
+  fieldCount: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface AgronautasWorkspaceRepository {
+  ensureDefaultWorkspace(): Promise<AgronautasWorkspaceContextRecord>
+  getWorkspace(workspaceId: string): Promise<AgronautasWorkspaceContextRecord | null>
+  listWorkspaceFields(input: { workspaceId: string; limit: number; cursor?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
+  listFieldActivity(fieldId: string): Promise<AgronautasActivitySourceRecord[]>
+}
+
+export type AgronautasActivitySourceType = 'field' | 'risk_snapshot' | 'alert_snapshot' | 'ingestion_run' | 'recompute_run'
+
+export interface AgronautasActivitySourceRecord {
+  sourceType: AgronautasActivitySourceType
+  sourceId: string
+  occurredAt: Date
+  title: string
 }
 
 export interface FieldContextRepository {

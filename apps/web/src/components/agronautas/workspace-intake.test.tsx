@@ -8,6 +8,22 @@ import { AgronautasPageClient } from './page-client'
 import { createAgronautasMockService } from '@/lib/agronautas/service'
 import { useAgronautasStore } from '@/store/agronautas-store'
 
+const workspaceField = {
+  fieldId: 'field-workspace-001',
+  externalFieldId: 'corrientes-workspace-001',
+  crop: 'rice',
+  hectares: 24,
+  locality: 'Mercedes',
+  provinceCode: 'AR-W',
+  centroid: { lat: -29.2, lng: -58.1 },
+  geometryStatus: 'point_only' as const,
+  geometrySource: 'fallback' as const,
+  geometryUpdatedAt: null,
+  createdAt: '2026-08-13T10:00:00.000Z',
+  updatedAt: '2026-08-13T10:00:00.000Z',
+  sourceRunIds: [],
+}
+
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/demo' })
   globalThis.window = dom.window as unknown as Window & typeof globalThis
@@ -40,6 +56,55 @@ test('Agronautas intake offers locality search, provider-neutral pin preview and
   assert.ok(view.getByRole('article', { name: 'Precios y tendencias de mercado' }))
   assert.equal(future.querySelectorAll('button, a, input, select, form').length, 0)
   assert.doesNotMatch(future.textContent ?? '', /(?:\$|USD|ARS|\b\d+(?:[.,]\d+)?\s*(?:%|kg|ha|mm|t)\b)/i)
+})
+
+test('Agronautas field index consumes workspace pagination instead of the legacy global list', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+  const base = createAgronautasMockService()
+  let legacyListCalled = false
+  let workspaceListCalled = 0
+  const view = render(<QueryProvider><AgronautasPageClient service={{
+    ...base,
+    async listFields() {
+      legacyListCalled = true
+      throw new Error('legacy global field list must not be used')
+    },
+    async listWorkspaceFields(workspaceId, cursor) {
+      workspaceListCalled += 1
+      return {
+        contractVersion: 'agronautas-workspace-fields-v1' as const,
+        workspaceId,
+        items: cursor ? [{ ...workspaceField, fieldId: 'field-workspace-002', externalFieldId: 'corrientes-workspace-002' }] : [workspaceField],
+        nextCursor: cursor ? null : '2026-08-13T10:00:00.000Z',
+      }
+    },
+    async getWorkspace() {
+      return {
+        contractVersion: 'agronautas-management-v1' as const,
+        workspaceId: 'agronautas-default-workspace',
+        name: 'Agronautas',
+        status: 'active' as const,
+        fieldCount: 2,
+        createdAt: '2026-08-13T10:00:00.000Z',
+        updatedAt: '2026-08-13T10:00:00.000Z',
+      }
+    },
+  }} /></QueryProvider>)
+
+  await waitFor(() => {
+    assert.ok(view.getByText('corrientes-workspace-001'))
+    assert.equal(legacyListCalled, false)
+    assert.equal(workspaceListCalled, 1)
+    assert.ok(view.getByRole('button', { name: /Cargar más lotes/i }))
+  })
+
+  fireEvent.click(view.getByRole('button', { name: /Cargar más lotes/i }))
+  await waitFor(() => {
+    assert.ok(view.getByText('corrientes-workspace-002'))
+    assert.equal(workspaceListCalled, 2)
+  })
 })
 
 test('Agronautas dashboard prioritizes decision, confidence, freshness and next action after intake', async () => {

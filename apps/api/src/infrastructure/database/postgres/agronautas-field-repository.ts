@@ -1,7 +1,7 @@
 import type { Pool, QueryResult } from 'pg'
 import { corrientesRiceZoneBoundarySource } from '@repo/zod-schemas'
 import { Field, FieldContext } from '../../../domain/entities/agronautas'
-import type { FieldContextRepository, FieldRepository, SupportedCoverageResult } from '../../../domain/repositories/agronautas'
+import { DEFAULT_AGRONAUTAS_WORKSPACE_ID, type FieldContextRepository, type FieldRepository, type SupportedCoverageResult } from '../../../domain/repositories/agronautas'
 import { getPostgresPool } from './pool'
 import { normalizeFieldGeometryInput, polygonMetrics, type FieldGeometry, type FieldGeometryInput } from '../../../domain/geometry/field-geometry'
 import type { FieldGeometryRepository } from '../../../domain/repositories/agronautas'
@@ -50,11 +50,11 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
     const geometry = field.props.polygonWkt ? normalizeFieldGeometryInput({ polygonWkt: field.props.polygonWkt }) : null
     const metrics = geometry ? polygonMetrics(geometry.coordinates) : null
     await this.pool.query(
-      `INSERT INTO fields (
-        id, external_field_id, crop, hectares, locality_name, province_code,
+       `INSERT INTO fields (
+         id, external_field_id, crop, hectares, locality_name, province_code, workspace_id,
         centroid_lat, centroid_lng, boundary_source, boundary_version, boundary, centroid, boundary_area_m2, boundary_perimeter_m, geometry_source, geometry_updated_at,
         "externalFieldId", "localityName", "provinceCode", "centroidLat", "centroidLng", "boundarySource", "boundaryVersion", "updatedAt"
-      ) VALUES ($1,$2,$3,CASE WHEN $11 IS NULL THEN $4 ELSE ST_Area(ST_GeomFromText($11,4326)::geography) / 10000 END,$5,$6,CASE WHEN $11 IS NULL THEN $7 ELSE ST_Y(ST_Centroid(ST_GeomFromText($11,4326))) END,CASE WHEN $11 IS NULL THEN $8 ELSE ST_X(ST_Centroid(ST_GeomFromText($11,4326))) END,$9::jsonb,$10,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromText($11,4326)) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Centroid(ST_GeomFromText($11,4326)) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Area(ST_GeomFromText($11,4326)::geography) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Perimeter(ST_GeomFromText($11,4326)::geography) END,$14,$15,$2,$5,$6,$7,$8,$9::jsonb,$10,NOW())
+       ) VALUES ($1,$2,$3,CASE WHEN $11 IS NULL THEN $4 ELSE ST_Area(ST_GeomFromText($11,4326)::geography) / 10000 END,$5,$6,'${DEFAULT_AGRONAUTAS_WORKSPACE_ID}',CASE WHEN $11 IS NULL THEN $7 ELSE ST_Y(ST_Centroid(ST_GeomFromText($11,4326))) END,CASE WHEN $11 IS NULL THEN $8 ELSE ST_X(ST_Centroid(ST_GeomFromText($11,4326))) END,$9::jsonb,$10,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromText($11,4326)) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Centroid(ST_GeomFromText($11,4326)) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Area(ST_GeomFromText($11,4326)::geography) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Perimeter(ST_GeomFromText($11,4326)::geography) END,$14,$15,$2,$5,$6,$7,$8,$9::jsonb,$10,NOW())
       ON CONFLICT (id) DO UPDATE SET
         hectares = EXCLUDED.hectares,
         locality_name = EXCLUDED.locality_name,

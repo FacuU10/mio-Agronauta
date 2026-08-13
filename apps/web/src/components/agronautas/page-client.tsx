@@ -1,11 +1,11 @@
 'use client'
 
 import { createElement, useState } from 'react'
-import { useMutation, useQueries } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueries } from '@tanstack/react-query'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { ApiError } from '@/lib/api-client'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
-import { AGRONAUTAS_CONTRACT_VERSION, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse } from '@/lib/agronautas/schemas'
+import { AGRONAUTAS_CONTRACT_VERSION, agronautasWorkspaceFieldPageSchema, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse, type AgronautasWorkspaceFieldPage } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
 import { applyChatEvent, createChatStreamState, type ChatStreamState } from '@/lib/visibility/chat'
 import type { SseEvent } from '@/lib/visibility/sse'
@@ -30,7 +30,23 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const [chatError, setChatError] = useState<string | null>(null)
   const [lastChatMessage, setLastChatMessage] = useState<string | null>(null)
   const [lastHydrologyMessage, setLastHydrologyMessage] = useState<string | null>(null)
-  const fieldsQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'fields'], queryFn: () => resolvedService.listFields(), retry: false }] })[0]
+  const workspaceQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'workspace'], queryFn: () => resolvedService.getWorkspace(), retry: false }] })[0]
+  const fieldsQuery = useInfiniteQuery({
+    queryKey: ['agronautas', 'workspace-fields', workspaceQuery.data?.workspaceId],
+    queryFn: ({ pageParam }) => resolvedService.listWorkspaceFields(workspaceQuery.data?.workspaceId ?? '', pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: Boolean(workspaceQuery.data?.workspaceId),
+    retry: false,
+  })
+  const fieldIndex = fieldsQuery.data?.pages.reduce<AgronautasWorkspaceFieldPage | undefined>((current, page) => {
+    const parsed = agronautasWorkspaceFieldPageSchema.parse(page)
+    return {
+      ...parsed,
+      items: [...(current?.items ?? []), ...parsed.items],
+      nextCursor: parsed.nextCursor,
+    }
+  }, undefined)
   const geometryQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'geometry', selectedFieldId], queryFn: () => resolvedService.getFieldGeometry?.(selectedFieldId as string), enabled: Boolean(selectedFieldId && resolvedService.getFieldGeometry) }] })[0]
   const geometryMutation = useMutation({ mutationFn: async (input: { polygonWkt: string; expectedUpdatedAt?: string }) => {
     if (!selectedFieldId || !resolvedService.updateFieldGeometry) throw new Error('La edición de geometría no está disponible')
@@ -148,6 +164,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       },
     ],
   })
+  const activityQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'activity', selectedFieldId], queryFn: () => resolvedService.getFieldActivity(selectedFieldId as string), enabled: Boolean(selectedFieldId), retry: false }] })[0]
   const runtimeQuery = useQueries({
     queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime() }],
   })[0]
@@ -169,7 +186,13 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       runtimeStatus={runtimeQuery.isLoading ? 'loading' : runtimeQuery.error ? 'error' : 'ready'}
       runtimeError={runtimeQuery.error instanceof Error ? runtimeQuery.error.message : null}
        selectedFieldId={selectedFieldId}
-       fieldIndex={fieldsQuery.data}
+        fieldIndex={fieldIndex}
+        isFieldIndexLoading={fieldsQuery.isLoading}
+        isFieldIndexFetchingNextPage={fieldsQuery.isFetchingNextPage}
+        hasNextFieldPage={Boolean(fieldsQuery.hasNextPage)}
+        onLoadMoreFields={() => void fieldsQuery.fetchNextPage()}
+       workspace={workspaceQuery.data}
+       activity={activityQuery.data}
       lastCreatedFieldId={lastCreatedFieldId}
       intakeError={intakeError}
       isSubmitting={intakeMutation.isPending}
@@ -190,7 +213,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       recomputeStatus={recomputeRequestResultSchema.safeParse(recomputeMutation.data).success ? recomputeMutation.data : undefined}
       isRecomputePending={recomputeMutation.isPending}
        isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || dashboardQuery.isLoading}
-       queryErrors={[...queryErrors, ...(fieldsQuery.error ? [fieldsQuery.error instanceof Error ? fieldsQuery.error.message : 'No se pudo cargar el índice de lotes'] : [])]}
+        queryErrors={[...queryErrors, ...(workspaceQuery.error ? [workspaceQuery.error instanceof Error ? workspaceQuery.error.message : 'No se pudo cargar el contexto Agronautas'] : []), ...(activityQuery.error ? [activityQuery.error instanceof Error ? activityQuery.error.message : 'No se pudo cargar la actividad'] : []), ...(fieldsQuery.error ? [fieldsQuery.error instanceof Error ? fieldsQuery.error.message : 'No se pudo cargar el índice de lotes'] : [])]}
       onRetrySync={retrySync}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}

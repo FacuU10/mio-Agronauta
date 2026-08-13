@@ -73,3 +73,28 @@ test('mock geometry service preserves a point-only fallback and updates determin
   assert.equal(updated.hectares, 1)
   assert.equal((await service.getFieldGeometry('field-demo-1')).polygonWkt, updated.polygonWkt)
 })
+
+test('management service reads workspace context, cursor fields, and source-backed activity', async () => {
+  const previousFetch = globalThis.fetch
+  const calls: string[] = []
+  globalThis.fetch = (async (input) => {
+    calls.push(String(input))
+    const url = String(input)
+    const payload = url.includes('/workspace/fields')
+      ? { contractVersion: 'agronautas-workspace-fields-v1', workspaceId: 'agronautas-default-workspace', items: [], nextCursor: null }
+      : url.includes('/activity')
+        ? { contractVersion: 'agronautas-activity-v1', fieldId: 'field-1', items: [{ activityId: 'risk_snapshot:snap-1', sourceType: 'risk_snapshot', sourceId: 'snap-1', occurredAt: '2026-08-13T10:00:00.000Z', title: 'Risk snapshot persisted' }] }
+        : { contractVersion: 'agronautas-management-v1', workspaceId: 'agronautas-default-workspace', name: 'Agronautas', status: 'active', fieldCount: 0, createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z' }
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+
+  try {
+    const service = createAgronautasApiService()
+    assert.equal((await service.getWorkspace()).workspaceId, 'agronautas-default-workspace')
+    assert.equal((await service.listWorkspaceFields('agronautas-default-workspace')).items.length, 0)
+    assert.equal((await service.getFieldActivity('field-1')).items[0]?.sourceType, 'risk_snapshot')
+    assert.deepEqual(calls, ['/api/agronautas/v1/workspace', '/api/agronautas/v1/workspace/fields?workspaceId=agronautas-default-workspace', '/api/agronautas/v1/fields/field-1/activity'])
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})

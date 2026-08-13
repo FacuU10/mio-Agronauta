@@ -1,9 +1,9 @@
 'use client'
 
-import { createElement, useState, type InputHTMLAttributes } from 'react'
+import { createElement, Fragment, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
-import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasFieldIndexResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
@@ -21,14 +21,19 @@ import { Select } from '@/components/ui/select'
 import { EVIDENCE_STATE, normalizeEvidence, type EvidenceViewModel } from '@/lib/visibility/evidence-state'
 import { FieldGeometryEditor } from './field-geometry-editor'
 
-const React = { createElement }
+const React = { createElement, Fragment }
 
 interface WorkspaceProps {
   runtimeMode: 'real' | 'demo'
   runtimeStatus: 'loading' | 'ready' | 'error'
   runtimeError: string | null
   selectedFieldId: string | null
-  fieldIndex?: AgronautasFieldIndexResponse
+  fieldIndex?: AgronautasWorkspaceFieldPage
+  isFieldIndexLoading: boolean
+  isFieldIndexFetchingNextPage: boolean
+  hasNextFieldPage: boolean
+  workspace?: AgronautasWorkspaceContext
+  activity?: AgronautasActivityResponse
   lastCreatedFieldId: string | null
   intakeError: string | null
   isSubmitting: boolean
@@ -51,6 +56,7 @@ interface WorkspaceProps {
   recomputeStatus?: RecomputeRequestResult
   isRecomputePending: boolean
   onSelectField: (fieldId: string | null) => void
+  onLoadMoreFields: () => void
   onSubmitIntake: (input: FieldIntake) => Promise<unknown>
   onSaveGeometry?: (input: { polygonWkt: string; expectedUpdatedAt?: string }) => Promise<FieldGeometryResponse>
   onRequestRecompute: () => Promise<unknown>
@@ -94,19 +100,22 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
         </Card>
       </section>
 
-      <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
-        <FieldIndexPanel index={props.fieldIndex} onSelectField={props.onSelectField} />
+       <section className="grid gap-4" aria-label="Contexto de workspace Agronautas">
+          <Card><CardHeader><CardTitle>Contexto de trabajo</CardTitle><CardDescription>{props.workspace ? `${props.workspace.name} · ${props.workspace.fieldCount} lotes en contexto predeterminado · Solo datos persistidos.` : 'Cargando contexto Agronautas…'}</CardDescription></CardHeader></Card>
+       </section>
+       <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
+         <FieldIndexPanel index={props.fieldIndex} isLoading={props.isFieldIndexLoading} isFetchingNextPage={props.isFieldIndexFetchingNextPage} hasNextPage={props.hasNextFieldPage} onLoadMore={props.onLoadMoreFields} onSelectField={props.onSelectField} />
         <IntakePanel {...props} />
-        <DashboardPanel {...props} />
+         <DashboardPanel {...props} />
       </section>
-      <FutureCapabilities product="agronautas" />
+       <FutureCapabilities product="agronautas" />
     </main>
     </ProductShell>
   )
 }
 
-function FieldIndexPanel({ index, onSelectField }: { index?: AgronautasFieldIndexResponse; onSelectField: (fieldId: string) => void }) {
-  return <Card className="xl:col-span-2" aria-label="Índice de lotes Agronautas"><CardHeader><CardTitle>Índice de lotes</CardTitle><CardDescription>Registros persistidos, ordenados por última actualización. No se inventan lotes cuando la fuente está vacía.</CardDescription></CardHeader><CardContent>{!index ? <p role="status">Cargando lotes…</p> : index.items.length === 0 ? <p role="status">No hay lotes disponibles.</p> : <ul className="grid gap-3 md:grid-cols-2">{index.items.map((item) => <li key={item.fieldId} className="rounded-2xl border border-stone-200 p-4"><p className="font-semibold">{item.externalFieldId}</p><p className="text-sm text-stone-600">{item.locality} · {item.crop} · {item.hectares} ha</p><p className="mt-2 text-xs uppercase tracking-wide text-stone-500">Geometría: {item.geometryStatus === 'saved' ? 'guardada' : 'sólo punto'}</p><Button type="button" variant="outline" className="mt-3" onClick={() => onSelectField(item.fieldId)}>Abrir detalle</Button></li>)}</ul>}</CardContent></Card>
+function FieldIndexPanel({ index, isLoading, isFetchingNextPage, hasNextPage, onLoadMore, onSelectField }: { index?: AgronautasWorkspaceFieldPage; isLoading: boolean; isFetchingNextPage: boolean; hasNextPage: boolean; onLoadMore: () => void; onSelectField: (fieldId: string) => void }) {
+  return <Card className="xl:col-span-2" aria-label="Índice de lotes Agronautas"><CardHeader><CardTitle>Índice de lotes</CardTitle><CardDescription>Registros persistidos del contexto seleccionado, ordenados por última actualización. No se inventan lotes cuando la fuente está vacía.</CardDescription></CardHeader><CardContent>{isLoading || !index ? <p role="status">Cargando lotes…</p> : index.items.length === 0 ? <p role="status">No hay lotes disponibles.</p> : <><ul className="grid gap-3 md:grid-cols-2">{index.items.map((item) => <li key={item.fieldId} className="rounded-2xl border border-stone-200 p-4"><p className="font-semibold">{item.externalFieldId}</p><p className="text-sm text-stone-600">{item.locality} · {item.crop} · {item.hectares} ha</p><p className="mt-2 text-xs uppercase tracking-wide text-stone-500">Geometría: {item.geometryStatus === 'saved' ? 'guardada' : 'sólo punto'}</p><Button type="button" variant="outline" className="mt-3" onClick={() => onSelectField(item.fieldId)}>Abrir detalle</Button></li>)}</ul>{hasNextPage ? <Button type="button" variant="outline" className="mt-4" onClick={onLoadMore} disabled={isFetchingNextPage}>{isFetchingNextPage ? 'Cargando lotes…' : 'Cargar más lotes'}</Button> : null}</>}</CardContent></Card>
 }
 
 function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspaceProps) {
@@ -201,7 +210,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
- function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, activity, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -353,6 +362,13 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
           </CardContent>
         </Card>
       </div>
+
+      <Card id="agronautas-activity" data-testid="agronautas-activity-card">
+        <CardHeader><CardTitle>Actividad derivada de fuentes</CardTitle><CardDescription>No es historial autoral: muestra únicamente registros persistidos de campo, riesgo, alertas, ingestión y recompute.</CardDescription></CardHeader>
+        <CardContent className="grid gap-3 text-sm">
+          {activity?.items.length ? activity.items.map((item) => <div key={item.activityId} className="rounded-2xl border border-[var(--border)] p-3"><p className="font-medium">{item.title}</p><p className="text-[var(--muted-foreground)]">{item.sourceType} · {item.sourceId} · {formatDateTime(item.occurredAt)}</p></div>) : <p role="status">Sin actividad fuente para este lote.</p>}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-[1.15fr,0.85fr]">
         <Card data-testid="agronautas-risk-card">

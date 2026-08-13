@@ -130,18 +130,47 @@ async function mockAgronautas(page, { partialCopilot = true } = {}) {
     await page.route(`**/api/agronautas/**${suffix}`, handler)
     await page.route(`**:${apiPort}${suffix}`, handler)
   }
+  const fulfillJson = (payload, status = 200) => async (route) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) })
 
   await registerApiRoute('/runtime', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({ mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' }),
   }))
+  await registerApiRoute('/workspace', fulfillJson({
+    contractVersion: 'agronautas-management-v1',
+    workspaceId: 'agronautas-default-workspace',
+    name: 'Agronautas',
+    status: 'active',
+    fieldCount: 1,
+    createdAt: observedAt,
+    updatedAt: observedAt,
+  }))
+  await registerApiRoute('/workspace/fields', fulfillJson({
+    contractVersion: 'agronautas-workspace-fields-v1',
+    workspaceId: 'agronautas-default-workspace',
+    items: [{
+      fieldId,
+      externalFieldId: 'corrientes-lote-uiux-1',
+      crop: 'rice',
+      hectares: 42.5,
+      locality: 'Mercedes',
+      provinceCode: 'AR-W',
+      centroid: field.centroid,
+      geometryStatus: 'point_only',
+      geometrySource: 'fallback',
+      geometryUpdatedAt: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+      sourceRunIds: [],
+    }],
+    nextCursor: null,
+  }))
   await registerApiRoute('/fields', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback()
     await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ fieldId, coverage: { locality: 'Mercedes', provinceCode: 'AR-W', boundaryVersion: 'uiux-v1' } }) })
   })
 
-  const fulfillJson = (payload, status = 200) => async (route) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) })
   await registerApiRoute(`/fields/${fieldId}`, fulfillJson(field))
   await registerApiRoute(`/fields/${fieldId}/risk/current`, fulfillJson({ status: 'stale', snapshot: riskSnapshot, recompute: { status: 'enqueued' } }))
   await registerApiRoute(`/fields/${fieldId}/alerts/current`, fulfillJson({ status: 'stale', snapshot: riskSnapshot, alerts: [alert], recompute: { status: 'already_in_progress' } }))

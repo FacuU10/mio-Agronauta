@@ -57,6 +57,8 @@ export const agronautasContractErrorCodes = [
   'FORBIDDEN',
   'WORKER_UNAVAILABLE',
 ] as const
+export const agronautasWorkspaceStatuses = ['active'] as const
+export const agronautasActivitySourceTypes = ['field', 'risk_snapshot', 'alert_snapshot', 'ingestion_run', 'recompute_run'] as const
 
 const trimmedString = (max: number) => z.string().trim().min(1).max(max)
 const optionalTrimmedString = (max: number) => z.string().trim().max(max).optional().transform((value) => value && value.length > 0 ? value : undefined)
@@ -320,6 +322,43 @@ export const agronautasFieldIndexItemSchema = z.object({
 })
 
 export const agronautasFieldIndexResponseSchema = z.object({ contractVersion: z.literal('agronautas-field-index-v1'), items: z.array(agronautasFieldIndexItemSchema), nextCursor: cursorSchema })
+const workspaceContractVersionSchema = z.literal('agronautas-management-v1')
+const workspaceFieldContractVersionSchema = z.literal('agronautas-workspace-fields-v1')
+const activityContractVersionSchema = z.literal('agronautas-activity-v1')
+const workspaceStatusSchema = z.enum(agronautasWorkspaceStatuses)
+const activitySourceTypeSchema = z.enum(agronautasActivitySourceTypes)
+const workspaceTimestampSchema = z.string().datetime()
+
+export const agronautasWorkspaceContextSchema = z.object({
+  contractVersion: workspaceContractVersionSchema,
+  workspaceId: z.string().min(1).max(80),
+  name: z.string().min(1).max(120),
+  status: workspaceStatusSchema,
+  fieldCount: z.number().int().nonnegative(),
+  createdAt: workspaceTimestampSchema,
+  updatedAt: workspaceTimestampSchema,
+})
+
+export const agronautasWorkspaceFieldPageSchema = z.object({
+  contractVersion: workspaceFieldContractVersionSchema,
+  workspaceId: z.string().min(1).max(80),
+  items: z.array(agronautasFieldIndexItemSchema),
+  nextCursor: cursorSchema,
+})
+
+export const agronautasActivityItemSchema = z.object({
+  activityId: z.string().min(1).max(180),
+  sourceType: activitySourceTypeSchema,
+  sourceId: z.string().min(1).max(120),
+  occurredAt: z.string().datetime(),
+  title: z.string().min(1).max(180),
+})
+
+export const agronautasActivityResponseSchema = z.object({
+  contractVersion: activityContractVersionSchema,
+  fieldId: z.string().min(1).max(80),
+  items: z.array(agronautasActivityItemSchema),
+})
 export const agronautasReportMetadataSchema = z.object({ contractVersion: z.literal('agronautas-report-v1'), fieldId: z.string().min(1).max(80), snapshotId: z.string().min(1).max(80), snapshotAt: z.string().datetime(), evidenceState: evidenceStateSchema, geometryStatus: z.enum(agronautasFieldGeometryStatuses), geometryUpdatedAt: z.string().datetime().nullable(), sourceRunIds: z.array(z.string().min(1).max(120)).default([]) })
 export const agronautasRiskClimateExplanationSchema = z.object({ contractVersion: z.literal('agronautas-risk-climate-v1'), fieldId: z.string().min(1).max(80), score: z.number().min(0).max(100), level: z.enum(agronautasRiskLevels), drivers: z.array(riskDriverSchema), validFrom: z.string().datetime(), validUntil: z.string().datetime(), nextReviewAction: z.string().min(1).max(240), evidence: z.array(agronautasEvidenceSchema), engine: z.object({ id: z.string().min(1).max(80), version: z.string().min(1).max(80), selectionStatus: z.literal('undecided') }), sourceRunIds: z.array(z.string().min(1).max(120)).default([]) })
 
@@ -800,6 +839,10 @@ export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
 export type AgronautasEvidence = z.infer<typeof agronautasEvidenceSchema>
 export type AgronautasFieldIndexItem = z.infer<typeof agronautasFieldIndexItemSchema>
 export type AgronautasFieldIndexResponse = z.infer<typeof agronautasFieldIndexResponseSchema>
+export type AgronautasWorkspaceContext = z.infer<typeof agronautasWorkspaceContextSchema>
+export type AgronautasWorkspaceFieldPage = z.infer<typeof agronautasWorkspaceFieldPageSchema>
+export type AgronautasActivityItem = z.infer<typeof agronautasActivityItemSchema>
+export type AgronautasActivityResponse = z.infer<typeof agronautasActivityResponseSchema>
 export type AgronautasReportMetadata = z.infer<typeof agronautasReportMetadataSchema>
 export type AgronautasRiskClimateExplanation = z.infer<typeof agronautasRiskClimateExplanationSchema>
 export type PdfReportRequest = z.infer<typeof pdfReportRequestSchema>

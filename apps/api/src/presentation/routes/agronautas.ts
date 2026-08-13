@@ -14,6 +14,7 @@ import {
   agronautasFieldIndexResponseSchema,
   agronautasReportMetadataSchema,
   agronautasRiskClimateExplanationSchema,
+  agronautasActivityResponseSchema,
 } from '@repo/zod-schemas'
 import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
@@ -52,6 +53,9 @@ import { ProviderEvidencePort, RealProviderEvidencePort } from '../../infrastruc
 import { UpdateFieldGeometryUseCase } from '../../application/usecases/update-field-geometry-usecase'
 import type { FieldGeometryRepository } from '../../domain/repositories/agronautas'
 import { toAgronautasFieldIndexItem } from '../../application/viewmodels/agronautas-pilot'
+import { EnsureDefaultWorkspace, GetFieldActivity, GetWorkspaceContext, ListWorkspaceFields } from '../../application/usecases/agronautas-management'
+import type { AgronautasWorkspaceRepository } from '../../domain/repositories/agronautas'
+import { PostgresAgronautasManagementRepository } from '../../infrastructure/database/postgres/agronautas-management-repository'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -72,6 +76,7 @@ interface AgronautasRouterDeps {
   isVersionedNamespace: boolean
   providerEvidencePort: ProviderEvidencePort
   geometryRepository: FieldGeometryRepository
+  workspaceRepository: AgronautasWorkspaceRepository
 }
 
 export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {}): Router {
@@ -92,6 +97,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
     providerEvidencePort: deps.providerEvidencePort ?? new RealProviderEvidencePort(),
     geometryRepository: deps.geometryRepository ?? (fieldRepository as unknown as FieldGeometryRepository),
+    workspaceRepository: deps.workspaceRepository ?? new PostgresAgronautasManagementRepository(),
   }
 
   const router = Router()
@@ -176,6 +182,30 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
   })
 
+  router.get('/workspace', requireRead, async (_req, res) => {
+    try {
+      return res.json(await ensureDefaultWorkspace.execute())
+    } catch {
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'El contexto Agronautas no está disponible', undefined, true)
+    }
+  })
+
+  router.get('/workspace/fields', requireRead, async (req, res) => {
+    const workspaceId = typeof req.query['workspaceId'] === 'string' ? req.query['workspaceId'] : undefined
+    if (!workspaceId) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Workspace id is required')
+    try {
+      const workspace = await getWorkspaceContext.execute(workspaceId)
+      if (!workspace) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Workspace not found')
+      return res.json(await listWorkspaceFields.execute({ workspaceId, limit: parseLimit(req), cursor: typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined }))
+    } catch {
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'Los lotes del workspace no están disponibles', undefined, true)
+    }
+  })
+  const ensureDefaultWorkspace = new EnsureDefaultWorkspace(resolved.workspaceRepository)
+  const getWorkspaceContext = new GetWorkspaceContext(resolved.workspaceRepository)
+  const listWorkspaceFields = new ListWorkspaceFields(resolved.workspaceRepository)
+  const getFieldActivity = new GetFieldActivity(resolved.workspaceRepository)
+
   router.get('/fields', requireRead, async (req, res) => {
     if (!resolved.fieldRepository.list) return res.status(503).json({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null, unavailable: true })
     try {
@@ -207,6 +237,18 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       centroid: field.props.centroid,
       polygonWkt: field.props.polygonWkt,
     })
+  })
+
+  router.get('/fields/:fieldId/activity', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    try {
+      const field = await resolved.fieldRepository.findById(fieldId)
+      if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+      return res.json(agronautasActivityResponseSchema.parse(await getFieldActivity.execute(fieldId)))
+    } catch {
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'La actividad del lote no está disponible', undefined, true)
+    }
   })
 
   router.get('/fields/:fieldId/geometry', requireRead, async (req, res) => {

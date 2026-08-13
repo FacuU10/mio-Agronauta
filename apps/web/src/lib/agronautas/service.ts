@@ -21,8 +21,11 @@ import {
   fieldGeometryResponseSchema,
   fieldGeometryUpdateSchema,
   agronautasFieldIndexResponseSchema,
+  agronautasWorkspaceContextSchema,
+  agronautasWorkspaceFieldPageSchema,
+  agronautasActivityResponseSchema,
 } from './schemas'
-import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse } from './schemas'
+import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
 const AGRONAUTAS_REQUEST_MODES = {
@@ -62,6 +65,9 @@ export interface AgronautasService {
   askFieldChat(fieldId: string, input: GroundedChatRequest): Promise<GroundedChatResponse>
   askHydrologyCopilot(fieldId: string, input: GroundedChatRequest, onEvent: (event: SseEvent) => void): Promise<void>
   listFields(): Promise<import('./schemas').AgronautasFieldIndexResponse>
+  getWorkspace(): Promise<AgronautasWorkspaceContext>
+  listWorkspaceFields(workspaceId: string, cursor?: string): Promise<AgronautasWorkspaceFieldPage>
+  getFieldActivity(fieldId: string): Promise<AgronautasActivityResponse>
 }
 
 export function createAgronautasApiService(options: AgronautasApiServiceOptions = {}): AgronautasService {
@@ -71,6 +77,9 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
     getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
     createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
     listFields: async () => agronautasFieldIndexResponseSchema.parse(await apiClient('/fields')),
+    getWorkspace: async () => agronautasWorkspaceContextSchema.parse(await apiClient('/workspace')),
+    listWorkspaceFields: async (workspaceId, cursor) => agronautasWorkspaceFieldPageSchema.parse(await apiClient(`/workspace/fields?workspaceId=${encodeURIComponent(workspaceId)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)),
+    getFieldActivity: async (fieldId) => agronautasActivityResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/activity'))),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
     getFieldGeometry: async (fieldId) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'))),
     updateFieldGeometry: async (fieldId, input) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'), { method: 'PATCH', body: JSON.stringify(fieldGeometryUpdateSchema.parse(input)) })),
@@ -106,6 +115,9 @@ export function createAgronautasMockService(): AgronautasService {
 
   return {
     async listFields() { return agronautasFieldIndexResponseSchema.parse({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null }) },
+    async getWorkspace() { return agronautasWorkspaceContextSchema.parse({ contractVersion: 'agronautas-management-v1', workspaceId: 'agronautas-default-workspace', name: 'Agronautas', status: 'active', fieldCount: 0, createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z' }) },
+    async listWorkspaceFields(workspaceId) { return agronautasWorkspaceFieldPageSchema.parse({ contractVersion: 'agronautas-workspace-fields-v1', workspaceId, items: [], nextCursor: null }) },
+    async getFieldActivity(fieldId) { return agronautasActivityResponseSchema.parse({ contractVersion: 'agronautas-activity-v1', fieldId, items: [] }) },
     async getRuntime() {
       return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
     },

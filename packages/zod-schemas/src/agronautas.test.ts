@@ -28,6 +28,9 @@ import {
   hydrologyIberaRunHistoryResponseSchema,
   hydrologyMunicipalityExplanationSchema,
   hydrologyMunicipalityTimelineSchema,
+  agronautasWorkspaceContextSchema,
+  agronautasWorkspaceFieldPageSchema,
+  agronautasActivityResponseSchema,
 } from './agronautas.js'
 
 test('product completion contracts are namespaced, versioned, and preserve unavailable evidence', () => {
@@ -601,4 +604,48 @@ test('evidence, cadence, scheduler, dashboard y PDF contract fields are explicit
   assert.equal(dashboard.presentation.confidenceLabel, 'alta')
   assert.match(dashboard.presentation.disclaimer, /criterio agronómico local/i)
   assert.deepEqual(pdfRequest, { fieldId: 'field-maiz-corrientes', snapshotId: 'dash-1' })
+})
+
+test('management contracts expose a deterministic workspace and cursor page without identity semantics', () => {
+  const workspace = agronautasWorkspaceContextSchema.parse({
+    contractVersion: 'agronautas-management-v1',
+    workspaceId: 'agronautas-default-workspace',
+    name: 'Agronautas',
+    status: 'active',
+    fieldCount: 1,
+    createdAt: '2026-08-13T10:00:00.000Z',
+    updatedAt: '2026-08-13T10:00:00.000Z',
+  })
+  const page = agronautasWorkspaceFieldPageSchema.parse({
+    contractVersion: 'agronautas-workspace-fields-v1',
+    workspaceId: workspace.workspaceId,
+    items: [{
+      fieldId: 'field-1', externalFieldId: 'lot-1', crop: 'rice', hectares: 12,
+      locality: 'Mercedes', provinceCode: 'AR-W', centroid: { lat: -29, lng: -58 },
+      geometryStatus: 'point_only', geometrySource: 'fallback', geometryUpdatedAt: null,
+      createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z',
+    }],
+    nextCursor: null,
+  })
+
+  assert.equal(workspace.workspaceId, 'agronautas-default-workspace')
+  assert.equal(page.items[0]?.fieldId, 'field-1')
+  assert.equal(Reflect.has(workspace, 'ownerId'), false)
+  assert.equal(Reflect.has(page.items[0] ?? {}, 'tenantId'), false)
+})
+
+test('management activity contracts require a source label and reject authored-history fields', () => {
+  const activity = agronautasActivityResponseSchema.parse({
+    contractVersion: 'agronautas-activity-v1',
+    fieldId: 'field-1',
+    items: [{
+      activityId: 'risk_snapshot:snapshot-1', sourceType: 'risk_snapshot', sourceId: 'snapshot-1',
+      occurredAt: '2026-08-13T10:00:00.000Z', title: 'Risk snapshot persisted',
+    }],
+  })
+
+  assert.equal(activity.items[0]?.sourceType, 'risk_snapshot')
+  assert.equal(Reflect.has(activity.items[0] ?? {}, 'actorId'), false)
+  assert.equal(Reflect.has(activity.items[0] ?? {}, 'decision'), false)
+  assert.equal(agronautasActivityResponseSchema.safeParse({ ...activity, items: [{ ...activity.items[0], sourceType: 'operator' }] }).success, false)
 })
