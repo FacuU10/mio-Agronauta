@@ -3,7 +3,7 @@
 import { createElement, Fragment, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
-import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse, AgronautasIntelligence } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextResponse, AssumptionSimulationResponse, AssumptionSimulationRequest } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
@@ -35,6 +35,10 @@ interface WorkspaceProps {
   workspace?: AgronautasWorkspaceContext
   activity?: AgronautasActivityResponse
   intelligence?: AgronautasIntelligence
+  planningContext?: CampaignPlanningContextResponse
+  simulation?: AssumptionSimulationResponse
+  onLoadPlanningContext: (input: { campaignName: string; season: string; fieldIds: string[] }) => Promise<unknown>
+  onSimulateAssumptions: (input: AssumptionSimulationRequest) => Promise<unknown>
   lastCreatedFieldId: string | null
   intakeError: string | null
   isSubmitting: boolean
@@ -104,15 +108,87 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
        <section className="grid gap-4" aria-label="Contexto de workspace Agronautas">
           <Card><CardHeader><CardTitle>Contexto de trabajo</CardTitle><CardDescription>{props.workspace ? `${props.workspace.name} · ${props.workspace.fieldCount} lotes en contexto predeterminado · Solo datos persistidos.` : 'Cargando contexto Agronautas…'}</CardDescription></CardHeader></Card>
        </section>
-       <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
+        <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
          <FieldIndexPanel index={props.fieldIndex} isLoading={props.isFieldIndexLoading} isFetchingNextPage={props.isFieldIndexFetchingNextPage} hasNextPage={props.hasNextFieldPage} onLoadMore={props.onLoadMoreFields} onSelectField={props.onSelectField} />
         <IntakePanel {...props} />
           <DashboardPanel {...props} />
-      </section>
-       <FutureCapabilities product="agronautas" />
+       </section>
+        <PlanningPanel {...props} />
+        <FutureCapabilities product="agronautas" />
     </main>
     </ProductShell>
   )
+}
+
+function PlanningPanel({ fieldIndex, planningContext, simulation, onLoadPlanningContext, onSimulateAssumptions }: WorkspaceProps) {
+  const [campaignName, setCampaignName] = useState('Campaña demostrativa')
+  const [season, setSeason] = useState('2026')
+  const [areaHa, setAreaHa] = useState('10')
+  const [yieldKg, setYieldKg] = useState('4000')
+  const [price, setPrice] = useState('0.4')
+  const [variableCost, setVariableCost] = useState('500')
+  const [fixedCost, setFixedCost] = useState('200')
+  const [error, setError] = useState<string | null>(null)
+  const fieldId = fieldIndex?.items[0]?.fieldId
+  const runSimulation = async () => {
+    setError(null)
+    const numericInputs = [areaHa, yieldKg, price, variableCost, fixedCost]
+    const hasInvalidNumericInput = numericInputs.some((value) => value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) < 0) || Number(areaHa) <= 0 || Number(yieldKg) <= 0
+    if (hasInvalidNumericInput) {
+      setError('Completá todos los supuestos con valores válidos antes de calcular.')
+      return
+    }
+    try {
+      await onSimulateAssumptions({ contractVersion: 'agronautas-assumption-simulation-v1', areaHa: Number(areaHa), expectedYieldKgPerHa: Number(yieldKg), pricePerKg: Number(price), variableCostPerHa: Number(variableCost), fixedCost: Number(fixedCost), currency: 'ARS', precision: 2, units: { area: 'ha', expectedYield: 'kg/ha', price: 'currency/kg', variableCost: 'currency/ha', fixedCost: 'currency' }, assumptions: ['Valores ingresados manualmente; no son datos observados.'] })
+    } catch {
+      setError('Completá todos los supuestos con valores válidos antes de calcular.')
+    }
+  }
+  return <section id="agronautas-planning" className="grid gap-5" aria-label="Planificación de campaña Agronautas">
+    <Card><CardHeader><CardTitle>Planificación de campaña</CardTitle><CardDescription>Contexto de solo lectura y simulación local con supuestos de la persona usuaria. No se guarda una campaña ni una relación de propiedad.</CardDescription></CardHeader><CardContent className="grid gap-4">
+       <div className="grid gap-4 md:grid-cols-2"><Field label="Nombre de campaña" name="campaign-name" value={campaignName} onChange={(event) => setCampaignName(event.target.value)} /><Field label="Temporada" name="campaign-season" value={season} onChange={(event) => setSeason(event.target.value)} /></div>
+       <Button type="button" onClick={() => void onLoadPlanningContext({ campaignName, season, fieldIds: [fieldId ?? 'field-demo-1'] })}>Ver contexto de lectura</Button>
+       {planningContext ? <div role="status" className="grid gap-4 rounded-2xl border border-stone-200 p-4">
+         <div>
+           <p className="font-semibold">{planningContext.campaignName} · {planningContext.season}</p>
+           <p className="text-sm">{planningContext.fields.length} lote(s) · persistencia: {planningContext.persistent ? 'sí' : 'no'}</p>
+         </div>
+         <div className="grid gap-2" aria-label="Datos de lotes seleccionados">
+           <h3 className="font-semibold">Datos de lotes seleccionados</h3>
+           <ul className="grid gap-3 sm:grid-cols-2">
+             {planningContext.fields.map((field) => <li key={field.fieldId} className="rounded-xl border border-stone-200 p-3 text-sm">
+               <p className="font-semibold">{field.externalFieldId}</p>
+               <dl className="mt-2 grid gap-1 text-stone-700">
+                 <div><dt className="inline font-medium">Cultivo: </dt><dd className="inline">{field.crop}</dd></div>
+                 <div><dt className="inline font-medium">Área: </dt><dd className="inline">{field.hectares} ha</dd></div>
+                 <div><dt className="inline font-medium">Localidad: </dt><dd className="inline">{field.locality}</dd></div>
+                 <div><dt className="inline font-medium">Geometría: </dt><dd className="inline">{field.geometryStatus}</dd></div>
+               </dl>
+             </li>)}
+           </ul>
+         </div>
+         <div className="grid gap-2" aria-label="Evidencia del contexto de planificación">
+           <h3 className="font-semibold">Evidencia del contexto</h3>
+           <ul className="grid gap-3 sm:grid-cols-2">
+             {planningContext.evidence.map((item) => <li key={item.fieldId} className="grid gap-2 rounded-xl border border-stone-200 p-3 text-sm">
+               <p className="font-semibold">{item.fieldId}</p>
+               <PlanningEvidenceDetails label="Clima" evidence={item.climate} />
+               <PlanningEvidenceDetails label="Riesgo" evidence={item.risk} />
+             </li>)}
+           </ul>
+         </div>
+         <ul className="grid gap-2 sm:grid-cols-2">{planningContext.availability.map((item: CampaignPlanningContextResponse['availability'][number]) => <li key={item.domain} className="rounded-xl border border-dashed border-stone-300 p-3 text-sm"><span className="font-semibold">{item.domain}</span>: {item.state}. {item.reason}</li>)}</ul>
+       </div> : null}
+       <div className="grid gap-4 border-t border-stone-200 pt-4"><div><h3 className="font-semibold">Simulador de supuestos</h3><p className="text-sm text-stone-600">Resultado aritmético transparente; no es pronóstico, recomendación ni dato de mercado.</p></div><div className="grid gap-4 md:grid-cols-3"><Field label="Área (ha)" name="simulation-area" type="number" min="0" step="0.01" value={areaHa} aria-describedby={error ? 'simulation-error' : undefined} onChange={(event) => setAreaHa(event.target.value)} /><Field label="Rendimiento supuesto (kg/ha)" name="simulation-yield" type="number" min="0" step="0.01" value={yieldKg} aria-describedby={error ? 'simulation-error' : undefined} onChange={(event) => setYieldKg(event.target.value)} /><Field label="Precio supuesto (ARS/kg)" name="simulation-price" type="number" min="0" step="0.01" value={price} aria-describedby={error ? 'simulation-error' : undefined} onChange={(event) => setPrice(event.target.value)} /><Field label="Costo variable (ARS/ha)" name="simulation-variable-cost" type="number" min="0" step="0.01" value={variableCost} aria-describedby={error ? 'simulation-error' : undefined} onChange={(event) => setVariableCost(event.target.value)} /><Field label="Costo fijo (ARS)" name="simulation-fixed-cost" type="number" min="0" step="0.01" value={fixedCost} aria-describedby={error ? 'simulation-error' : undefined} onChange={(event) => setFixedCost(event.target.value)} /></div><Button type="button" onClick={() => void runSimulation()}>Calcular supuesto</Button>{error ? <p id="simulation-error" role="alert">{error}</p> : null}{!error && simulation?.status === 'insufficient_evidence' ? <p id="simulation-insufficient-evidence" role="alert">Evidencia insuficiente: {simulation.reason} ({simulation.missingInputs.join(', ')})</p> : null}{!error && simulation?.status === 'complete' ? <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><p className="font-semibold">Simulación basada en supuestos de usuario</p><p className="text-sm">Etiqueta: {simulation.result.label} · moneda: {simulation.result.currency}</p><dl className="mt-3 grid gap-2 sm:grid-cols-4">{Object.entries(simulation.result.outputs).map(([key, value]) => <div key={key}><dt className="text-xs text-stone-600">{key}</dt><dd className="font-semibold">{value}</dd></div>)}</dl></div> : null}</div>
+     </CardContent></Card>
+   </section>
+}
+
+type PlanningEvidence = CampaignPlanningContextResponse['evidence'][number]['climate'] | CampaignPlanningContextResponse['evidence'][number]['risk']
+
+function PlanningEvidenceDetails({ label, evidence }: { label: string; evidence: PlanningEvidence }) {
+  if (evidence.state === 'unavailable') return <div><p className="font-medium">{label}: {evidence.state}</p><p className="text-stone-600">{evidence.reason}</p></div>
+  return <div><p className="font-medium">{label}: {evidence.state}</p><p className="text-stone-600">Fuente: {evidence.source} · Frescura: {evidence.freshness}</p><p className="text-stone-600">Observado: {evidence.observedAt} · Proveniencia: {evidence.provenance.join(', ')}</p></div>
 }
 
 function FieldIndexPanel({ index, isLoading, isFetchingNextPage, hasNextPage, onLoadMore, onSelectField }: { index?: AgronautasWorkspaceFieldPage; isLoading: boolean; isFetchingNextPage: boolean; hasNextPage: boolean; onLoadMore: () => void; onSelectField: (fieldId: string) => void }) {

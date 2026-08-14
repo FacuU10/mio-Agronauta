@@ -25,8 +25,12 @@ import {
   agronautasWorkspaceFieldPageSchema,
   agronautasActivityResponseSchema,
   agronautasIntelligenceSchema,
+  campaignPlanningContextRequestSchema,
+  campaignPlanningContextResponseSchema,
+  assumptionSimulationRequestSchema,
+  assumptionSimulationResponseSchema,
 } from './schemas'
-import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse, AgronautasIntelligence } from './schemas'
+import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextRequest, CampaignPlanningContextResponse, AssumptionSimulationRequest, AssumptionSimulationResponse } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
 const AGRONAUTAS_REQUEST_MODES = {
@@ -70,6 +74,8 @@ export interface AgronautasService {
   listWorkspaceFields(workspaceId: string, cursor?: string): Promise<AgronautasWorkspaceFieldPage>
   getFieldActivity(fieldId: string): Promise<AgronautasActivityResponse>
   getFieldIntelligence(fieldId: string): Promise<AgronautasIntelligence>
+  getCampaignPlanningContext(input: CampaignPlanningContextRequest): Promise<CampaignPlanningContextResponse>
+  simulateAssumptions(input: AssumptionSimulationRequest): Promise<AssumptionSimulationResponse>
 }
 
 export function createAgronautasApiService(options: AgronautasApiServiceOptions = {}): AgronautasService {
@@ -83,6 +89,8 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
     listWorkspaceFields: async (workspaceId, cursor) => agronautasWorkspaceFieldPageSchema.parse(await apiClient(`/workspace/fields?workspaceId=${encodeURIComponent(workspaceId)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)),
     getFieldActivity: async (fieldId) => agronautasActivityResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/activity'))),
     getFieldIntelligence: async (fieldId) => agronautasIntelligenceSchema.parse(await apiClient(fieldEndpoint(fieldId, '/intelligence'))),
+    getCampaignPlanningContext: async (input) => campaignPlanningContextResponseSchema.parse(await apiClient('/planning/context', { method: 'POST', body: JSON.stringify(campaignPlanningContextRequestSchema.parse(input)) })),
+    simulateAssumptions: async (input) => assumptionSimulationResponseSchema.parse(await apiClient('/planning/simulate', { method: 'POST', body: JSON.stringify(assumptionSimulationRequestSchema.parse(input)) })),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
     getFieldGeometry: async (fieldId) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'))),
     updateFieldGeometry: async (fieldId, input) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'), { method: 'PATCH', body: JSON.stringify(fieldGeometryUpdateSchema.parse(input)) })),
@@ -121,6 +129,8 @@ export function createAgronautasMockService(): AgronautasService {
     async getWorkspace() { return agronautasWorkspaceContextSchema.parse({ contractVersion: 'agronautas-management-v1', workspaceId: 'agronautas-default-workspace', name: 'Agronautas', status: 'active', fieldCount: 0, createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z' }) },
     async listWorkspaceFields(workspaceId) { return agronautasWorkspaceFieldPageSchema.parse({ contractVersion: 'agronautas-workspace-fields-v1', workspaceId, items: [], nextCursor: null }) },
     async getFieldActivity(fieldId) { return agronautasActivityResponseSchema.parse({ contractVersion: 'agronautas-activity-v1', fieldId, items: [] }) },
+    async getCampaignPlanningContext(input) { return campaignPlanningContextResponseSchema.parse({ contractVersion: 'agronautas-campaign-planning-context-v1', persistent: false, workspace: { workspaceId: input.workspaceId, name: 'Agronautas', status: 'active' }, campaignName: input.campaignName, season: input.season, fields: input.fieldIds.map((fieldId) => ({ fieldId, externalFieldId: fieldId, crop: 'rice', hectares: 42.5, locality: 'Mercedes', geometryStatus: 'point_only' })), evidence: input.fieldIds.map((fieldId) => ({ fieldId, climate: { state: 'available', source: 'open-meteo', observedAt: '2026-06-03T00:00:00.000Z', freshness: 'degraded', provenance: ['demo-climate'] }, risk: { state: 'available', source: 'risk-v0', observedAt: '2026-06-03T00:00:00.000Z', freshness: 'stale', provenance: ['demo-risk'], engine: { selectionStatus: 'undecided' } } })), availability: [{ domain: 'soil', state: 'unavailable', reason: 'No hay una observación de suelo verificada.', dependency: 'fuente de suelo verificada' }, { domain: 'prices', state: 'unavailable', reason: 'No hay una observación de precios verificada.', dependency: 'fuente de precios aprobada' }, { domain: 'fx', state: 'unavailable', reason: 'No hay una observación de FX verificada.', dependency: 'fuente de FX aprobada' }, { domain: 'external_economics', state: 'unavailable', reason: 'No hay una fuente económica externa configurada.', dependency: 'política de evidencia económica' }] }) },
+    async simulateAssumptions(input) { return assumptionSimulationResponseSchema.parse({ contractVersion: 'agronautas-assumption-simulation-v1', status: 'complete', result: { label: 'user_assumption_simulation', currency: input.currency, units: input.units, assumptions: input.assumptions, inputs: { areaHa: input.areaHa, expectedYieldKgPerHa: input.expectedYieldKgPerHa, pricePerKg: input.pricePerKg, variableCostPerHa: input.variableCostPerHa, fixedCost: input.fixedCost }, outputs: { productionKg: Number((input.areaHa * input.expectedYieldKgPerHa).toFixed(input.precision)), grossValue: Number((input.areaHa * input.expectedYieldKgPerHa * input.pricePerKg).toFixed(input.precision)), totalCost: Number((input.areaHa * input.variableCostPerHa + input.fixedCost).toFixed(input.precision)), scenarioDifference: Number((input.areaHa * input.expectedYieldKgPerHa * input.pricePerKg - input.areaHa * input.variableCostPerHa - input.fixedCost).toFixed(input.precision)) } } }) },
     async getFieldIntelligence(fieldId) {
       const climate = await this.getWeatherTimeline(fieldId).then((response) => response.items[0])
       const risk = await this.getCurrentRisk(fieldId)

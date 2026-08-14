@@ -5,7 +5,7 @@ import { useInfiniteQuery, useMutation, useQueries } from '@tanstack/react-query
 import type { FieldIntake } from '@repo/zod-schemas'
 import { ApiError } from '@/lib/api-client'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
-import { AGRONAUTAS_CONTRACT_VERSION, agronautasWorkspaceFieldPageSchema, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse, type AgronautasWorkspaceFieldPage } from '@/lib/agronautas/schemas'
+import { AGRONAUTAS_CONTRACT_VERSION, agronautasWorkspaceFieldPageSchema, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse, type AgronautasWorkspaceFieldPage, type CampaignPlanningContextResponse, type AssumptionSimulationResponse } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
 import { applyChatEvent, createChatStreamState, type ChatStreamState } from '@/lib/visibility/chat'
 import type { SseEvent } from '@/lib/visibility/sse'
@@ -30,6 +30,8 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const [chatError, setChatError] = useState<string | null>(null)
   const [lastChatMessage, setLastChatMessage] = useState<string | null>(null)
   const [lastHydrologyMessage, setLastHydrologyMessage] = useState<string | null>(null)
+  const [planningContext, setPlanningContext] = useState<CampaignPlanningContextResponse | undefined>()
+  const [simulation, setSimulation] = useState<AssumptionSimulationResponse | undefined>()
   const workspaceQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'workspace'], queryFn: () => resolvedService.getWorkspace(), retry: false }] })[0]
   const fieldsQuery = useInfiniteQuery({
     queryKey: ['agronautas', 'workspace-fields', workspaceQuery.data?.workspaceId],
@@ -166,6 +168,8 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   })
   const activityQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'activity', selectedFieldId], queryFn: () => resolvedService.getFieldActivity(selectedFieldId as string), enabled: Boolean(selectedFieldId), retry: false }] })[0]
   const intelligenceQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'intelligence', selectedFieldId], queryFn: () => resolvedService.getFieldIntelligence(selectedFieldId as string), enabled: Boolean(selectedFieldId), retry: false }] })[0]
+  const loadPlanningContext = async (input: { campaignName: string; season: string; fieldIds: string[] }) => { const result = await resolvedService.getCampaignPlanningContext({ contractVersion: 'agronautas-campaign-planning-context-v1', workspaceId: 'agronautas-default-workspace', ...input }); setPlanningContext(result) }
+  const simulateAssumptions = async (input: Parameters<AgronautasService['simulateAssumptions']>[0]) => { setSimulation(undefined); setSimulation(await resolvedService.simulateAssumptions(input)) }
   const runtimeQuery = useQueries({
     queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime() }],
   })[0]
@@ -195,6 +199,10 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
        workspace={workspaceQuery.data}
        activity={activityQuery.data}
        intelligence={intelligenceQuery.data}
+       planningContext={planningContext}
+       simulation={simulation}
+       onLoadPlanningContext={loadPlanningContext}
+       onSimulateAssumptions={simulateAssumptions}
       lastCreatedFieldId={lastCreatedFieldId}
       intakeError={intakeError}
       isSubmitting={intakeMutation.isPending}

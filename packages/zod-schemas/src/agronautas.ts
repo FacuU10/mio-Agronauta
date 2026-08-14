@@ -65,6 +65,10 @@ export const agronautasActivitySourceTypes = ['field', 'risk_snapshot', 'alert_s
 export const agronautasIntelligenceStates = ['available', 'unavailable', 'insufficient_evidence'] as const
 export const agronautasIntelligenceContractVersion = 'agronautas-intelligence-v1' as const
 export const agronautasRiskSelectionStatuses = ['undecided'] as const
+export const agronautasPlanningAvailabilityStates = ['available', 'unavailable', 'insufficient_evidence'] as const
+export const agronautasPlanningDomains = ['soil', 'prices', 'fx', 'external_economics'] as const
+export const agronautasPlanningContextContractVersion = 'agronautas-campaign-planning-context-v1' as const
+export const agronautasAssumptionSimulationContractVersion = 'agronautas-assumption-simulation-v1' as const
 
 const trimmedString = (max: number) => z.string().trim().min(1).max(max)
 const optionalTrimmedString = (max: number) => z.string().trim().max(max).optional().transform((value) => value && value.length > 0 ? value : undefined)
@@ -347,6 +351,83 @@ export const agronautasWorkspaceContextSchema = z.object({
   createdAt: workspaceTimestampSchema,
   updatedAt: workspaceTimestampSchema,
 })
+
+const planningWorkspaceIdSchema = z.literal('agronautas-default-workspace')
+const planningAvailabilityStateSchema = z.enum(agronautasPlanningAvailabilityStates)
+const planningDomainSchema = z.enum(agronautasPlanningDomains)
+const planningFieldIdSchema = z.string().trim().min(1).max(80)
+
+export const campaignPlanningContextRequestSchema = z.object({
+  contractVersion: z.literal(agronautasPlanningContextContractVersion),
+  workspaceId: planningWorkspaceIdSchema,
+  campaignName: z.string().trim().min(1).max(120),
+  season: z.string().trim().min(1).max(40),
+  fieldIds: z.array(planningFieldIdSchema).min(1).max(50),
+}).strict()
+
+export const campaignPlanningFieldSchema = z.object({
+  fieldId: planningFieldIdSchema,
+  externalFieldId: z.string().min(1).max(80),
+  crop: supportedCropSchema,
+  hectares: z.number().finite().positive(),
+  locality: z.string().min(1).max(120),
+  geometryStatus: z.enum(['saved', 'point_only', 'unavailable']),
+}).strict()
+
+export const planningAvailabilitySchema = z.object({
+  domain: planningDomainSchema,
+  state: planningAvailabilityStateSchema,
+  reason: z.string().min(1).max(300),
+  dependency: z.string().min(1).max(180),
+}).strict()
+
+export const planningEvidenceSchema = z.object({
+  fieldId: planningFieldIdSchema,
+  climate: z.object({ state: z.literal('available'), source: z.string().min(1), observedAt: z.string().datetime(), freshness: z.enum(['fresh', 'stale', 'degraded']), provenance: z.array(z.string().min(1)) }).strict().or(z.object({ state: z.literal('unavailable'), reason: z.string().min(1) }).strict()),
+  risk: z.object({ state: z.literal('available'), source: z.string().min(1), observedAt: z.string().datetime(), freshness: z.enum(['fresh', 'stale', 'degraded']), provenance: z.array(z.string().min(1)), engine: z.object({ selectionStatus: z.literal('undecided') }).strict() }).strict().or(z.object({ state: z.literal('unavailable'), reason: z.string().min(1), engine: z.object({ selectionStatus: z.literal('undecided') }).strict() }).strict()),
+}).strict()
+
+export const campaignPlanningContextResponseSchema = z.object({
+  contractVersion: z.literal(agronautasPlanningContextContractVersion),
+  persistent: z.literal(false),
+  workspace: z.object({ workspaceId: planningWorkspaceIdSchema, name: z.string().min(1), status: z.literal('active') }).strict(),
+  campaignName: z.string().min(1).max(120),
+  season: z.string().min(1).max(40),
+  fields: z.array(campaignPlanningFieldSchema),
+  evidence: z.array(planningEvidenceSchema),
+  availability: z.array(planningAvailabilitySchema),
+}).strict()
+
+const finiteNonNegativeNumber = z.number().finite().nonnegative()
+const positiveNumber = z.number().finite().positive()
+const simulationUnitsSchema = z.object({ area: z.literal('ha'), expectedYield: z.literal('kg/ha'), price: z.literal('currency/kg'), variableCost: z.literal('currency/ha'), fixedCost: z.literal('currency') }).strict()
+
+export const assumptionSimulationRequestSchema = z.object({
+  contractVersion: z.literal(agronautasAssumptionSimulationContractVersion),
+  areaHa: positiveNumber,
+  expectedYieldKgPerHa: positiveNumber,
+  pricePerKg: finiteNonNegativeNumber,
+  variableCostPerHa: finiteNonNegativeNumber,
+  fixedCost: finiteNonNegativeNumber,
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  precision: z.number().int().min(0).max(6),
+  units: simulationUnitsSchema,
+  assumptions: z.array(z.string().trim().min(1).max(240)).min(1).max(20),
+}).strict()
+
+export const assumptionSimulationResultSchema = z.object({
+  label: z.literal('user_assumption_simulation'),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  units: simulationUnitsSchema,
+  assumptions: z.array(z.string().min(1)),
+  inputs: z.object({ areaHa: z.number(), expectedYieldKgPerHa: z.number(), pricePerKg: z.number(), variableCostPerHa: z.number(), fixedCost: z.number() }).strict(),
+  outputs: z.object({ productionKg: z.number(), grossValue: z.number(), totalCost: z.number(), scenarioDifference: z.number() }).strict(),
+}).strict()
+
+export const assumptionSimulationResponseSchema = z.union([
+  z.object({ contractVersion: z.literal(agronautasAssumptionSimulationContractVersion), status: z.literal('complete'), result: assumptionSimulationResultSchema }).strict(),
+  z.object({ contractVersion: z.literal(agronautasAssumptionSimulationContractVersion), status: z.literal('insufficient_evidence'), missingInputs: z.array(z.string().min(1)), reason: z.string().min(1).max(300) }).strict(),
+])
 
 export const agronautasWorkspaceFieldPageSchema = z.object({
   contractVersion: workspaceFieldContractVersionSchema,
@@ -951,6 +1032,11 @@ export type AgronautasEvidence = z.infer<typeof agronautasEvidenceSchema>
 export type AgronautasFieldIndexItem = z.infer<typeof agronautasFieldIndexItemSchema>
 export type AgronautasFieldIndexResponse = z.infer<typeof agronautasFieldIndexResponseSchema>
 export type AgronautasWorkspaceContext = z.infer<typeof agronautasWorkspaceContextSchema>
+export type CampaignPlanningContextRequest = z.infer<typeof campaignPlanningContextRequestSchema>
+export type CampaignPlanningContextResponse = z.infer<typeof campaignPlanningContextResponseSchema>
+export type PlanningAvailability = z.infer<typeof planningAvailabilitySchema>
+export type AssumptionSimulationRequest = z.infer<typeof assumptionSimulationRequestSchema>
+export type AssumptionSimulationResponse = z.infer<typeof assumptionSimulationResponseSchema>
 export type AgronautasWorkspaceFieldPage = z.infer<typeof agronautasWorkspaceFieldPageSchema>
 export type AgronautasActivityItem = z.infer<typeof agronautasActivityItemSchema>
 export type AgronautasActivityResponse = z.infer<typeof agronautasActivityResponseSchema>

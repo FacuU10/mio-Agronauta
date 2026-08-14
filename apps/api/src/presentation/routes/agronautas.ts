@@ -16,6 +16,9 @@ import {
   agronautasRiskClimateExplanationSchema,
   agronautasActivityResponseSchema,
   agronautasIntelligenceSchema,
+  campaignPlanningContextRequestSchema,
+  assumptionSimulationRequestSchema,
+  assumptionSimulationResponseSchema,
 } from '@repo/zod-schemas'
 import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
@@ -58,6 +61,8 @@ import { EnsureDefaultWorkspace, GetFieldActivity, GetWorkspaceContext, ListWork
 import type { AgronautasWorkspaceRepository } from '../../domain/repositories/agronautas'
 import { PostgresAgronautasManagementRepository } from '../../infrastructure/database/postgres/agronautas-management-repository'
 import { GetFieldIntelligenceUseCase } from '../../application/usecases/get-field-intelligence-usecase'
+import { GetCampaignPlanningContext, UnsupportedPlanningFieldError } from '../../application/usecases/agronautas-planning'
+import { calculateAssumptionSimulation } from '../../domain/planning/agronautas-planning-simulator'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -184,6 +189,24 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
   })
   const getFieldIntelligence = new GetFieldIntelligenceUseCase(resolved.fieldRepository, resolved.fieldContextRepository, resolved.signalSummaryRepository, resolved.riskSnapshotRepository)
+  const getCampaignPlanningContext = new GetCampaignPlanningContext(resolved.workspaceRepository, resolved.fieldContextRepository, resolved.signalSummaryRepository, resolved.riskSnapshotRepository)
+
+  router.post('/planning/context', requireRead, async (req, res) => {
+    const parsed = campaignPlanningContextRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    try {
+      return res.json(await getCampaignPlanningContext.execute(parsed.data))
+    } catch (error) {
+      if (error instanceof UnsupportedPlanningFieldError) return respondContractError(res, 422, 'INVALID_CONTRACT', 'El lote seleccionado no pertenece al workspace soportado', { fieldId: error.fieldId })
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'El contexto de planificación no está disponible', undefined, true)
+    }
+  })
+
+  router.post('/planning/simulate', requireRead, async (req, res) => {
+    const parsed = assumptionSimulationRequestSchema.safeParse(req.body)
+    if (!parsed.success) return res.status(200).json(assumptionSimulationResponseSchema.parse({ contractVersion: 'agronautas-assumption-simulation-v1', status: 'insufficient_evidence', missingInputs: parsed.error.issues.map((issue) => issue.path.join('.') || 'request'), reason: 'Las suposiciones requeridas están ausentes o son inválidas.' }))
+    return res.json(calculateAssumptionSimulation(parsed.data))
+  })
 
   router.get('/workspace', requireRead, async (_req, res) => {
     try {

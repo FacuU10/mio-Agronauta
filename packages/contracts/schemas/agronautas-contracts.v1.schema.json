@@ -321,6 +321,52 @@
         { "$ref": "#/$defs/IntelligenceUnavailableCapability" }
       ]
     },
+    "PlanningAvailability": {
+      "type": "object",
+      "required": ["domain", "state", "reason", "dependency"],
+      "properties": {
+        "domain": { "enum": ["soil", "prices", "fx", "external_economics"] },
+        "state": { "enum": ["available", "unavailable", "insufficient_evidence"] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "dependency": { "type": "string", "minLength": 1, "maxLength": 180 }
+      },
+      "additionalProperties": false
+    },
+    "CampaignPlanningContextRequest": {
+      "type": "object",
+      "required": ["contractVersion", "workspaceId", "campaignName", "season", "fieldIds"],
+      "properties": {
+        "contractVersion": { "const": "agronautas-campaign-planning-context-v1" },
+        "workspaceId": { "const": "agronautas-default-workspace" },
+        "campaignName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "season": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "fieldIds": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 80 }, "minItems": 1, "maxItems": 50 }
+      },
+      "additionalProperties": false
+    },
+    "AssumptionSimulationRequest": {
+      "type": "object",
+      "required": ["contractVersion", "areaHa", "expectedYieldKgPerHa", "pricePerKg", "variableCostPerHa", "fixedCost", "currency", "precision", "units", "assumptions"],
+      "properties": {
+        "contractVersion": { "const": "agronautas-assumption-simulation-v1" },
+        "areaHa": { "type": "number", "exclusiveMinimum": 0 },
+        "expectedYieldKgPerHa": { "type": "number", "exclusiveMinimum": 0 },
+        "pricePerKg": { "type": "number", "minimum": 0 },
+        "variableCostPerHa": { "type": "number", "minimum": 0 },
+        "fixedCost": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "precision": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "units": { "type": "object", "required": ["area", "expectedYield", "price", "variableCost", "fixedCost"], "properties": { "area": { "const": "ha" }, "expectedYield": { "const": "kg/ha" }, "price": { "const": "currency/kg" }, "variableCost": { "const": "currency/ha" }, "fixedCost": { "const": "currency" } }, "additionalProperties": false },
+        "assumptions": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 240 }, "minItems": 1, "maxItems": 20 }
+      },
+      "additionalProperties": false
+    },
+    "AssumptionSimulationResponse": {
+      "oneOf": [
+        { "type": "object", "required": ["contractVersion", "status", "result"], "properties": { "contractVersion": { "const": "agronautas-assumption-simulation-v1" }, "status": { "const": "complete" }, "result": { "type": "object", "required": ["label", "currency", "units", "assumptions", "inputs", "outputs"], "properties": { "label": { "const": "user_assumption_simulation" }, "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }, "units": { "$ref": "#/$defs/AssumptionSimulationRequest/properties/units" }, "assumptions": { "type": "array", "items": { "type": "string" } }, "inputs": { "type": "object" }, "outputs": { "type": "object" } }, "additionalProperties": false } }, "additionalProperties": false },
+        { "type": "object", "required": ["contractVersion", "status", "missingInputs", "reason"], "properties": { "contractVersion": { "const": "agronautas-assumption-simulation-v1" }, "status": { "const": "insufficient_evidence" }, "missingInputs": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "reason": { "type": "string", "minLength": 1, "maxLength": 300 } }, "additionalProperties": false }
+      ]
+    },
     "PdfReportRequest": {
       "type": "object",
       "required": ["fieldId", "snapshotId"],

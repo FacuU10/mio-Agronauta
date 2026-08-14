@@ -32,11 +32,80 @@ import {
   agronautasWorkspaceFieldPageSchema,
   agronautasActivityResponseSchema,
   agronautasIntelligenceSchema,
+  campaignPlanningContextRequestSchema,
+  campaignPlanningContextResponseSchema,
+  assumptionSimulationRequestSchema,
+  assumptionSimulationResponseSchema,
   hydrologyIberaCoverageStatus,
   hydrologyIberaGeometryStatusSchema,
   hydrologyIberaSourceProvenanceSchema,
   hydrologyIberaCoverageSummarySchema,
 } from './agronautas.js'
+
+const planningRequestFixture = {
+  contractVersion: 'agronautas-campaign-planning-context-v1' as const,
+  workspaceId: 'agronautas-default-workspace',
+  campaignName: 'Campaña demostrativa',
+  season: '2026',
+  fieldIds: ['field-1'],
+}
+
+const simulationFixture = {
+  contractVersion: 'agronautas-assumption-simulation-v1' as const,
+  areaHa: 10,
+  expectedYieldKgPerHa: 4000,
+  pricePerKg: 0.4,
+  variableCostPerHa: 500,
+  fixedCost: 200,
+  currency: 'ARS',
+  precision: 2,
+  units: { area: 'ha' as const, expectedYield: 'kg/ha' as const, price: 'currency/kg' as const, variableCost: 'currency/ha' as const, fixedCost: 'currency' as const },
+  assumptions: ['Valores ingresados por la persona usuaria'],
+}
+
+test('campaign planning contracts are namespaced, read-only, and strict about supported scope', () => {
+  const request = campaignPlanningContextRequestSchema.parse(planningRequestFixture)
+  const response = campaignPlanningContextResponseSchema.parse({
+    contractVersion: 'agronautas-campaign-planning-context-v1',
+    persistent: false,
+    workspace: { workspaceId: request.workspaceId, name: 'Agronautas', status: 'active' },
+    campaignName: request.campaignName,
+    season: request.season,
+    fields: [{ fieldId: 'field-1', externalFieldId: 'lot-1', crop: 'rice', hectares: 10, locality: 'Mercedes', geometryStatus: 'point_only' }],
+    evidence: [{
+      fieldId: 'field-1',
+      climate: { state: 'available', source: 'open-meteo', observedAt: '2026-08-13T10:00:00.000Z', freshness: 'fresh', provenance: ['run-1'] },
+      risk: { state: 'unavailable', reason: 'No persisted risk snapshot exists.', engine: { selectionStatus: 'undecided' } },
+    }],
+    availability: [
+      { domain: 'soil', state: 'unavailable', reason: 'No verified soil observation exists.', dependency: 'verified soil source' },
+      { domain: 'prices', state: 'unavailable', reason: 'No verified price observation exists.', dependency: 'approved price source' },
+      { domain: 'fx', state: 'unavailable', reason: 'No verified FX observation exists.', dependency: 'approved FX source' },
+      { domain: 'external_economics', state: 'unavailable', reason: 'No external economic source is configured.', dependency: 'economic evidence policy' },
+    ],
+  })
+
+  assert.equal(request.workspaceId, 'agronautas-default-workspace')
+  assert.equal(response.persistent, false)
+  assert.equal(response.evidence[0]?.risk.engine?.selectionStatus, 'undecided')
+  assert.throws(() => campaignPlanningContextRequestSchema.parse({ ...planningRequestFixture, workspaceId: 'other-workspace' }))
+})
+
+test('assumption simulation contracts reject invalid units and preserve insufficient evidence without values', () => {
+  const parsed = assumptionSimulationRequestSchema.parse(simulationFixture)
+  const insufficient = assumptionSimulationResponseSchema.parse({
+    contractVersion: 'agronautas-assumption-simulation-v1',
+    status: 'insufficient_evidence',
+    missingInputs: ['pricePerKg'],
+    reason: 'A price assumption is required.',
+  })
+
+  assert.equal(parsed.units.expectedYield, 'kg/ha')
+  assert.equal(insufficient.status, 'insufficient_evidence')
+  assert.equal('result' in insufficient, false)
+  assert.throws(() => assumptionSimulationRequestSchema.parse({ ...simulationFixture, currency: 'ars' }))
+  assert.throws(() => assumptionSimulationRequestSchema.parse({ ...simulationFixture, units: { ...simulationFixture.units, area: 'm2' } }))
+})
 
 test('product completion contracts are namespaced, versioned, and preserve unavailable evidence', () => {
   const fieldIndex = agronautasFieldIndexResponseSchema.parse({

@@ -20,6 +20,8 @@ import {
   schedulerStatusSchema,
   signalEvidenceSchema,
   sourceCadenceSchema,
+  campaignPlanningContextRequestSchema,
+  assumptionSimulationRequestSchema,
 } from '../../zod-schemas/src/agronautas.js'
 
 const contractsRoot = join(import.meta.dirname, '..')
@@ -157,4 +159,13 @@ test('risk-engine vectors record divergence and keep canonical selection undecid
     assert.equal(vector.comparison.parityClaim, false, vector.id)
     assert.ok(vector.comparison.differences.length > 0, vector.id)
   }
+})
+
+test('campaign planning JSON catalog mirrors namespaced schemas and unavailable economic states', () => {
+  assert.deepEqual(schema.$defs.CampaignPlanningContextRequest.properties.workspaceId.const, 'agronautas-default-workspace')
+  assert.deepEqual(schema.$defs.AssumptionSimulationRequest.properties.units.properties.area.const, 'ha')
+  assert.deepEqual(schema.$defs.PlanningAvailability.properties.state.enum, ['available', 'unavailable', 'insufficient_evidence'])
+  assert.deepEqual(schema.$defs.AssumptionSimulationResponse.oneOf.map((item: { properties?: { status?: { const?: string } } }) => item.properties?.status?.const).filter(Boolean), ['complete', 'insufficient_evidence'])
+  assert.equal(campaignPlanningContextRequestSchema.safeParse({ contractVersion: 'agronautas-campaign-planning-context-v1', workspaceId: 'agronautas-default-workspace', campaignName: 'C', season: '2026', fieldIds: ['field-1'] }).success, true)
+  assert.equal(assumptionSimulationRequestSchema.safeParse({ contractVersion: 'agronautas-assumption-simulation-v1', areaHa: 1, expectedYieldKgPerHa: 1, pricePerKg: 1, variableCostPerHa: 1, fixedCost: 1, currency: 'ARS', precision: 2, units: { area: 'ha', expectedYield: 'kg/ha', price: 'currency/kg', variableCost: 'currency/ha', fixedCost: 'currency' }, assumptions: ['manual'] }).success, true)
 })
