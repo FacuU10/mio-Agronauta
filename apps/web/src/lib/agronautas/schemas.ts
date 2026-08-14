@@ -22,6 +22,7 @@ import {
   agronautasWorkspaceContextSchema,
   agronautasWorkspaceFieldPageSchema,
   agronautasActivityResponseSchema,
+  agronautasIntelligenceSchema,
 } from '@repo/zod-schemas'
 
 export {
@@ -46,6 +47,7 @@ export {
   agronautasWorkspaceContextSchema,
   agronautasWorkspaceFieldPageSchema,
   agronautasActivityResponseSchema,
+  agronautasIntelligenceSchema,
 }
 
 export const fieldCreatedSchema = z.object({
@@ -179,5 +181,6 @@ export type AgronautasRiskClimateExplanation = z.infer<typeof agronautasRiskClim
 export type AgronautasWorkspaceContext = z.infer<typeof agronautasWorkspaceContextSchema>
 export type AgronautasWorkspaceFieldPage = z.infer<typeof agronautasWorkspaceFieldPageSchema>
 export type AgronautasActivityResponse = z.infer<typeof agronautasActivityResponseSchema>
+export type AgronautasIntelligence = z.infer<typeof agronautasIntelligenceSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>

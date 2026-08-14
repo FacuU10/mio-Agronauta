@@ -22,7 +22,7 @@ import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
 interface HydrologyGovernmentRouterDeps {
-  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'saveIngestionRun' | 'getSourceFreshness' | 'findUnmappedAlertCoverageKeys' | 'createIberaIngestRun' | 'updateIberaIngestRun' | 'getIberaIngestRun' | 'claimIberaIngestLease'> & { listIberaIngestRuns: HydrologyRepository['listIberaIngestRuns'] }>
+  hydrologyRepository: Pick<HydrologyRepository, 'getMunicipalityTelemetryOverview' | 'getMunicipalityTelemetryDashboard'> & Partial<Pick<HydrologyRepository, 'getIberaSourceRegistry' | 'getIberaEvidenceTimeline' | 'saveIngestionRun' | 'getSourceFreshness' | 'findUnmappedAlertCoverageKeys' | 'createIberaIngestRun' | 'updateIberaIngestRun' | 'getIberaIngestRun' | 'claimIberaIngestLease'> & { listIberaIngestRuns: HydrologyRepository['listIberaIngestRuns'] }>
   hydrologyCopilotService: Pick<HydrologyCopilotService, 'streamChat'>
   ingestionRunner: (input: HydrologyIngestionInput) => Promise<GovernmentIngestionResponse>
   ingestionCoordinator: HydrologyIngestionCoordinator
@@ -186,7 +186,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
 
     const payload = hydrologyGovernmentDashboardResponseSchema.parse({
       contractVersion: 'hydrology-government-dashboard-v1',
-      municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts), coverageGaps: coverageGapsFor(municipality.gaugeMappings) },
+       municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts), coverageGaps: coverageGapsFor(municipality.gaugeMappings), coverageStatus: coverageStatusFor(municipality), geometryStatus: 'unverified', sourceRegistry: await resolved.hydrologyRepository.getIberaSourceRegistry?.(municipality.municipality.id) ?? [] },
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
       inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
@@ -216,6 +216,13 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
       .setHeader('x-request-id', requestId)
       .setHeader('Cache-Control', 'no-store')
       .json(hydrologyGovernmentIngestResponseSchema.parse({ ...observed, contractVersion: 'hydrology-government-ingest-v1' }))
+  })
+
+  router.get('/municipalities/:id/timeline', async (req, res) => {
+    const repository = resolved.hydrologyRepository.getIberaEvidenceTimeline
+    if (!repository) return res.status(503).json({ contractVersion: 'ibera-municipality-timeline-v1', municipalityId: req.params['id'] ?? '', events: [], nextCursor: null, currentStatus: 'unavailable', lastKnownEvidence: null })
+    const timeline = await repository({ municipalityId: req.params['id'] ?? '', from: parseDateQuery(req.query['from']), to: parseDateQuery(req.query['to']), cursor: parseDateQuery(req.query['cursor']), limit: boundedTimelineLimit(req.query['limit']) })
+    return res.json({ contractVersion: 'ibera-municipality-timeline-v1', municipalityId: req.params['id'] ?? '', ...timeline })
   })
 
   router.get('/ingest/runs', async (req, res) => {
@@ -531,6 +538,23 @@ export async function waitForObservation(promise: Promise<GovernmentIngestionRes
 function boundedObservationWait(value: unknown): number {
   const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : 0
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, INGEST_OBSERVATION_WAIT_CAP_MS) : 0
+}
+
+function coverageStatusFor(municipality: MunicipalityTelemetryDashboard): 'supported' | 'partial' | 'unavailable' {
+  const missing = coverageGapsFor(municipality.gaugeMappings).length
+  if (municipality.latestTelemetry.length === 0 && (municipality.officialAlerts ?? []).length === 0) return 'unavailable'
+  return missing > 0 ? 'partial' : 'supported'
+}
+
+function parseDateQuery(value: unknown): Date | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
+}
+
+function boundedTimelineLimit(value: unknown): number {
+  const parsed = typeof value === 'string' ? Number(value) : 25
+  return Number.isFinite(parsed) ? Math.min(50, Math.max(1, Math.floor(parsed))) : 25
 }
 
 function buildMunicipalityExplanation(municipality: MunicipalityTelemetryDashboard) {

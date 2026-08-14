@@ -259,6 +259,68 @@
       },
       "additionalProperties": false
     },
+    "ObservationMetadata": {
+      "type": "object",
+      "required": ["source", "unit", "observedAt", "retrievedAt", "lineage"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "currency": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "retrievedAt": { "type": "string", "format": "date-time" },
+        "lineage": {
+          "type": "object",
+          "required": ["sourceRunIds", "observationRefs"],
+          "properties": {
+            "sourceRunIds": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+            "observationRefs": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 240 } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgronautasIntelligence": {
+      "type": "object",
+      "required": ["contractVersion", "field", "climate", "risk", "soil", "prices", "dollar", "economics", "recommendation", "explanation"],
+      "properties": {
+        "contractVersion": { "const": "agronautas-intelligence-v1" },
+        "field": { "type": "object", "required": ["fieldId", "crop", "hectares", "locality"], "properties": { "fieldId": { "type": "string", "minLength": 1, "maxLength": 80 }, "crop": { "enum": ["rice", "maize", "soybean", "wheat", "sunflower", "pasture", "citrus", "other"] }, "hectares": { "type": "number", "exclusiveMinimum": 0 }, "locality": { "type": "string", "minLength": 1, "maxLength": 120 } }, "additionalProperties": false },
+        "climate": { "$ref": "#/$defs/IntelligenceClimateCapability" },
+        "risk": { "$ref": "#/$defs/IntelligenceRiskCapability" },
+        "soil": { "$ref": "#/$defs/IntelligenceObservationCapability" },
+        "prices": { "$ref": "#/$defs/IntelligenceObservationCapability" },
+        "dollar": { "$ref": "#/$defs/IntelligenceObservationCapability" },
+        "economics": { "$ref": "#/$defs/IntelligenceObservationCapability" },
+        "recommendation": { "$ref": "#/$defs/IntelligenceObservationCapability" },
+        "explanation": { "type": "object", "required": ["context", "climateTimeline", "riskTimeline", "evidenceRefs"], "properties": { "context": { "type": ["object", "null"] }, "climateTimeline": { "type": "array" }, "riskTimeline": { "type": "array" }, "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 240 } } }, "additionalProperties": false }
+      },
+      "additionalProperties": false
+    },
+    "IntelligenceUnavailableCapability": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "properties": { "state": { "enum": ["unavailable", "insufficient_evidence"] }, "reason": { "type": "string", "minLength": 1, "maxLength": 300 }, "missingInputs": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 120 } } },
+      "additionalProperties": false
+    },
+    "IntelligenceObservationCapability": {
+      "oneOf": [
+        { "type": "object", "required": ["state", "value", "metadata"], "properties": { "state": { "const": "available" }, "value": {}, "metadata": { "$ref": "#/$defs/ObservationMetadata" } }, "additionalProperties": false },
+        { "$ref": "#/$defs/IntelligenceUnavailableCapability" }
+      ]
+    },
+    "IntelligenceClimateCapability": {
+      "oneOf": [
+        { "type": "object", "required": ["state", "value", "metadata"], "properties": { "state": { "const": "available" }, "value": { "type": "object" }, "metadata": { "$ref": "#/$defs/ObservationMetadata" } }, "additionalProperties": false },
+        { "$ref": "#/$defs/IntelligenceUnavailableCapability" }
+      ]
+    },
+    "IntelligenceRiskCapability": {
+      "oneOf": [
+        { "type": "object", "required": ["state", "value", "metadata"], "properties": { "state": { "const": "available" }, "value": { "type": "object" }, "metadata": { "$ref": "#/$defs/ObservationMetadata" } }, "additionalProperties": false },
+        { "$ref": "#/$defs/IntelligenceUnavailableCapability" }
+      ]
+    },
     "PdfReportRequest": {
       "type": "object",
       "required": ["fieldId", "snapshotId"],

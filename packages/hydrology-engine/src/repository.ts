@@ -1,6 +1,6 @@
 import type { QueryResult } from 'pg'
-import type { HydrologyDenseContextV1, HydrologyIberaRunStatus, HydrologyIberaSourceResult, HydrologyStationReference, HydrologyTelemetry, HydrologySource } from '@repo/zod-schemas'
-import { forecastConfidenceForHorizon, referencePortsByZone, type FieldHydrologyMapping, type IberaIngestRunInput, type IberaIngestRunRecord, type IberaIngestRunPage, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
+import type { HydrologyDenseContextV1, HydrologyIberaRunStatus, HydrologyIberaSourceProvenance, HydrologyIberaSourceResult, HydrologyStationReference, HydrologyTelemetry, HydrologySource } from '@repo/zod-schemas'
+import { forecastConfidenceForHorizon, getIberaCoverageStatus, referencePortsByZone, type FieldHydrologyMapping, type IberaEvidenceQuery, type IberaEvidenceTimeline, type IberaIngestRunInput, type IberaIngestRunRecord, type IberaIngestRunPage, type IngestionRunInput, type NormalizedHydrologyTelemetry } from './types.js'
 
 interface DbExecutor { query(sql: string, params?: unknown[]): Promise<QueryResult> }
 interface Db extends DbExecutor { connect?: () => Promise<DbClient> }
@@ -346,6 +346,35 @@ export class HydrologyRepository {
     return { municipality, gaugeMappings, latestTelemetry, officialAlerts }
   }
 
+  async getIberaEvidenceTimeline(input: IberaEvidenceQuery): Promise<IberaEvidenceTimeline> {
+    const limit = Math.min(50, Math.max(1, Math.floor(input.limit)))
+    const result = await this.db.query(
+      `SELECT id, kind, occurred_at, source, source_url, evidence_state, title, detail
+         FROM ibera_evidence_events
+        WHERE municipality_id = $1
+          AND ($2::timestamptz IS NULL OR occurred_at >= $2::timestamptz)
+          AND ($3::timestamptz IS NULL OR occurred_at <= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR occurred_at < $4::timestamptz)
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT $5`,
+      [input.municipalityId, input.from, input.to, input.cursor, limit + 1],
+    ) as QueryResult<{ id: string; kind: 'telemetry' | 'official_alert'; occurred_at: Date | string; source: HydrologySource; source_url: string | null; evidence_state: 'observed' | 'forecast' | 'degraded' | 'missing'; title: string; detail: string }>
+    const rows = result.rows.slice(0, limit)
+    const events = rows.map((row) => ({ id: row.id, kind: row.kind, occurredAt: new Date(row.occurred_at).toISOString(), source: row.source, sourceUrl: row.source_url, evidenceState: row.evidence_state, title: row.title, detail: boundEvidenceDetail(row.detail) }))
+    return { events, nextCursor: result.rows.length > limit && rows.at(-1) ? new Date(rows.at(-1)!.occurred_at).toISOString() : null, currentStatus: getIberaCoverageStatus(events.length ? events.map((event) => ({ status: event.evidenceState === 'observed' || event.evidenceState === 'forecast' ? 'supported' as const : 'partial' as const })) : []), lastKnownEvidence: events[0]?.occurredAt ?? null }
+  }
+
+  async getIberaSourceRegistry(municipalityId: string): Promise<HydrologyIberaSourceProvenance[]> {
+    const result = await this.db.query(
+      `SELECT source, station_id, coverage_key, source_url, freshness_policy, registry_version, review_status, reviewed_at
+         FROM ibera_source_registry
+        WHERE municipality_id = $1 AND review_status = 'reviewed'
+        ORDER BY source, station_id, coverage_key`,
+      [municipalityId],
+    ) as QueryResult<{ source: HydrologySource; station_id: string | null; coverage_key: string | null; source_url: string; freshness_policy: string; registry_version: string; review_status: 'reviewed' | 'pending' | 'blocked'; reviewed_at: Date | string | null }>
+    return result.rows.map((row) => ({ source: row.source, stationId: row.station_id, coverageKey: row.coverage_key, sourceUrl: row.source_url, freshnessPolicy: row.freshness_policy, registryVersion: row.registry_version, reviewStatus: row.review_status, reviewedAt: row.reviewed_at ? new Date(row.reviewed_at).toISOString() : null }))
+  }
+
   async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number; ledgerDeleted: number }> {
     const days = Number.isFinite(retentionDays) && retentionDays > 0 ? Math.floor(retentionDays) : 30
     const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
@@ -642,4 +671,9 @@ const toTelemetry = (row: Record<string, unknown>): HydrologyTelemetry => {
   const telemetry = toTelemetryOrNull(row)
   if (!telemetry) throw new Error('Invalid hydrology telemetry row')
   return telemetry
+}
+
+function boundEvidenceDetail(value: string): string {
+  const normalized = value.replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim()
+  return normalized.length > 300 ? `${normalized.slice(0, 299).trimEnd()}…` : normalized
 }

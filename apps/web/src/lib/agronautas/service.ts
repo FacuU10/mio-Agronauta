@@ -24,8 +24,9 @@ import {
   agronautasWorkspaceContextSchema,
   agronautasWorkspaceFieldPageSchema,
   agronautasActivityResponseSchema,
+  agronautasIntelligenceSchema,
 } from './schemas'
-import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse } from './schemas'
+import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse, AgronautasIntelligence } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
 const AGRONAUTAS_REQUEST_MODES = {
@@ -68,6 +69,7 @@ export interface AgronautasService {
   getWorkspace(): Promise<AgronautasWorkspaceContext>
   listWorkspaceFields(workspaceId: string, cursor?: string): Promise<AgronautasWorkspaceFieldPage>
   getFieldActivity(fieldId: string): Promise<AgronautasActivityResponse>
+  getFieldIntelligence(fieldId: string): Promise<AgronautasIntelligence>
 }
 
 export function createAgronautasApiService(options: AgronautasApiServiceOptions = {}): AgronautasService {
@@ -80,6 +82,7 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
     getWorkspace: async () => agronautasWorkspaceContextSchema.parse(await apiClient('/workspace')),
     listWorkspaceFields: async (workspaceId, cursor) => agronautasWorkspaceFieldPageSchema.parse(await apiClient(`/workspace/fields?workspaceId=${encodeURIComponent(workspaceId)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)),
     getFieldActivity: async (fieldId) => agronautasActivityResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/activity'))),
+    getFieldIntelligence: async (fieldId) => agronautasIntelligenceSchema.parse(await apiClient(fieldEndpoint(fieldId, '/intelligence'))),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
     getFieldGeometry: async (fieldId) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'))),
     updateFieldGeometry: async (fieldId, input) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'), { method: 'PATCH', body: JSON.stringify(fieldGeometryUpdateSchema.parse(input)) })),
@@ -118,6 +121,18 @@ export function createAgronautasMockService(): AgronautasService {
     async getWorkspace() { return agronautasWorkspaceContextSchema.parse({ contractVersion: 'agronautas-management-v1', workspaceId: 'agronautas-default-workspace', name: 'Agronautas', status: 'active', fieldCount: 0, createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z' }) },
     async listWorkspaceFields(workspaceId) { return agronautasWorkspaceFieldPageSchema.parse({ contractVersion: 'agronautas-workspace-fields-v1', workspaceId, items: [], nextCursor: null }) },
     async getFieldActivity(fieldId) { return agronautasActivityResponseSchema.parse({ contractVersion: 'agronautas-activity-v1', fieldId, items: [] }) },
+    async getFieldIntelligence(fieldId) {
+      const climate = await this.getWeatherTimeline(fieldId).then((response) => response.items[0])
+      const risk = await this.getCurrentRisk(fieldId)
+      const unavailable = (state: 'unavailable' | 'insufficient_evidence', reason: string, missingInputs?: string[]) => ({ state, reason, ...(missingInputs ? { missingInputs } : {}) })
+      return agronautasIntelligenceSchema.parse({
+        contractVersion: 'agronautas-intelligence-v1',
+        field: { fieldId, crop: 'rice', hectares: 42.5, locality: 'Mercedes' },
+        climate: climate ? { state: 'available', value: { temperatureC: climate.temperatureC, rainfallMm7d: climate.rainfallMm7d, humidityPct: climate.humidityPct, freshness: climate.staleCause ? 'degraded' : 'fresh', freshnessHours: climate.freshnessHours, degradationReasons: climate.staleCause ? ['weather_data_stale'] : [] }, metadata: { source: climate.provider, unit: '°C; mm/7d', observedAt: climate.observedAt, retrievedAt: risk.snapshot.computedAt, lineage: { sourceRunIds: [risk.snapshot.snapshotId], observationRefs: risk.snapshot.evidenceRefs } } } : unavailable('unavailable', 'No climate observation exists.'),
+        risk: { state: 'available', value: { score: risk.snapshot.score, level: risk.snapshot.level, confidence: risk.snapshot.confidence, freshness: risk.status === 'fresh' ? 'fresh' : risk.status, degradationReasons: risk.snapshot.degradationReasons, drivers: risk.snapshot.drivers, engine: { id: risk.snapshot.ruleVersion, version: risk.snapshot.ruleVersion, selectionStatus: 'undecided' } }, metadata: { source: risk.snapshot.ruleVersion, unit: 'score/100', observedAt: risk.snapshot.computedAt, retrievedAt: risk.snapshot.computedAt, lineage: { sourceRunIds: [risk.snapshot.snapshotId], observationRefs: risk.snapshot.evidenceRefs } } },
+        soil: unavailable('unavailable', 'No verified soil observation exists.'), prices: unavailable('unavailable', 'No verified price observation exists.'), dollar: unavailable('unavailable', 'No verified FX observation exists.'), economics: unavailable('insufficient_evidence', 'Economic calculation is blocked.', ['price', 'FX', 'cost']), recommendation: unavailable('insufficient_evidence', 'Planting recommendation is blocked until evidence is qualified.', ['soil', 'crop-history/yield', 'price', 'FX', 'cost']), explanation: { context: null, climateTimeline: [], riskTimeline: [], evidenceRefs: risk.snapshot.evidenceRefs },
+      })
+    },
     async getRuntime() {
       return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
     },

@@ -169,6 +169,146 @@ test('GET /api/hydrology/municipalities/:id/dashboard devuelve metadata, cards, 
   assert.equal(json.provenance[0]?.label, 'Último dato obtenido: 23/06/2026 10:30')
 })
 
+test('GET /api/hydrology/municipalities/:id/dashboard publishes the complete reviewed source registry envelope', async () => {
+  const response = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getIberaSourceRegistry() {
+      return [{
+        source: 'PNA' as const,
+        stationId: 'pna-mercedes',
+        coverageKey: 'pna-mercedes',
+        sourceUrl: 'https://example.com/pna',
+        freshnessPolicy: 'PT1H',
+        registryVersion: 'v1',
+        reviewStatus: 'reviewed' as const,
+        reviewedAt: '2026-08-13T10:00:00.000Z',
+      }]
+    },
+  } }), '/api/hydrology/municipalities/mercedes/dashboard')
+
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
+  assert.deepEqual(json.municipality.sourceRegistry, [{
+    source: 'PNA',
+    stationId: 'pna-mercedes',
+    coverageKey: 'pna-mercedes',
+    sourceUrl: 'https://example.com/pna',
+    freshnessPolicy: 'PT1H',
+    registryVersion: 'v1',
+    reviewStatus: 'reviewed',
+    reviewedAt: '2026-08-13T10:00:00.000Z',
+  }])
+})
+
+test('GET /api/hydrology/municipalities/:id/dashboard publishes grounded threshold, bounded tendency, and provider forecast metadata', async () => {
+  const response = await request(createTestApp(), '/api/hydrology/municipalities/mercedes/dashboard')
+
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
+  assert.deepEqual(json.explanation, {
+    contractVersion: 'ibera-municipality-explanation-v1',
+    municipalityId: 'mercedes',
+    evidenceState: 'observed',
+    relationLabel: 'source mapping / threshold comparison',
+    threshold: { alertHeightM: 4.8, evacuationHeightM: null },
+    observed: {
+      value: 3.2,
+      unit: 'm',
+      observedAt: '2026-06-23T10:30:00.000Z',
+      source: 'PNA',
+      sourceUrl: 'https://example.com/pna',
+      freshness: 'fresh',
+      comparison: 'below_alert',
+    },
+    tendency: { value: 'creciente', window: 'latest observed record' },
+    forecast: {
+      horizonDays: 20,
+      confidence: 'speculative',
+      label: 'planning_only',
+      source: 'INA',
+      sourceUrl: 'https://example.com/ina',
+      observedAt: '2026-07-13T10:30:00.000Z',
+    },
+    lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z',
+    runId: null,
+  })
+})
+
+test('GET /api/hydrology/municipalities/:id/dashboard makes insufficient explanation evidence explicit', async () => {
+  const municipality = municipalityView()
+  municipality.latestTelemetry = [municipality.latestTelemetry[3]!]
+  municipality.officialAlerts = []
+  const response = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipality] },
+    async getMunicipalityTelemetryDashboard() {
+      const { gaugeMappings, latestTelemetry, officialAlerts, ...rest } = municipality
+      return { municipality: rest, gaugeMappings, latestTelemetry, officialAlerts }
+    },
+  } }), '/api/hydrology/municipalities/mercedes/dashboard')
+
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
+  assert.equal(json.explanation?.evidenceState, 'missing')
+  assert.deepEqual(json.explanation?.observed, {
+    value: null,
+    unit: 'm',
+    observedAt: null,
+    source: null,
+    sourceUrl: null,
+    freshness: null,
+    comparison: 'unknown',
+  })
+  assert.deepEqual(json.explanation?.tendency, { value: null, window: 'latest observed record' })
+  assert.equal(json.explanation?.forecast, null)
+  assert.equal(json.explanation?.lastSuccessfulObservedAt, null)
+})
+
+test('GET /api/hydrology/municipalities/:id/timeline enforces bounded evidence history and exposes safe coverage metadata', async () => {
+  const response = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getIberaEvidenceTimeline(input: { limit: number; municipalityId: string }) {
+      assert.equal(input.limit, 50)
+      assert.equal(input.municipalityId, 'mercedes')
+      return { events: [{ id: 'event-1', kind: 'telemetry', occurredAt: '2026-08-13T10:00:00.000Z', source: 'PNA', sourceUrl: 'https://example.com/pna', evidenceState: 'observed', title: 'Telemetría observada', detail: '3.2 m' }], nextCursor: null, currentStatus: 'partial', lastKnownEvidence: '2026-08-13T10:00:00.000Z' }
+    },
+  } }), '/api/hydrology/municipalities/mercedes/timeline?limit=999&from=2026-08-01T00:00:00.000Z')
+  assert.equal(response.status, 200)
+  const json = await response.json() as { events: Array<{ id: string }>; currentStatus: string; nextCursor: string | null }
+  assert.equal(json.events[0]?.id, 'event-1')
+  assert.equal(json.currentStatus, 'partial')
+  assert.equal(json.nextCursor, null)
+})
+
+test('GET /api/hydrology/municipalities/:id/timeline makes empty and degraded evidence states explicit', async () => {
+  const emptyResponse = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getIberaEvidenceTimeline() { return { events: [], nextCursor: null, currentStatus: 'unavailable' as const, lastKnownEvidence: null } },
+  } }), '/api/hydrology/municipalities/mercedes/timeline')
+  assert.equal(emptyResponse.status, 200)
+  assert.deepEqual(await emptyResponse.json(), {
+    contractVersion: 'ibera-municipality-timeline-v1',
+    municipalityId: 'mercedes',
+    events: [],
+    nextCursor: null,
+    currentStatus: 'unavailable',
+    lastKnownEvidence: null,
+  })
+
+  const degradedResponse = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getIberaEvidenceTimeline() { return { events: [{ id: 'degraded-1', kind: 'telemetry' as const, occurredAt: '2026-08-13T10:00:00.000Z', source: 'PNA' as const, sourceUrl: 'https://example.com/pna', evidenceState: 'degraded' as const, title: 'Telemetría degradada', detail: 'Último dato persistido' }], nextCursor: null, currentStatus: 'partial' as const, lastKnownEvidence: '2026-08-13T10:00:00.000Z' } },
+  } }), '/api/hydrology/municipalities/mercedes/timeline')
+  assert.equal(degradedResponse.status, 200)
+  const degraded = await degradedResponse.json() as { currentStatus: string; lastKnownEvidence: string | null; events: Array<{ evidenceState: string; source: string; occurredAt: string }> }
+  assert.equal(degraded.currentStatus, 'partial')
+  assert.equal(degraded.lastKnownEvidence, '2026-08-13T10:00:00.000Z')
+  assert.deepEqual(degraded.events[0], { id: 'degraded-1', kind: 'telemetry', occurredAt: '2026-08-13T10:00:00.000Z', source: 'PNA', sourceUrl: 'https://example.com/pna', evidenceState: 'degraded', title: 'Telemetría degradada', detail: 'Último dato persistido' })
+})
+
 test('POST /api/hydrology/ingest dispara ingesta manual y valida contrato', async () => {
   const response = await request(createTestApp({ ingestionRunner: async (input) => ({ runId: `manual-${input.source ?? 'ALL'}`, status: 'completed', requestedSources: input.source ? [input.source] : ['PNA', 'INA', 'INMET', 'SMN'], sources: input.source ? [input.source] : ['PNA', 'INA', 'INMET', 'SMN'], results: [{ source: input.source ?? 'PNA', status: 'success', recordsIngested: 1 }] }) }), '/api/hydrology/ingest', {
     method: 'POST',
@@ -1119,6 +1259,7 @@ test('Iberá coverage manifest exposes only adapter-supported station relationsh
     inmetStationIds: ituzaingo?.inmetStationIds ?? [],
   }), ['INA: sin estación asociada'])
 })
+
 
 test('POST /api/hydrology/municipalities/:id/copilot/chat preserves validated citation metadata and safe absence', async () => {
   const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat() {

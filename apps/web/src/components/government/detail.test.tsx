@@ -22,9 +22,33 @@ test('GovernmentDetail renders canonical dashboard and degraded provenance safel
     assert.match(view.container.textContent ?? '', /Estado:\s*degradada/)
 })
 
+test('GovernmentDetail renders governed coverage, unverified geometry and evidence timeline without incident actions', async () => {
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), municipality: { ...dashboardPayload().municipality, coverageStatus: 'partial', geometryStatus: 'unverified', sourceRegistry: [{ source: 'PNA', stationId: 'corrientes', coverageKey: 'pna-corrientes', sourceUrl: 'https://example.com/pna', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed', reviewedAt: '2026-08-13T10:00:00.000Z' }] }, timeline: { events: [{ id: 'event-1', kind: 'telemetry', occurredAt: '2026-08-13T10:00:00.000Z', source: 'PNA', title: 'Telemetría observada', detail: '3.2 m', evidenceState: 'observed' }], currentStatus: 'partial', nextCursor: null } }} />)
+  assert.ok(await view.findByText(/Cobertura parcial/))
+  assert.ok(view.getByText(/Geometría no verificada/))
+  assert.ok(view.getAllByText(/PNA · corrientes/).length >= 2)
+  assert.ok(view.getByText(/Cobertura: pna-corrientes · frescura: PT1H · versión: v1 · reviewed/))
+  assert.ok(view.getAllByRole('link', { name: 'Ver fuente oficial' }).length >= 1)
+  assert.ok(view.getByText('Línea de evidencia'))
+  assert.ok(view.getByText('Telemetría observada'))
+  assert.equal(view.queryByRole('button', { name: /incidente|asignar|escalar|resolver/i }), null)
+})
+
+test('GovernmentDetail renders grounded explanation metadata without inventing impact', async () => {
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), explanation: { contractVersion: 'ibera-municipality-explanation-v1', municipalityId: 'corrientes', evidenceState: 'observed', relationLabel: 'source mapping / threshold comparison', threshold: { alertHeightM: 6.5, evacuationHeightM: 7 }, observed: { value: 3.2, comparison: 'below_alert', source: 'PNA', sourceUrl: 'https://example.com/pna', observedAt: '2026-06-23T10:30:00.000Z', freshness: 'fresh' }, tendency: { value: 'creciente', window: 'últimas 3 observaciones de PNA' }, forecast: { horizonDays: 20, confidence: 'speculative', label: 'planning_only', source: 'INA', sourceUrl: 'https://example.com/ina', observedAt: '2026-07-13T10:30:00.000Z' }, lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', runId: null }, timeline: { events: [], currentStatus: 'unavailable', nextCursor: null } }} />)
+  assert.ok(await view.findByText('Explicación verificable'))
+  assert.match(view.container.textContent ?? '', /Umbral de evacuación\s*7\s*m/)
+  assert.ok(view.getByText('creciente · últimas 3 observaciones de PNA'))
+  assert.ok(view.getByText('20 días · planning_only'))
+  assert.match(view.container.textContent ?? '', /Fuente del pronóstico: INA.*https:\/\/example\.com\/ina.*2026-07-13T10:30:00\.000Z/s)
+  assert.doesNotMatch(view.container.textContent ?? '', /mapa de impacto|propagación|routing hidráulico|descarga/i)
+})
+
 test('GovernmentDetail renders empty telemetry and parses SSE string tokens', async () => {
     const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), municipality: { ...dashboardPayload().municipality, officialAlerts: [] }, telemetryCards: [], inaPredictions30d: [], alerts: [], provenance: [] }} />)
     assert.ok(await view.findByText('Sin telemetría oficial reciente para este municipio.'))
+    assert.ok(view.getByText('Explicación no disponible sin evidencia oficial suficiente.'))
+    assert.ok(view.getByText('Sin eventos municipales persistidos para mostrar.'))
     assert.equal(parseSseData('"Hola "'), 'Hola ')
     assert.equal(parseSseData('{"text":"oficial"}'), 'oficial')
 })

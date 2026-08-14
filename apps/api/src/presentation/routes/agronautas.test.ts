@@ -1134,6 +1134,33 @@ test('seeded Corrientes demo rows can power overview, weather, alerts, status an
   assert.equal((await chat.json() as { supportingFacts: Array<{ label: string }> }).supportingFacts[0]?.label, 'Score')
 })
 
+test('GET /fields/:id/intelligence explains persisted evidence and blocks economic recommendations', async () => {
+  const field = testField('field-intelligence-route-1')
+  const snapshot = new RiskSnapshotFoundation({
+    snapshotId: 'snapshot-intelligence-route-1', fieldId: field.props.id, runId: 'run-risk-1', score: 55, confidence: 0.8,
+    computedAt: new Date('2026-08-13T10:00:00.000Z'), validUntil: new Date('2026-08-13T16:00:00.000Z'), ruleVersion: 'risk-v0',
+    engineId: 'risk-v0', engineVersion: 'risk-v0', sourceRunIds: ['source-risk-1'], drivers: [{ key: 'rain', label: 'Rain', weight: 1, value: 0.55 }], evidenceRefs: ['risk-ref-1'], degradationReasons: [],
+  })
+  const climate: ClimateSummary = {
+    provider: 'open-meteo', observedAt: new Date('2026-08-13T09:00:00.000Z'), runId: 'run-climate-1', sourceRunId: 'source-climate-1',
+    acquiredAt: new Date('2026-08-13T09:02:00.000Z'), freshnessHours: 1, confidence: 0.9, freshness: 'fresh', provenance: ['climate-ref-1'], temperatureC: 27, rainfallMm7d: 35,
+  }
+  const app = createTestApp({
+    fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map([[field.props.id, field]]) }),
+    fieldContextRepository: createFieldContextRepository(new Map([[field.props.id, new FieldContext({ fieldId: field.props.id, localityCanonical: 'Mercedes', localityConfidence: 1, contextPayload: {} })]])),
+    signalSummaryRepository: { async getLatestClimateSummary() { return climate }, async getLatestSatelliteSummary() { return null }, async listClimateTimeline() { return [climate] } },
+    riskSnapshotRepository: { async save() {}, async getLatest() { return snapshot }, async listTimeline() { return [snapshot] } },
+  })
+
+  const response = await request(app, `/agronautas/fields/${field.props.id}/intelligence`)
+  assert.equal(response.status, 200)
+  const body = await response.json() as { risk: { value: { engine: { selectionStatus: string } } }; soil: { state: string; value?: unknown }; recommendation: { state: string; missingInputs?: string[] } }
+  assert.equal(body.risk.value.engine.selectionStatus, 'undecided')
+  assert.equal(body.soil.state, 'unavailable')
+  assert.equal('value' in body.soil, false)
+  assert.deepEqual(body.recommendation.missingInputs, ['soil', 'crop-history/yield', 'price', 'FX', 'cost'])
+})
+
 function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRouter>[0]> = {}) {
   const app = express()
   process.env['RATE_LIMIT_STORE'] = 'memory'

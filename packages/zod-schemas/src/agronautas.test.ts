@@ -31,6 +31,11 @@ import {
   agronautasWorkspaceContextSchema,
   agronautasWorkspaceFieldPageSchema,
   agronautasActivityResponseSchema,
+  agronautasIntelligenceSchema,
+  hydrologyIberaCoverageStatus,
+  hydrologyIberaGeometryStatusSchema,
+  hydrologyIberaSourceProvenanceSchema,
+  hydrologyIberaCoverageSummarySchema,
 } from './agronautas.js'
 
 test('product completion contracts are namespaced, versioned, and preserve unavailable evidence', () => {
@@ -49,6 +54,39 @@ test('product completion contracts are namespaced, versioned, and preserve unava
   assert.equal(explanation.engine.selectionStatus, 'undecided')
 })
 
+test('intelligence capabilities require evidence metadata and forbid values in unavailable states', () => {
+  const intelligence = agronautasIntelligenceSchema.parse({
+    contractVersion: 'agronautas-intelligence-v1',
+    field: { fieldId: 'field-1', crop: 'rice', hectares: 12, locality: 'Mercedes' },
+    climate: {
+      state: 'available',
+      value: { temperatureC: 28, rainfallMm7d: 40, freshness: 'fresh', freshnessHours: 2, degradationReasons: [] },
+      metadata: {
+        source: 'open-meteo',
+        unit: '°C; mm/7d',
+        observedAt: '2026-08-13T10:00:00.000Z',
+        retrievedAt: '2026-08-13T10:05:00.000Z',
+        lineage: { sourceRunIds: ['run-1'], observationRefs: ['signal-1'] },
+      },
+    },
+    risk: { state: 'unavailable', reason: 'No persisted risk snapshot exists.' },
+    soil: { state: 'unavailable', reason: 'No verified soil observation exists.' },
+    prices: { state: 'unavailable', reason: 'No verified price observation exists.' },
+    dollar: { state: 'unavailable', reason: 'No verified FX observation exists.' },
+    economics: { state: 'insufficient_evidence', reason: 'Economic inputs are not qualified.', missingInputs: ['cost'] },
+    recommendation: { state: 'insufficient_evidence', reason: 'Required inputs are missing.', missingInputs: ['soil', 'crop-history/yield', 'price', 'FX', 'cost'] },
+    explanation: { context: null, climateTimeline: [], riskTimeline: [], evidenceRefs: [] },
+  })
+
+  assert.equal(intelligence.climate.state, 'available')
+  assert.equal(intelligence.climate.metadata.lineage.sourceRunIds[0], 'run-1')
+  assert.equal(intelligence.recommendation.state, 'insufficient_evidence')
+  assert.throws(() => agronautasIntelligenceSchema.parse({
+    ...intelligence,
+    soil: { state: 'unavailable', value: { fabricated: true }, reason: 'No soil data.' },
+  }))
+})
+
 test('Iberá history and municipality contracts retain safe degraded states and speculative horizon labels', () => {
   const history = hydrologyIberaRunHistoryResponseSchema.parse({
     contractVersion: 'ibera-ingest-run-history-v1',
@@ -61,6 +99,22 @@ test('Iberá history and municipality contracts retain safe degraded states and 
   assert.equal(history.items[0]?.freshness, 'degraded')
   assert.equal(explanation.forecast?.label, 'planning_only')
   assert.equal(timeline.events[0]?.kind, 'telemetry')
+})
+
+test('Iberá registry contracts expose every coverage state and never publish placeholder geometry', () => {
+  assert.deepEqual(hydrologyIberaCoverageStatus, ['supported', 'partial', 'unavailable', 'stale', 'failed', 'blocked', 'unverified'])
+  const provenance = hydrologyIberaSourceProvenanceSchema.parse({
+    source: 'PNA', stationId: 'pna-1', coverageKey: null, sourceUrl: 'https://example.com/pna',
+    freshnessPolicy: 'PT1H', registryVersion: 'registry-v1', reviewStatus: 'reviewed', reviewedAt: '2026-08-13T10:00:00.000Z',
+  })
+  const summary = hydrologyIberaCoverageSummarySchema.parse({
+    currentStatus: 'partial', lastKnownEvidence: '2026-08-13T10:00:00.000Z', geometryStatus: 'unverified',
+    geometryProvenance: null, sources: [provenance], gaps: ['INA: sin asociación revisada'],
+  })
+  assert.equal(summary.geometryStatus, 'unverified')
+  assert.equal(summary.geometryProvenance, null)
+  assert.equal(summary.sources[0]?.reviewStatus, 'reviewed')
+  assert.equal(Reflect.has(summary, 'polygon'), false)
 })
 
 test('hydrology government ingest schema acepta completed, partial y failed', () => {

@@ -15,15 +15,15 @@ type ForecastRow = TelemetryCard & { forecastHorizonDays?: number | null; confid
  type Provenance = { source: string; freshness: string; label: string; lastSuccessfulObservedAt: string | null }
 type OfficialAlert = { source: 'SMN' | 'INMET'; coverageKey: string; message: string; observedAt: string; lastSuccessfulObservedAt: string; freshness: 'fresh' | 'degraded'; sourceUrl?: string }
 type DashboardPayload = {
-  municipality: { id: string; localityId: string; name: string; alertHeightM?: number; evacuationHeightM?: number; officialAlerts: OfficialAlert[] }
+  municipality: { id: string; localityId: string; name: string; alertHeightM?: number; evacuationHeightM?: number; officialAlerts: OfficialAlert[]; coverageStatus?: string; geometryStatus?: string; sourceRegistry?: Array<{ source: string; stationId: string | null; coverageKey: string | null; sourceUrl: string; freshnessPolicy: string; registryVersion: string; reviewStatus: string; reviewedAt: string | null }> }
   gaugeMappings: { primaryPnaPortId: string | null; secondaryPnaPortIds: string[]; inaStationIds: string[]; smnRegionIds: string[]; inmetStationIds: string[] }
   telemetryCards: TelemetryCard[]
   inaPredictions30d: ForecastRow[]
   alerts: TelemetryCard[]
   provenance: Provenance[]
   coverageGaps?: string[]
-  explanation?: { threshold: { alertHeightM: number | null; evacuationHeightM: number | null }; observed: { value: number | null; comparison: string; source: string | null; observedAt: string | null; freshness: string | null }; tendency: { value: string | null; window: string }; forecast: { horizonDays: number; confidence: string; label: string } | null; relationLabel: string }
-  timeline?: { events: Array<{ id: string; kind: string; occurredAt: string; source: string; title: string; detail: string; evidenceState: string }> }
+  explanation?: { threshold: { alertHeightM: number | null; evacuationHeightM: number | null }; observed: { value: number | null; comparison: string; source: string | null; sourceUrl?: string | null; observedAt: string | null; freshness: string | null }; tendency: { value: string | null; window: string }; forecast: { horizonDays: number; confidence: string; label: string; source: string; sourceUrl?: string | null; observedAt: string } | null; relationLabel: string }
+  timeline?: { events: Array<{ id: string; kind: string; occurredAt: string; source: string; title: string; detail: string; evidenceState: string }>; currentStatus?: string; nextCursor?: string | null }
 }
 
 export function GovernmentDetail({ municipalityId, initialData = null }: { municipalityId: string; initialData?: DashboardPayload | null }) {
@@ -114,6 +114,7 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
           </section>
            <MunicipalEvidenceStatePanel data={data} />
            <MunicipalityExplanationPanel data={data} />
+           <InstitutionalCoveragePanel data={data} />
            {data && data.coverageGaps?.length ? <section aria-label="Brechas de cobertura local" className="mt-6 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4 text-sm text-amber-100"><strong>Brechas de cobertura local:</strong> {data.coverageGaps.join(' · ')}</section> : null}
 
           <section aria-labelledby="mappings-heading" className="mt-10 rounded-[2rem] border border-white/10 bg-white/[0.07] p-5 shadow-2xl">
@@ -156,8 +157,13 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
   )
 }
 
+function InstitutionalCoveragePanel({ data }: { data: DashboardPayload | null }) {
+  const status = data?.municipality.coverageStatus ?? 'unavailable'
+  return <section className="mt-10 rounded-[2rem] border border-teal-200/20 bg-teal-200/10 p-5" aria-label="Gobernanza de cobertura"><h2 className="text-2xl font-black">Gobernanza de cobertura</h2><p className="mt-2 text-sm text-stone-200">Cobertura {status === 'partial' ? 'parcial' : status === 'supported' ? 'soportada' : 'no disponible'}.</p><p className="mt-2 text-sm text-stone-200">Las asociaciones describen fuentes, no influencia ni impacto.</p><p className="mt-2 text-sm text-amber-100">{data?.municipality.geometryStatus === 'unverified' ? 'Geometría no verificada: no se publica un polígono oficial.' : 'Geometría no disponible.'}</p><div className="mt-4 space-y-2">{(data?.municipality.sourceRegistry ?? []).map((item) => <article key={`${item.source}-${item.stationId ?? item.coverageKey ?? 'unmapped'}`} className="rounded-2xl bg-stone-950/50 p-3 text-sm text-stone-200"><p className="font-black">{item.source} · {item.stationId ?? 'sin estación'}</p><p>Cobertura: {item.coverageKey ?? 'sin clave'} · frescura: {item.freshnessPolicy} · versión: {item.registryVersion} · {item.reviewStatus}</p><p>Revisado: {formatRegistryTime(item.reviewedAt)}</p><a className="underline underline-offset-2" href={item.sourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></article>)}</div>{data && data.municipality.sourceRegistry?.length === 0 ? <p className="mt-4 text-sm text-amber-100">Registro de fuentes no disponible.</p> : null}</section>
+}
+
 function MunicipalityExplanationPanel({ data }: { data: DashboardPayload | null }) {
-  return <section className="mt-10 rounded-[2rem] border border-lime-200/20 bg-lime-200/10 p-5" aria-label="Explicación municipal"><h2 className="text-2xl font-black">Explicación verificable</h2>{data?.explanation ? <><p className="mt-2 text-sm text-lime-100">Relación: {data.explanation.relationLabel}</p><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><div><dt className="text-stone-300">Umbral de alerta</dt><dd className="font-black">{data.explanation.threshold.alertHeightM ?? '—'} m</dd></div><div><dt className="text-stone-300">Comparación</dt><dd className="font-black">{data.explanation.observed.comparison}</dd></div><div><dt className="text-stone-300">Tendencia</dt><dd className="font-black">{data.explanation.tendency.value ?? 'Sin dato'} · {data.explanation.tendency.window}</dd></div><div><dt className="text-stone-300">Pronóstico</dt><dd className="font-black">{data.explanation.forecast ? `${data.explanation.forecast.horizonDays} días · ${data.explanation.forecast.label}` : 'No disponible'}</dd></div></dl><p className="mt-3 text-xs text-stone-300">Fuente: {data.explanation.observed.source ?? 'No disponible'} · observado: {data.explanation.observed.observedAt ?? 'No disponible'} · frescura: {data.explanation.observed.freshness ?? 'No disponible'}</p></> : <p className="mt-3 text-stone-300">Explicación no disponible sin evidencia oficial suficiente.</p>}{data?.timeline?.events.length ? <ol className="mt-5 space-y-3 border-l border-lime-200/30 pl-4">{data.timeline.events.map((event) => <li key={event.id}><p className="text-xs uppercase tracking-wide text-lime-200">{event.occurredAt} · {event.source} · {event.evidenceState}</p><p className="font-bold">{event.title}</p><p className="text-sm text-stone-300">{event.detail}</p></li>)}</ol> : <p className="mt-5 text-sm text-stone-300">Sin eventos municipales persistidos para mostrar.</p>}</section>
+  return <section className="mt-10 rounded-[2rem] border border-lime-200/20 bg-lime-200/10 p-5" aria-label="Explicación municipal"><h2 className="text-2xl font-black">Explicación verificable</h2>{data?.explanation ? <><p className="mt-2 text-sm text-lime-100">Relación: {data.explanation.relationLabel}</p><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><div><dt className="text-stone-300">Umbral de alerta</dt><dd className="font-black">{data.explanation.threshold.alertHeightM ?? '—'} m</dd></div><div><dt className="text-stone-300">Umbral de evacuación</dt><dd className="font-black">{data.explanation.threshold.evacuationHeightM ?? '—'} m</dd></div><div><dt className="text-stone-300">Comparación</dt><dd className="font-black">{data.explanation.observed.comparison}</dd></div><div><dt className="text-stone-300">Tendencia</dt><dd className="font-black">{data.explanation.tendency.value ?? 'Sin dato'} · {data.explanation.tendency.window}</dd></div><div><dt className="text-stone-300">Pronóstico</dt><dd className="font-black">{data.explanation.forecast ? `${data.explanation.forecast.horizonDays} días · ${data.explanation.forecast.label}` : 'No disponible'}</dd></div></dl><p className="mt-3 text-xs text-stone-300">Fuente observada: {data.explanation.observed.source ?? 'No disponible'} · {data.explanation.observed.sourceUrl ? <a className="underline" href={data.explanation.observed.sourceUrl} target="_blank" rel="noreferrer">URL oficial</a> : 'URL no disponible'} · observado: {formatRegistryTime(data.explanation.observed.observedAt)} · frescura: {data.explanation.observed.freshness ?? 'No disponible'}</p>{data.explanation.forecast ? <p className="mt-2 text-xs text-stone-300">Fuente del pronóstico: {data.explanation.forecast.source} · {data.explanation.forecast.sourceUrl ? <a className="underline" href={data.explanation.forecast.sourceUrl} target="_blank" rel="noreferrer">{data.explanation.forecast.sourceUrl}</a> : 'URL no disponible'} · observado: {data.explanation.forecast.observedAt} · confianza: {data.explanation.forecast.confidence}</p> : null}</> : <p className="mt-3 text-stone-300">Explicación no disponible sin evidencia oficial suficiente.</p>}<h3 className="mt-5 text-lg font-black">Línea de evidencia</h3>{data?.timeline?.events.length ? <ol className="mt-3 space-y-3 border-l border-lime-200/30 pl-4">{data.timeline.events.map((event) => <li key={event.id}><p className="text-xs uppercase tracking-wide text-lime-200">{event.occurredAt} · {event.source} · {event.evidenceState}</p><p className="font-bold">{event.title}</p><p className="text-sm text-stone-300">{event.detail}</p></li>)}</ol> : <p className="mt-3 text-sm text-stone-300">Sin eventos municipales persistidos para mostrar.</p>}</section>
 }
 
 function CopilotPanel(props: { message: string; view: ReturnType<typeof createChatViewModelFromStream>; onMessageChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onRetry?: () => void }) {
@@ -233,6 +239,13 @@ function chatTimestamp(view: ReturnType<typeof createChatViewModelFromStream>) {
     if (typeof value === 'string') return value
   }
   return view.receivedAt ?? null
+}
+
+function formatRegistryTime(value?: string | null) {
+  if (!value) return 'No disponible'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'No disponible'
+  return new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }).format(date)
 }
 
 export function parseSseData(value: string) {

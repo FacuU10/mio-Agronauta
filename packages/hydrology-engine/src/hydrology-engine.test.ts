@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { HYDROLOGY_BRAZIL_EXTENSION, InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository } from './index'
+import { HYDROLOGY_BRAZIL_EXTENSION, InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository, getIberaCoverageStatus, isReviewedIberaRegistryAssociation, summarizeObservedTendency } from './index'
 
 test('Brazil remains an explicit data-free extension point until official sources and BR to Corrientes influence are verified', () => {
   assert.deepEqual(HYDROLOGY_BRAZIL_EXTENSION, {
@@ -118,6 +118,27 @@ test('Iberá ledger schema repair is additive and heals partially applied deploy
   assert.match(sql, /hydrology_ingestion_runs_ibera_run_fk/)
   assert.match(sql, /hydrology_ingestion_runs_ibera_run_idx/)
   assert.doesNotMatch(sql, /DROP TABLE|DROP COLUMN|DELETE FROM hydrology_(telemetry|ingestion_runs)/i)
+})
+
+test('HydrologyRepository evidence timeline is read-only, bounded and cursorable', async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const rows = Array.from({ length: 3 }, (_, index) => ({ id: `event-${index}`, kind: 'telemetry' as const, occurred_at: new Date(`2026-08-13T0${index + 1}:00:00.000Z`), source: 'PNA' as const, source_url: 'https://example.com/pna', evidence_state: 'observed' as const, title: 'Observed', detail: 'height' }))
+  const db = { async query(sql: string, params: unknown[] = []) { calls.push({ sql, params }); return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } } }
+  const timeline = await new HydrologyRepository(db).getIberaEvidenceTimeline({ municipalityId: 'mun-1', from: null, to: null, cursor: null, limit: 2 })
+  assert.equal(timeline.events.length, 2)
+  assert.equal(timeline.nextCursor, '2026-08-13T02:00:00.000Z')
+  assert.equal(timeline.currentStatus, 'supported')
+  assert.match(calls[0]?.sql ?? '', /LIMIT \$5/)
+  assert.doesNotMatch(calls[0]?.sql ?? '', /INSERT|UPDATE|DELETE/i)
+})
+
+test('Iberá registry activation requires complete reviewed provenance and generated geometry stays unverified', () => {
+  assert.equal(isReviewedIberaRegistryAssociation({ municipalityId: 'mun-1', source: 'PNA', officialIdentifier: 'mun-official', sourceUrl: 'https://example.com', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed', reviewedAt: new Date('2026-08-13T10:00:00.000Z'), stationId: 'station-1', coverageKey: null, geometryStatus: 'unverified' }), true)
+  assert.equal(isReviewedIberaRegistryAssociation({ municipalityId: 'mun-1', source: 'PNA', officialIdentifier: null, sourceUrl: 'https://example.com', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed', reviewedAt: new Date('2026-08-13T10:00:00.000Z'), stationId: 'station-1', coverageKey: null, geometryStatus: 'unverified' }), false)
+  assert.equal(getIberaCoverageStatus([{ status: 'supported' }, { status: 'unavailable' }]), 'partial')
+  assert.equal(summarizeObservedTendency([{ value: 1 }, { value: 2 }, { value: 3 }]), 'rising')
+  assert.equal(summarizeObservedTendency([{ value: 3 }, { value: 2 }, { value: 1 }]), 'falling')
+  assert.equal(summarizeObservedTendency([{ value: 1 }, { value: null }]), null)
 })
 
 test('Iberá ingest run listing is bounded, newest-first, and read-only', async () => {

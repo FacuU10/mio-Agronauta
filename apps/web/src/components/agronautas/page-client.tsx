@@ -165,6 +165,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
     ],
   })
   const activityQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'activity', selectedFieldId], queryFn: () => resolvedService.getFieldActivity(selectedFieldId as string), enabled: Boolean(selectedFieldId), retry: false }] })[0]
+  const intelligenceQuery = useQueries({ queries: [{ queryKey: ['agronautas', 'intelligence', selectedFieldId], queryFn: () => resolvedService.getFieldIntelligence(selectedFieldId as string), enabled: Boolean(selectedFieldId), retry: false }] })[0]
   const runtimeQuery = useQueries({
     queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime() }],
   })[0]
@@ -193,6 +194,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
         onLoadMoreFields={() => void fieldsQuery.fetchNextPage()}
        workspace={workspaceQuery.data}
        activity={activityQuery.data}
+       intelligence={intelligenceQuery.data}
       lastCreatedFieldId={lastCreatedFieldId}
       intakeError={intakeError}
       isSubmitting={intakeMutation.isPending}
@@ -213,7 +215,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       recomputeStatus={recomputeRequestResultSchema.safeParse(recomputeMutation.data).success ? recomputeMutation.data : undefined}
       isRecomputePending={recomputeMutation.isPending}
        isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || dashboardQuery.isLoading}
-        queryErrors={[...queryErrors, ...(workspaceQuery.error ? [workspaceQuery.error instanceof Error ? workspaceQuery.error.message : 'No se pudo cargar el contexto Agronautas'] : []), ...(activityQuery.error ? [activityQuery.error instanceof Error ? activityQuery.error.message : 'No se pudo cargar la actividad'] : []), ...(fieldsQuery.error ? [fieldsQuery.error instanceof Error ? fieldsQuery.error.message : 'No se pudo cargar el índice de lotes'] : [])]}
+       queryErrors={[...queryErrors, ...(workspaceQuery.error ? [workspaceQuery.error instanceof Error ? workspaceQuery.error.message : 'No se pudo cargar el contexto Agronautas'] : []), ...(activityQuery.error ? [activityQuery.error instanceof Error ? activityQuery.error.message : 'No se pudo cargar la actividad'] : []), ...(intelligenceQuery.error ? [intelligenceQuery.error instanceof Error ? intelligenceQuery.error.message : 'No se pudo cargar la inteligencia Agronautas'] : []), ...(fieldsQuery.error ? [fieldsQuery.error instanceof Error ? fieldsQuery.error.message : 'No se pudo cargar el índice de lotes'] : [])]}
       onRetrySync={retrySync}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}

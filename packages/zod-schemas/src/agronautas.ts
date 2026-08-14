@@ -38,6 +38,9 @@ export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
 export const hydrologyIberaRunStatuses = ['queued', 'started', 'completed', 'partial', 'failed'] as const
 export const hydrologyIberaCitationKinds = ['observed', 'forecast', 'alert'] as const
 export const hydrologyIberaCitationModes = ['validated-context', 'context-only', 'none'] as const
+export const hydrologyIberaCoverageStatus = ['supported', 'partial', 'unavailable', 'stale', 'failed', 'blocked', 'unverified'] as const
+export const hydrologyIberaGeometryStatuses = ['verified', 'unverified', 'unavailable'] as const
+export const hydrologyIberaRegistryReviewStatuses = ['reviewed', 'pending', 'blocked'] as const
 export const hydrologyExcludedInputs = [
   'itaipu_discharge',
   'yacyreta_discharge',
@@ -59,6 +62,9 @@ export const agronautasContractErrorCodes = [
 ] as const
 export const agronautasWorkspaceStatuses = ['active'] as const
 export const agronautasActivitySourceTypes = ['field', 'risk_snapshot', 'alert_snapshot', 'ingestion_run', 'recompute_run'] as const
+export const agronautasIntelligenceStates = ['available', 'unavailable', 'insufficient_evidence'] as const
+export const agronautasIntelligenceContractVersion = 'agronautas-intelligence-v1' as const
+export const agronautasRiskSelectionStatuses = ['undecided'] as const
 
 const trimmedString = (max: number) => z.string().trim().min(1).max(max)
 const optionalTrimmedString = (max: number) => z.string().trim().max(max).optional().transform((value) => value && value.length > 0 ? value : undefined)
@@ -88,6 +94,9 @@ const hydrologyTargetZoneSchema = z.enum(hydrologyTargetZones)
 const hydrologyMetricSchema = z.enum(hydrologyMetrics)
 const hydrologyGovernmentSourceRunStatusSchema = z.enum(hydrologyGovernmentSourceRunStatuses)
 const hydrologyForecastConfidenceSchema = z.enum(hydrologyForecastConfidence)
+export const hydrologyIberaCoverageStatusSchema = z.enum(hydrologyIberaCoverageStatus)
+export const hydrologyIberaGeometryStatusSchema = z.enum(hydrologyIberaGeometryStatuses)
+const hydrologyIberaRegistryReviewStatusSchema = z.enum(hydrologyIberaRegistryReviewStatuses)
 const hydrologyGovernmentIngestFailureKindSchema = z.enum(hydrologyGovernmentIngestFailureKinds)
 
 export const hydrologyExcludedSourceSchema = z.enum(hydrologyExcludedSources)
@@ -362,6 +371,79 @@ export const agronautasActivityResponseSchema = z.object({
 export const agronautasReportMetadataSchema = z.object({ contractVersion: z.literal('agronautas-report-v1'), fieldId: z.string().min(1).max(80), snapshotId: z.string().min(1).max(80), snapshotAt: z.string().datetime(), evidenceState: evidenceStateSchema, geometryStatus: z.enum(agronautasFieldGeometryStatuses), geometryUpdatedAt: z.string().datetime().nullable(), sourceRunIds: z.array(z.string().min(1).max(120)).default([]) })
 export const agronautasRiskClimateExplanationSchema = z.object({ contractVersion: z.literal('agronautas-risk-climate-v1'), fieldId: z.string().min(1).max(80), score: z.number().min(0).max(100), level: z.enum(agronautasRiskLevels), drivers: z.array(riskDriverSchema), validFrom: z.string().datetime(), validUntil: z.string().datetime(), nextReviewAction: z.string().min(1).max(240), evidence: z.array(agronautasEvidenceSchema), engine: z.object({ id: z.string().min(1).max(80), version: z.string().min(1).max(80), selectionStatus: z.literal('undecided') }), sourceRunIds: z.array(z.string().min(1).max(120)).default([]) })
 
+const intelligenceStateSchema = z.enum(agronautasIntelligenceStates)
+const intelligenceUnavailableStateSchema = z.object({
+  state: z.enum(['unavailable', 'insufficient_evidence']),
+  reason: z.string().min(1).max(300),
+  missingInputs: z.array(z.string().min(1).max(120)).optional(),
+}).strict()
+
+export const observationMetadataSchema = z.object({
+  source: z.string().min(1).max(160),
+  unit: z.string().min(1).max(80),
+  currency: z.string().min(1).max(16).optional(),
+  observedAt: z.string().datetime(),
+  retrievedAt: z.string().datetime(),
+  lineage: z.object({
+    sourceRunIds: z.array(z.string().min(1).max(120)),
+    observationRefs: z.array(z.string().min(1).max(240)),
+  }).strict(),
+}).strict()
+
+const availableClimateSchema = z.object({
+  state: z.literal('available'),
+  value: z.object({
+    temperatureC: z.number(),
+    rainfallMm7d: z.number(),
+    humidityPct: z.number().optional(),
+    freshness: signalStatusSchema,
+    freshnessHours: z.number().nonnegative(),
+    degradationReasons: z.array(degradationReasonSchema),
+  }).strict(),
+  metadata: observationMetadataSchema,
+}).strict()
+
+const availableRiskSchema = z.object({
+  state: z.literal('available'),
+  value: z.object({
+    score: z.number().min(0).max(100),
+    level: z.enum(agronautasRiskLevels),
+    confidence: z.number().min(0).max(1),
+    freshness: z.enum(['fresh', 'stale', 'degraded']),
+    degradationReasons: z.array(degradationReasonSchema),
+    drivers: z.array(riskDriverSchema),
+    engine: z.object({ id: z.string().min(1).max(80), version: z.string().min(1).max(80), selectionStatus: z.literal('undecided') }).strict(),
+  }).strict(),
+  metadata: observationMetadataSchema,
+}).strict()
+
+const availableObservationSchema = z.object({
+  state: z.literal('available'),
+  value: z.unknown(),
+  metadata: observationMetadataSchema,
+}).strict()
+
+const climateTimelineItemSchema = availableClimateSchema.shape.value
+const riskTimelineItemSchema = availableRiskSchema.shape.value
+
+export const agronautasIntelligenceSchema = z.object({
+  contractVersion: z.literal(agronautasIntelligenceContractVersion),
+  field: z.object({ fieldId: z.string().min(1).max(80), crop: supportedCropSchema, hectares: z.number().positive(), locality: z.string().min(1).max(120) }).strict(),
+  climate: z.union([availableClimateSchema, intelligenceUnavailableStateSchema]),
+  risk: z.union([availableRiskSchema, intelligenceUnavailableStateSchema]),
+  soil: z.union([availableObservationSchema, intelligenceUnavailableStateSchema]),
+  prices: z.union([availableObservationSchema, intelligenceUnavailableStateSchema]),
+  dollar: z.union([availableObservationSchema, intelligenceUnavailableStateSchema]),
+  economics: z.union([availableObservationSchema, intelligenceUnavailableStateSchema]),
+  recommendation: z.union([availableObservationSchema, intelligenceUnavailableStateSchema]),
+  explanation: z.object({
+    context: z.object({ locality: z.string(), growthStage: z.string().nullable(), localityConfidence: z.number().min(0).max(1) }).strict().nullable(),
+    climateTimeline: z.array(climateTimelineItemSchema),
+    riskTimeline: z.array(riskTimelineItemSchema),
+    evidenceRefs: z.array(z.string().min(1).max(240)),
+  }).strict(),
+}).strict()
+
 export const pdfReportRequestSchema = z.object({
   fieldId: z.string().min(1).max(80),
   snapshotId: z.string().min(1).max(80),
@@ -561,6 +643,9 @@ export const hydrologyGovernmentMunicipalitySchema = z.object({
     sourceUrl: z.string().url().optional(),
   })).default([]),
   coverageGaps: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
+  coverageStatus: hydrologyIberaCoverageStatusSchema.default('unavailable'),
+  geometryStatus: hydrologyIberaGeometryStatusSchema.default('unverified'),
+  sourceRegistry: z.array(z.lazy(() => hydrologyIberaSourceProvenanceSchema)).default([]),
 })
 
 export const hydrologyGovernmentProvinceAlertSchema = z.object({
@@ -672,6 +757,32 @@ export const hydrologyMunicipalityExplanationSchema = z.object({
   contractVersion: z.literal('ibera-municipality-explanation-v1'), municipalityId: z.string().min(1).max(80), evidenceState: evidenceStateSchema, relationLabel: z.literal('source mapping / threshold comparison'), threshold: z.object({ alertHeightM: z.number().nullable(), evacuationHeightM: z.number().nullable() }), observed: z.object({ value: z.number().nullable(), unit: z.string().min(1).max(24), observedAt: z.string().datetime().nullable(), source: hydrologySourceSchema.nullable(), sourceUrl: z.string().url().nullable(), freshness: hydrologyFreshnessSchema.nullable(), comparison: z.enum(['below_alert', 'at_or_above_alert', 'unknown']) }), tendency: z.object({ value: z.string().min(1).max(80).nullable(), window: z.string().min(1).max(120) }), forecast: z.object({ horizonDays: z.number().int().min(0).max(30), confidence: z.enum(hydrologyForecastConfidence), label: z.enum(['operational', 'planning_only']), source: hydrologySourceSchema, sourceUrl: z.string().url().nullable(), observedAt: z.string().datetime() }).nullable(), lastSuccessfulObservedAt: z.string().datetime().nullable(), runId: z.string().min(1).max(120).nullable(),
 })
 export const hydrologyMunicipalityTimelineSchema = z.object({ contractVersion: z.literal('ibera-municipality-timeline-v1'), municipalityId: z.string().min(1).max(80), events: z.array(z.object({ id: z.string().min(1).max(160), kind: z.enum(['telemetry', 'official_alert']), occurredAt: z.string().datetime(), source: hydrologySourceSchema, sourceUrl: z.string().url().nullable(), evidenceState: evidenceStateSchema, title: z.string().min(1).max(160), detail: z.string().min(1).max(300) })) })
+
+export const hydrologyIberaSourceProvenanceSchema = z.object({
+  source: hydrologySourceSchema,
+  stationId: z.string().min(1).max(120).nullable(),
+  coverageKey: z.string().min(1).max(120).nullable(),
+  sourceUrl: z.string().url(),
+  freshnessPolicy: z.string().trim().min(1).max(120),
+  registryVersion: z.string().trim().min(1).max(80),
+  reviewStatus: hydrologyIberaRegistryReviewStatusSchema,
+  reviewedAt: z.string().datetime().nullable(),
+}).strict()
+
+export const hydrologyIberaCoverageSummarySchema = z.object({
+  currentStatus: hydrologyIberaCoverageStatusSchema,
+  lastKnownEvidence: z.string().datetime().nullable(),
+  geometryStatus: hydrologyIberaGeometryStatusSchema,
+  geometryProvenance: z.object({ sourceUrl: z.string().url(), datasetVersion: z.string().min(1).max(80), crs: z.string().min(1).max(40), reviewedAt: z.string().datetime() }).nullable(),
+  sources: z.array(hydrologyIberaSourceProvenanceSchema),
+  gaps: z.array(z.string().trim().min(1).max(160)).max(8),
+}).strict()
+
+export const hydrologyIberaEvidenceTimelineResponseSchema = hydrologyMunicipalityTimelineSchema.extend({
+  nextCursor: cursorSchema,
+  currentStatus: hydrologyIberaCoverageStatusSchema,
+  lastKnownEvidence: z.string().datetime().nullable(),
+})
 
 export const hydrologyIberaCitationSchema = z.object({
   id: z.string().trim().min(1).max(120),
@@ -845,6 +956,8 @@ export type AgronautasActivityItem = z.infer<typeof agronautasActivityItemSchema
 export type AgronautasActivityResponse = z.infer<typeof agronautasActivityResponseSchema>
 export type AgronautasReportMetadata = z.infer<typeof agronautasReportMetadataSchema>
 export type AgronautasRiskClimateExplanation = z.infer<typeof agronautasRiskClimateExplanationSchema>
+export type ObservationMetadata = z.infer<typeof observationMetadataSchema>
+export type AgronautasIntelligence = z.infer<typeof agronautasIntelligenceSchema>
 export type PdfReportRequest = z.infer<typeof pdfReportRequestSchema>
 export type RiskSnapshot = z.infer<typeof riskSnapshotSchema>
 export type AlertSnapshot = z.infer<typeof alertSnapshotSchema>
@@ -870,6 +983,7 @@ export type HydrologyGovernmentIngestRequest = z.infer<typeof hydrologyGovernmen
 export type HydrologyGovernmentIngestResponse = z.infer<typeof hydrologyGovernmentIngestResponseSchema>
 export type HydrologyOperatorReceipt = z.infer<typeof hydrologyOperatorReceiptSchema>
 export type HydrologyIberaRunStatus = (typeof hydrologyIberaRunStatuses)[number]
+export type HydrologyIberaCoverageStatus = (typeof hydrologyIberaCoverageStatus)[number]
 export type HydrologyIberaSourceResult = z.infer<typeof hydrologyIberaSourceResultSchema>
 export type HydrologyIberaCitation = z.infer<typeof hydrologyIberaCitationSchema>
 export type HydrologyIberaCopilotMetadata = z.infer<typeof hydrologyIberaCopilotMetadataSchema>
@@ -877,6 +991,9 @@ export type HydrologyIberaRunHistoryItem = z.infer<typeof hydrologyIberaRunHisto
 export type HydrologyIberaRunHistoryResponse = z.infer<typeof hydrologyIberaRunHistoryResponseSchema>
 export type HydrologyMunicipalityExplanation = z.infer<typeof hydrologyMunicipalityExplanationSchema>
 export type HydrologyMunicipalityTimeline = z.infer<typeof hydrologyMunicipalityTimelineSchema>
+export type HydrologyIberaSourceProvenance = z.infer<typeof hydrologyIberaSourceProvenanceSchema>
+export type HydrologyIberaCoverageSummary = z.infer<typeof hydrologyIberaCoverageSummarySchema>
+export type HydrologyIberaEvidenceTimelineResponse = z.infer<typeof hydrologyIberaEvidenceTimelineResponseSchema>
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatAction = z.infer<typeof groundedChatActionSchema>

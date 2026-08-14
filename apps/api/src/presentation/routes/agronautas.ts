@@ -15,6 +15,7 @@ import {
   agronautasReportMetadataSchema,
   agronautasRiskClimateExplanationSchema,
   agronautasActivityResponseSchema,
+  agronautasIntelligenceSchema,
 } from '@repo/zod-schemas'
 import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
@@ -56,6 +57,7 @@ import { toAgronautasFieldIndexItem } from '../../application/viewmodels/agronau
 import { EnsureDefaultWorkspace, GetFieldActivity, GetWorkspaceContext, ListWorkspaceFields } from '../../application/usecases/agronautas-management'
 import type { AgronautasWorkspaceRepository } from '../../domain/repositories/agronautas'
 import { PostgresAgronautasManagementRepository } from '../../infrastructure/database/postgres/agronautas-management-repository'
+import { GetFieldIntelligenceUseCase } from '../../application/usecases/get-field-intelligence-usecase'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -181,6 +183,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       return respondContractError(res, 500, 'INVALID_CONTRACT', 'No se pudo crear el lote', { reason: message })
     }
   })
+  const getFieldIntelligence = new GetFieldIntelligenceUseCase(resolved.fieldRepository, resolved.fieldContextRepository, resolved.signalSummaryRepository, resolved.riskSnapshotRepository)
 
   router.get('/workspace', requireRead, async (_req, res) => {
     try {
@@ -385,6 +388,14 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const dashboard = await buildDashboardPayload(fieldId)
     if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
     return res.json(dashboard)
+  })
+
+  router.get('/fields/:fieldId/intelligence', requireRead, async (req, res) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    const intelligence = await getFieldIntelligence.execute(fieldId)
+    if (!intelligence) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
+    return res.json(agronautasIntelligenceSchema.parse(intelligence))
   })
 
   router.get('/fields/:fieldId/dashboard.pdf', requireRead, async (req, res) => {

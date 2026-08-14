@@ -342,6 +342,45 @@ model MunicipalityGaugeMapping {
   @@map("municipality_gauge_mappings")
 }
 
+model IberaSourceRegistry {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  municipalityId     String   @map("municipality_id") @db.Text
+  source             String   @db.Text
+  officialIdentifier String   @map("official_identifier") @db.Text
+  stationId          String?  @map("station_id") @db.Text
+  coverageKey        String?  @map("coverage_key") @db.Text
+  sourceUrl          String   @map("source_url") @db.Text
+  freshnessPolicy    String   @map("freshness_policy") @db.Text
+  registryVersion    String   @map("registry_version") @db.Text
+  reviewStatus       String   @map("review_status") @db.Text
+  reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  geometryStatus     String   @default("unverified") @map("geometry_status") @db.Text
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([municipalityId, source, officialIdentifier], map: "ibera_source_registry_identity_uq")
+  @@index([municipalityId, reviewStatus], map: "ibera_source_registry_municipality_review_idx")
+  @@index([source, stationId, coverageKey], map: "ibera_source_registry_source_keys_idx")
+  @@map("ibera_source_registry")
+}
+
+model IberaEvidenceEvent {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  municipalityId String   @map("municipality_id") @db.Text
+  kind           String   @db.Text
+  occurredAt     DateTime @map("occurred_at") @db.Timestamptz(6)
+  source         String   @db.Text
+  sourceUrl      String?  @map("source_url") @db.Text
+  evidenceState  String   @map("evidence_state") @db.Text
+  title          String   @db.Text
+  detail         String   @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([municipalityId, occurredAt(sort: Desc), id(sort: Desc)], map: "ibera_evidence_events_bounded_idx")
+  @@index([source, occurredAt(sort: Desc)], map: "ibera_evidence_events_source_idx")
+  @@map("ibera_evidence_events")
+}
+
 model DemoContactSubmission {
   id            String   @id @default(cuid())
   name          String

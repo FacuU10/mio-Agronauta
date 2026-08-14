@@ -77,6 +77,12 @@ interface CoverageDb {
   query(sql: string, params?: unknown[]): Promise<{ rowCount?: number | null }>
 }
 
+export function reviewedRegistryRowIsActivatable(input: { officialIdentifier?: string | null; sourceUrl?: string | null; freshnessPolicy?: string | null; registryVersion?: string | null; reviewStatus: 'reviewed' | 'pending' | 'blocked'; reviewedAt?: Date | null; stationId?: string | null; coverageKey?: string | null }): boolean {
+  return input.reviewStatus === 'reviewed'
+    && Boolean(input.officialIdentifier && input.sourceUrl?.startsWith('https://') && input.freshnessPolicy && input.registryVersion && input.reviewedAt)
+    && Boolean(input.stationId || input.coverageKey)
+}
+
 export async function seedMunicipalityAlertCoverage(db: CoverageDb): Promise<{ inserted: number; updated: number }> {
   let inserted = 0
   let updated = 0

@@ -3,7 +3,7 @@
 import { createElement, Fragment, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
-import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse, AgronautasIntelligence } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
@@ -34,6 +34,7 @@ interface WorkspaceProps {
   hasNextFieldPage: boolean
   workspace?: AgronautasWorkspaceContext
   activity?: AgronautasActivityResponse
+  intelligence?: AgronautasIntelligence
   lastCreatedFieldId: string | null
   intakeError: string | null
   isSubmitting: boolean
@@ -106,7 +107,7 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
        <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
          <FieldIndexPanel index={props.fieldIndex} isLoading={props.isFieldIndexLoading} isFetchingNextPage={props.isFieldIndexFetchingNextPage} hasNextPage={props.hasNextFieldPage} onLoadMore={props.onLoadMoreFields} onSelectField={props.onSelectField} />
         <IntakePanel {...props} />
-         <DashboardPanel {...props} />
+          <DashboardPanel {...props} />
       </section>
        <FutureCapabilities product="agronautas" />
     </main>
@@ -210,7 +211,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, activity, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, activity, intelligence, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -295,6 +296,8 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
       <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
 
       <AgronautasEvidenceStatePanel dashboardPayload={dashboardPayload} hydrologyDashboard={hydrologyDashboard} risk={risk} />
+
+      <IntelligencePanel intelligence={intelligence} />
 
       <NextFeaturesPanel dashboardPayload={dashboardPayload} />
 
@@ -444,6 +447,20 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
       </Card>
     </div>
   )
+}
+
+function IntelligencePanel({ intelligence }: { intelligence?: AgronautasIntelligence }) {
+  if (!intelligence) return null
+  const recommendationReason = 'reason' in intelligence.recommendation ? intelligence.recommendation.reason : 'No hay evidencia suficiente para una recomendación.'
+  const recommendationInputs = 'missingInputs' in intelligence.recommendation ? intelligence.recommendation.missingInputs ?? [] : []
+  const capabilities = [
+    ['Suelo', intelligence.soil], ['Precios', intelligence.prices], ['Dólar / FX', intelligence.dollar], ['Economía', intelligence.economics],
+  ] as const
+  return <section className="grid gap-4 rounded-[2rem] border border-amber-900/20 bg-amber-50 p-5" aria-label="Inteligencia económica basada en evidencia" data-testid="agronautas-intelligence-panel">
+    <div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-900">Inteligencia económica</p><h2 className="mt-1 font-serif text-2xl font-semibold text-stone-950">Explicación climática y riesgo sin inventar datos</h2><p className="mt-2 text-sm text-stone-700">Fuente {intelligence.climate.state === 'available' ? intelligence.climate.metadata.source : 'no disponible'} · selección de motor de riesgo: {intelligence.risk.state === 'available' ? intelligence.risk.value.engine.selectionStatus : 'no disponible'}</p></div>
+    <div className="grid gap-3 md:grid-cols-4">{capabilities.map(([label, capability]) => <div key={label} className="rounded-2xl border border-amber-900/15 bg-white p-4"><div className="flex items-center justify-between gap-2"><p className="font-medium text-stone-900">{label}</p><Badge variant={capability.state === 'available' ? 'success' : 'warning'}>{capability.state}</Badge></div><p className="mt-2 text-sm text-stone-600">{'reason' in capability ? capability.reason : 'Observación respaldada con metadata de fuente, unidad y lineage.'}</p></div>)}</div>
+    <div className="rounded-2xl border border-amber-900/20 bg-white p-4"><p className="font-semibold text-stone-950">Recomendación bloqueada</p><p className="mt-1 text-sm text-stone-700">{recommendationReason}</p><ul className="mt-2 list-disc pl-5 text-sm text-stone-700">{recommendationInputs.map((input) => <li key={input}>{input}</li>)}</ul></div>
+  </section>
 }
 
 function NextFeaturesPanel({ dashboardPayload }: { dashboardPayload?: DashboardSnapshot }) {
