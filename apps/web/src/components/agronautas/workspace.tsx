@@ -638,8 +638,8 @@ function HydrologyPanel({ dashboard, locality, hydrologyChatState, isHydrologyCh
           <div className="grid gap-3 md:grid-cols-4">
             <HydrologyFact label="Altura actual" value={height ? `${height.value.toFixed(2)} ${height.unit}` : 'Sin dato'} detail={height?.stationId ?? 'PNA'} />
             <HydrologyFact label="Tendencia 24h" value={toTendencyLabel(trend?.tendency)} detail={trend ? `${trend.value} ${trend.unit}` : 'Sin variación'} />
-            <HydrologyFact label="Umbral de alerta" value={thresholdForZone(zone).alert} detail="Referencia local operativa" />
-            <HydrologyFact label="Umbral evacuación" value={thresholdForZone(zone).evacuation} detail="Referencia para logística crítica" />
+            <HydrologyFact label="Umbral de alerta" value="No disponible" detail="El contrato hidrológico actual no informa umbrales." />
+            <HydrologyFact label="Umbral de evacuación" value="No disponible" detail="El contrato hidrológico actual no informa umbrales." />
           </div>
 
           <p className="rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm font-medium text-emerald-900">Último dato obtenido: {formatDateTime(lastSuccessful)}</p>
@@ -854,12 +854,6 @@ function toTendencyLabel(tendency: string | undefined) {
   if (normalized?.includes('baja') || normalized?.includes('falling')) return 'Baja'
   if (normalized?.includes('estable') || normalized?.includes('stable')) return 'Estable'
   return tendency ?? 'Sin tendencia'
-}
-
-function thresholdForZone(zone: string) {
-  if (zone.toLowerCase().includes('ituzaing')) return { alert: '3,50 m', evacuation: '4,20 m' }
-  if (zone.toLowerCase().includes('virasoro')) return { alert: 'Lluvia 70 mm/24h', evacuation: 'Corte de acceso' }
-  return { alert: '5,60 m', evacuation: '6,20 m' }
 }
 
 function stationLabel(stationId: string) {

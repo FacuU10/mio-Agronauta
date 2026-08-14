@@ -126,6 +126,48 @@ test('Agronautas dashboard prioritizes decision, confidence, freshness and next 
   })
 })
 
+test('Agronautas hydrology thresholds stay unavailable without a canonical threshold contract', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+
+  const view = render(<QueryProvider><AgronautasPageClient service={createAgronautasMockService()} /></QueryProvider>)
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    const panel = view.getByTestId('agronautas-hydrology-panel')
+    const text = panel.textContent ?? ''
+    assert.match(text, /Umbral de alerta/)
+    assert.match(text, /Umbral de evacuación/)
+    assert.match(text, /No disponible/)
+    assert.match(text, /contrato hidrológico actual no informa umbrales/i)
+    assert.doesNotMatch(text, /3,50\s*m|4,20\s*m|5,60\s*m|6,20\s*m|Lluvia 70\s*mm\/24h|Corte de acceso/i)
+  })
+})
+
+test('Agronautas does not substitute another zone threshold when the backend contract omits it', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+  const base = createAgronautasMockService()
+  const view = render(<QueryProvider><AgronautasPageClient service={{
+    ...base,
+    async getHydrologyDashboard(fieldId) {
+      const dashboard = await base.getHydrologyDashboard(fieldId)
+      return { ...dashboard, zone: 'Ituzaingó' }
+    },
+  }} /></QueryProvider>)
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    const panel = view.getByTestId('agronautas-hydrology-panel')
+    const text = panel.textContent ?? ''
+    assert.match(text, /Tarjeta hidrológica Ituzaingó/)
+    assert.match(text, /Umbral de evacuaciónNo disponible/)
+    assert.doesNotMatch(text, /3,50\s*m|4,20\s*m|4\.5\s*m|5\s*m/i)
+  })
+})
+
 test('Agronautas workspace makes runtime, source status and retry boundaries visible', async () => {
   setupDom()
   cleanup()
