@@ -20,6 +20,9 @@ _contracts_root = _settings.resolved_contracts_root
 AGRONAUTAS_RECOMPUTE_VALIDATOR = build_contract_validator(
     "agronautas-runtime-recompute-job.schema.json", _contracts_root
 )
+SCHEDULED_WINDOW_VALIDATOR = build_contract_validator(
+    "agronautas-scheduled-window-job.schema.json", _contracts_root
+)
 OPEN_METEO_RULE_VERSION = "open-meteo-basic-v1"
 OPEN_METEO_TIMEOUT_SECONDS = 10
 DEFAULT_LEASE_SECONDS = 300
@@ -251,6 +254,47 @@ async def handle_agronautas_job(
             "mode": mode,
             "request_id": job["trace"]["traceId"],
         },
+    )
+    return result
+
+
+async def handle_scheduled_window_job(
+    job: dict[str, Any],
+    redis: Redis,
+    logger: Any,
+    job_store: PostgresAgronautasJobStore | None = None,
+    worker_id: str | None = None,
+) -> dict[str, Any]:
+    """Validate a scheduled source window without pretending a provider ran.
+
+    Provider execution belongs to the next phase. Until an explicit processor is
+    wired, the queue records an unavailable terminal outcome rather than a false
+    success or a fabricated observation.
+    """
+
+    payload = job.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("scheduled_window_payload_missing")
+    SCHEDULED_WINDOW_VALIDATOR.validate(payload)
+    source_window = payload["sourceWindow"]
+    if source_window["runId"] != job["runId"]:
+        raise ValueError("scheduled_window_run_id_mismatch")
+    start = _parse_timestamp(source_window["windowStart"])
+    end = _parse_timestamp(source_window["windowEnd"])
+    if end <= start:
+        raise ValueError("scheduled_window_end_must_follow_start")
+
+    result = {
+        "accepted": False,
+        "status": "unavailable",
+        "reason": "scheduled_window_processor_not_configured",
+        "runId": job["runId"],
+        "jobId": job["jobId"],
+    }
+    await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
+    logger.info(
+        "agronautas.scheduled-window.unavailable",
+        extra={"job_id": job["jobId"], "run_id": job["runId"], "reason": result["reason"]},
     )
     return result
 

@@ -10,6 +10,7 @@ const evidenceFixtures = {
   degraded: { source: 'INMET', lastSuccessfulObservedAt: '2026-07-01T10:00:00.000Z', freshness: 'degraded' as const },
   missing: { freshness: 'missing' as const, detail: 'No verified telemetry returned.' },
   mock: { source: 'demo-copilot', observedAt: '2026-07-04T10:00:00.000Z', mode: 'mock' as const },
+  unavailable: { source: 'open-meteo', observedAt: '2026-07-04T10:00:00.000Z', mode: 'unavailable' as const, detail: 'Commercial use not approved.' },
 }
 
 test('normalizes each contract evidence state without treating a fixture as live', () => {
@@ -20,6 +21,7 @@ test('normalizes each contract evidence state without treating a fixture as live
   assert.equal(normalizeEvidence(evidenceFixtures.degraded).state, EVIDENCE_STATE.DEGRADED)
   assert.equal(normalizeEvidence(evidenceFixtures.missing).state, EVIDENCE_STATE.MISSING)
   assert.equal(normalizeEvidence(evidenceFixtures.mock).state, EVIDENCE_STATE.MOCK)
+  assert.equal(normalizeEvidence(evidenceFixtures.unavailable).state, EVIDENCE_STATE.MISSING)
 })
 
 test('preserves source and timestamps for observed and forecast evidence', () => {
@@ -59,4 +61,12 @@ test('invalid timestamps cannot become observed evidence', () => {
 
   assert.equal(result.state, EVIDENCE_STATE.MISSING)
   assert.match(result.detail ?? '', /timestamp/i)
+})
+
+test('unavailable provider mode cannot render a live-looking observed state', () => {
+  const result = normalizeEvidence(evidenceFixtures.unavailable)
+
+  assert.equal(result.state, EVIDENCE_STATE.MISSING)
+  assert.equal(result.mode, 'unavailable')
+  assert.match(result.detail ?? '', /commercial/i)
 })

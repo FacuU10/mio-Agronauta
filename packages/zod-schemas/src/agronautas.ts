@@ -12,6 +12,11 @@ export const agronautasSignalStatuses = ['fresh', 'stale', 'degraded', 'missing'
 export const agronautasFieldGeometryStatuses = ['saved', 'point_only', 'unavailable'] as const
 export const agronautasFieldGeometrySources = ['operator', 'google', 'fallback'] as const
 export const agronautasProviderModes = ['live', 'seam', 'mock', 'unavailable'] as const
+export const agronautasEvidenceContractVersion = 'agronautas-evidence-v1' as const
+export const agronautasEvidenceFreshnessStates = ['fresh', 'stale', 'degraded', 'missing'] as const
+export const agronautasEvidenceSchemaStatuses = ['valid', 'invalid', 'unavailable'] as const
+export const agronautasEvidenceTimeStandards = ['UTC', 'local-solar', 'retrieval-only'] as const
+export const agronautasScheduledWindowSignalTypes = ['climate', 'satellite', 'weather_alert', 'fire', 'soil'] as const
 export const degradationReasons = [
   'weather_data_unavailable',
   'weather_data_stale',
@@ -91,6 +96,9 @@ const countryCodeSchema = z.enum(agronautasCountryCodes)
 const signalTypeSchema = z.enum(agronautasSignalTypes)
 const signalStatusSchema = z.enum(agronautasSignalStatuses)
 const providerModeSchema = z.enum(agronautasProviderModes)
+const evidenceFreshnessSchema = z.enum(agronautasEvidenceFreshnessStates)
+const evidenceSchemaStatusSchema = z.enum(agronautasEvidenceSchemaStatuses)
+const evidenceTimeStandardSchema = z.enum(agronautasEvidenceTimeStandards)
 const hydrologySourceSchema = z.enum(hydrologySources)
 const hydrologyFreshnessSchema = z.enum(hydrologyFreshnessStates)
 const hydrologyQualitySchema = z.enum(hydrologyQualityStates)
@@ -145,6 +153,130 @@ export const demoContactSubmissionResponseSchema = z.object({
   submissionId: z.string().min(1).max(80),
   status: z.literal('received'),
 })
+
+const runtimeSchedulerStatusSchema = z.discriminatedUnion('status', [
+  z.object({ enabled: z.literal(false), status: z.literal('disabled') }),
+  z.object({ enabled: z.literal(false), status: z.literal('unavailable'), reason: z.string().trim().min(1).max(240) }),
+  z.object({ enabled: z.boolean(), status: z.literal('unverified') }),
+])
+
+export const runtimeInfoSchema = z.object({
+  mode: z.enum(['real', 'demo']),
+  routePrefix: z.string().min(1),
+  compatibilityPrefix: z.string().min(1).optional(),
+  contractVersion: contractVersionSchema,
+  scheduler: runtimeSchedulerStatusSchema,
+  worker: z.object({
+    status: z.literal('unavailable'),
+    reason: z.string().trim().min(1).max(240),
+  }),
+})
+
+const scheduledWindowSignalTypeSchema = z.enum(agronautasScheduledWindowSignalTypes)
+const scheduledWindowSourceSchema = z.object({
+  provider: z.string().trim().min(1).max(80),
+  signalType: scheduledWindowSignalTypeSchema,
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+  runId: z.string().trim().min(1).max(160),
+}).superRefine((window, ctx) => {
+  if (new Date(window.windowEnd).getTime() <= new Date(window.windowStart).getTime()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'windowEnd must be after windowStart', path: ['windowEnd'] })
+  }
+})
+
+export const agronautasScheduledWindowSchema = z.object({
+  contractVersion: z.literal(AGRONAUTAS_CONTRACT_VERSION),
+  jobId: z.string().trim().min(1).max(160),
+  workflowId: z.literal('agronautas-scheduled-window'),
+  runId: z.string().trim().min(1).max(160),
+  kind: z.literal('agronautas-scheduled-window'),
+  status: z.literal('pending'),
+  priority: z.number().int().min(1).max(100),
+  createdAt: z.string().datetime(),
+  lease: z.object({
+    attempt: z.number().int().min(1),
+    maxAttempts: z.number().int().min(1),
+    leasedAt: z.string().datetime().optional(),
+    leaseExpiresAt: z.string().datetime().optional(),
+  }).strict(),
+  trace: z.object({
+    traceId: z.string().min(16),
+    correlationId: z.string().min(8),
+    causationId: z.string().min(1),
+  }).strict(),
+  payload: z.object({ sourceWindow: scheduledWindowSourceSchema }).strict(),
+  labels: z.object({ domain: z.literal('agronautas'), operation: z.literal('scheduled-window') }).strict(),
+}).strict().superRefine((job, ctx) => {
+  if (job.runId !== job.payload.sourceWindow.runId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'job and source window run IDs must match', path: ['payload', 'sourceWindow', 'runId'] })
+  }
+})
+
+export const evidenceEnvelopeSchema = z.object({
+  contractVersion: z.literal(agronautasEvidenceContractVersion),
+  evidenceId: z.string().trim().min(1).max(160),
+  provider: z.string().trim().min(1).max(80),
+  signalType: z.string().trim().min(1).max(80),
+  sourceUrl: z.string().url(),
+  providerMode: providerModeSchema,
+  observedAt: z.string().datetime().nullable(),
+  forecastAt: z.string().datetime().nullable(),
+  retrievedAt: z.string().datetime(),
+  timeStandard: evidenceTimeStandardSchema,
+  forecastHorizonDays: z.number().int().nonnegative().max(16).nullable(),
+  model: z.string().trim().min(1).max(80).nullable(),
+  units: z.record(z.string().trim().min(1).max(80)),
+  freshness: evidenceFreshnessSchema,
+  rawHash: z.string().trim().min(1).max(160).nullable(),
+  runId: z.string().trim().min(1).max(160),
+  requestId: z.string().trim().min(1).max(160),
+  httpStatus: z.number().int().min(100).max(599).nullable(),
+  schemaStatus: evidenceSchemaStatusSchema,
+  http: z.object({ status: z.number().int().min(100).max(599).nullable(), ok: z.boolean() }).strict(),
+  schema: z.object({ status: evidenceSchemaStatusSchema }).strict(),
+  lineage: z.object({ sourceUrl: z.string().url(), rawHash: z.string().trim().min(1).max(160).nullable(), parentRunId: z.string().trim().min(1).max(160).nullable() }).strict(),
+  degradationReasons: z.array(z.string().trim().min(1).max(240)).max(8),
+  failureReason: z.string().trim().min(1).max(240).optional(),
+  lastSuccessfulObservedAt: z.string().datetime().nullable(),
+  latencyMs: z.number().int().nonnegative().max(150_000),
+  value: z.unknown().optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.freshness === 'stale' && !value.lastSuccessfulObservedAt) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'stale evidence requires lastSuccessfulObservedAt', path: ['lastSuccessfulObservedAt'] })
+  }
+
+  if (value.providerMode === 'live' && value.schemaStatus === 'valid') {
+    if (value.provider === 'georef-2.1') {
+      if (value.timeStandard !== 'retrieval-only' || value.observedAt !== null || value.forecastAt !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Georef evidence is retrieval-only and must not invent an observation timestamp', path: ['observedAt'] })
+      }
+      if (value.units['latitude'] !== 'degrees' || value.units['longitude'] !== 'degrees' || value.units['coordinateReferenceSystem'] !== 'WGS84' || value.units['code'] !== 'code') {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Georef evidence requires WGS84 degree coordinates and codes', path: ['units'] })
+      }
+    }
+
+    if (value.provider === 'nasa-power-daily') {
+      if (!value.observedAt || value.forecastAt !== null || (value.timeStandard !== 'UTC' && value.timeStandard !== 'local-solar')) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'NASA POWER evidence requires an observed date and explicit POWER time standard', path: ['observedAt'] })
+      }
+      if (value.units['temperature'] !== 'C' || value.units['precipitation'] !== 'mm/day') {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'NASA POWER evidence requires C and mm/day units', path: ['units'] })
+      }
+    }
+
+    if (value.provider === 'open-meteo') {
+      if (!value.forecastAt || value.observedAt !== null || value.forecastHorizonDays === null || !value.model) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Open-Meteo evidence requires forecast, horizon, model, and retrieval semantics', path: ['forecastAt'] })
+      }
+      if (value.units['temperature'] !== '°C' || value.units['precipitation'] !== 'mm') {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Open-Meteo evidence requires °C and mm units', path: ['units'] })
+      }
+    }
+  }
+})
+
+export type EvidenceEnvelope = z.infer<typeof evidenceEnvelopeSchema>
 
 const geoPointSchema = z.object({
   lat: z.number().finite().min(-90).max(90),
@@ -1027,6 +1159,7 @@ export type SignalEvidence = z.infer<typeof signalEvidenceSchema>
 export type AgronautasProviderMode = z.infer<typeof providerModeSchema>
 export type SourceCadence = z.infer<typeof sourceCadenceSchema>
 export type SchedulerStatus = z.infer<typeof schedulerStatusSchema>
+export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>
 export type DashboardSnapshot = z.infer<typeof dashboardSnapshotSchema>
 export type AgronautasEvidence = z.infer<typeof agronautasEvidenceSchema>
 export type AgronautasFieldIndexItem = z.infer<typeof agronautasFieldIndexItemSchema>

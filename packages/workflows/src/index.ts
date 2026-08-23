@@ -1,6 +1,16 @@
 export const WORKFLOW_CONTRACT_VERSION = '1.0.0' as const
 export const AGRONAUTAS_RUNTIME_WORKFLOW_ID = 'agronautas-risk-recompute' as const
 export const AGRONAUTAS_RUNTIME_KIND = 'agronautas-risk-recompute' as const
+export const AGRONAUTAS_SCHEDULED_WINDOW_WORKFLOW_ID = 'agronautas-scheduled-window' as const
+export const AGRONAUTAS_SCHEDULED_WINDOW_KIND = 'agronautas-scheduled-window' as const
+export const AGRONAUTAS_SCHEDULED_WINDOW_SIGNAL_TYPES = {
+  CLIMATE: 'climate',
+  SATELLITE: 'satellite',
+  WEATHER_ALERT: 'weather_alert',
+  FIRE: 'fire',
+  SOIL: 'soil',
+} as const
+export type AgronautasScheduledWindowSignalType = (typeof AGRONAUTAS_SCHEDULED_WINDOW_SIGNAL_TYPES)[keyof typeof AGRONAUTAS_SCHEDULED_WINDOW_SIGNAL_TYPES]
 export const AGRONAUTAS_RUNTIME_QUEUE_NAME = 'agronautas-runtime' as const
 export const AGRONAUTAS_RUNTIME_QUEUE_KEY = `bull:${AGRONAUTAS_RUNTIME_QUEUE_NAME}:wait` as const
 export const AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS = 3 as const
@@ -61,6 +71,44 @@ export interface AgronautasRiskRecomputeJob {
     domain: 'agronautas';
     operation: 'risk-recompute';
   };
+}
+
+export interface AgronautasScheduledWindowInput {
+  provider: string
+  signalType: AgronautasScheduledWindowSignalType
+  windowStart: Date
+  windowEnd: Date
+  runId: string
+}
+
+export interface AgronautasScheduledWindowJob {
+  contractVersion: typeof WORKFLOW_CONTRACT_VERSION
+  jobId: string
+  workflowId: typeof AGRONAUTAS_SCHEDULED_WINDOW_WORKFLOW_ID
+  runId: string
+  kind: typeof AGRONAUTAS_SCHEDULED_WINDOW_KIND
+  status: 'pending'
+  priority: 50
+  createdAt: string
+  lease: JobLease
+  trace: {
+    traceId: string
+    correlationId: string
+    causationId: string
+  }
+  payload: {
+    sourceWindow: {
+      provider: string
+      signalType: AgronautasScheduledWindowSignalType
+      windowStart: string
+      windowEnd: string
+      runId: string
+    }
+  }
+  labels: {
+    domain: 'agronautas'
+    operation: 'scheduled-window'
+  }
 }
 
 export interface WorkflowResult {
@@ -129,4 +177,47 @@ export function createAgronautasRiskRecomputeJob(input: {
       operation: 'risk-recompute',
     },
   };
+}
+
+export function createAgronautasScheduledWindowJob(input: {
+  window: AgronautasScheduledWindowInput
+  jobId?: string
+  requestId?: string
+  correlationId?: string
+  createdAt?: Date
+  lease?: Pick<JobLease, 'attempt' | 'maxAttempts'>
+}): AgronautasScheduledWindowJob {
+  const createdAt = input.createdAt ?? new Date()
+  if (input.window.windowEnd.getTime() <= input.window.windowStart.getTime()) {
+    throw new Error('scheduled_window_end_must_follow_start')
+  }
+  if (input.window.runId.trim().length === 0) {
+    throw new Error('scheduled_window_run_id_required')
+  }
+
+  const jobId = input.jobId ?? `agronautas-window:${input.window.runId}`
+  const requestId = input.requestId ?? jobId
+  const correlationId = input.correlationId ?? input.window.runId
+  return {
+    contractVersion: WORKFLOW_CONTRACT_VERSION,
+    jobId,
+    workflowId: AGRONAUTAS_SCHEDULED_WINDOW_WORKFLOW_ID,
+    runId: input.window.runId,
+    kind: AGRONAUTAS_SCHEDULED_WINDOW_KIND,
+    status: 'pending',
+    priority: 50,
+    createdAt: createdAt.toISOString(),
+    lease: input.lease ?? { attempt: 1, maxAttempts: AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS },
+    trace: { traceId: requestId, correlationId, causationId: input.window.runId },
+    payload: {
+      sourceWindow: {
+        provider: input.window.provider,
+        signalType: input.window.signalType,
+        windowStart: input.window.windowStart.toISOString(),
+        windowEnd: input.window.windowEnd.toISOString(),
+        runId: input.window.runId,
+      },
+    },
+    labels: { domain: 'agronautas', operation: 'scheduled-window' },
+  }
 }

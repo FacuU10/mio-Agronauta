@@ -102,6 +102,7 @@ export function mockEvidence(detail: string, source?: string): EvidenceViewModel
 
 function resolveState(input: EvidenceInput, source: string | undefined, timestamp: string | undefined): EvidenceState {
   if (input.mode && MOCK_MODES.has(input.mode)) return EVIDENCE_STATE.MOCK
+  if (input.mode === EVIDENCE_MODE_VALUES.UNAVAILABLE) return EVIDENCE_STATE.MISSING
   if (input.state) return input.state
   if (input.freshness === EVIDENCE_FRESHNESS_VALUES.CACHED) return EVIDENCE_STATE.CACHED
   if (input.freshness === EVIDENCE_FRESHNESS_VALUES.STALE) return EVIDENCE_STATE.STALE

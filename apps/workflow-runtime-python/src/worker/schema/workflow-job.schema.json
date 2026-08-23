@@ -10,7 +10,7 @@
     "jobId": { "type": "string", "minLength": 1, "pattern": "^[a-zA-Z0-9:_-]+$" },
     "workflowId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
-    "kind": { "enum": ["ingest", "transform", "render", "publish", "agronautas-risk-recompute"] },
+    "kind": { "enum": ["ingest", "transform", "render", "publish", "agronautas-risk-recompute", "agronautas-scheduled-window"] },
     "status": { "enum": ["pending", "leased", "running", "waiting", "succeeded", "failed", "dlq", "cancelled"] },
     "priority": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 },
     "lease": {
@@ -51,7 +51,8 @@
           },
           "additionalProperties": true
         },
-        { "$ref": "./agronautas-runtime-recompute-job.schema.json" }
+        { "$ref": "./agronautas-runtime-recompute-job.schema.json" },
+        { "$ref": "./agronautas-scheduled-window-job.schema.json" }
       ]
     },
     "labels": {

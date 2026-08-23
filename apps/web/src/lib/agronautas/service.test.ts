@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createAgronautasApiService, createAgronautasMockService } from './service'
-import { fieldGeometryResponseSchema, fieldGeometryUpdateSchema } from './schemas'
+import { fieldGeometryResponseSchema, fieldGeometryUpdateSchema, runtimeInfoSchema } from './schemas'
 
 test('canonical Agronautas demo service adds mode=demo to field detail requests', async () => {
   const previousFetch = globalThis.fetch
@@ -94,6 +94,36 @@ test('management service reads workspace context, cursor fields, and source-back
     assert.equal((await service.listWorkspaceFields('agronautas-default-workspace')).items.length, 0)
     assert.equal((await service.getFieldActivity('field-1')).items[0]?.sourceType, 'risk_snapshot')
     assert.deepEqual(calls, ['/api/agronautas/v1/workspace', '/api/agronautas/v1/workspace/fields?workspaceId=agronautas-default-workspace', '/api/agronautas/v1/fields/field-1/activity'])
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('web runtime validator accepts unavailable scheduler status only with its truthful reason', async () => {
+  const previousFetch = globalThis.fetch
+  const payload = {
+    mode: 'real',
+    routePrefix: '/agronautas/v1',
+    compatibilityPrefix: '/agronautas',
+    contractVersion: '1.0.0',
+    scheduler: {
+      enabled: false,
+      status: 'unavailable',
+      reason: 'scheduler_dispatch_capability_not_configured',
+    },
+    worker: { status: 'unavailable', reason: 'worker_readiness_not_verified' },
+  }
+  globalThis.fetch = (async () => new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+
+  try {
+    const runtime = await createAgronautasApiService().getRuntime()
+    assert.equal(runtime.scheduler.status, 'unavailable')
+    assert.equal(runtime.scheduler.reason, 'scheduler_dispatch_capability_not_configured')
+    assert.equal(runtime.scheduler.enabled, false)
+    assert.equal(runtimeInfoSchema.safeParse({
+      ...runtime,
+      scheduler: { enabled: false, status: 'unavailable' },
+    }).success, false)
   } finally {
     globalThis.fetch = previousFetch
   }

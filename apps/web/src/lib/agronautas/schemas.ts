@@ -27,6 +27,10 @@ import {
   campaignPlanningContextResponseSchema,
   assumptionSimulationRequestSchema,
   assumptionSimulationResponseSchema,
+  runtimeInfoSchema,
+  evidenceEnvelopeSchema,
+  type EvidenceEnvelope as SharedEvidenceEnvelope,
+  type RuntimeInfo as SharedRuntimeInfo,
 } from '@repo/zod-schemas'
 
 export {
@@ -56,6 +60,8 @@ export {
   campaignPlanningContextResponseSchema,
   assumptionSimulationRequestSchema,
   assumptionSimulationResponseSchema,
+  runtimeInfoSchema,
+  evidenceEnvelopeSchema,
 }
 
 export const fieldCreatedSchema = z.object({
@@ -113,13 +119,6 @@ export const contractErrorSchema = z.object({
   details: z.record(z.unknown()).optional(),
 })
 
-export const runtimeInfoSchema = z.object({
-  mode: z.enum(['real', 'demo']),
-  routePrefix: z.string().min(1),
-  compatibilityPrefix: z.string().min(1).optional(),
-  contractVersion: z.literal(AGRONAUTAS_CONTRACT_VERSION),
-})
-
 export const hydrologySourceSchema = z.enum(['PNA', 'INA', 'INMET', 'SMN'])
 
 export const hydrologyItemSchema = z.object({
@@ -172,7 +171,8 @@ export type RiskCurrent = z.infer<typeof riskCurrentSchema>
 export type AlertsCurrent = z.infer<typeof alertsCurrentSchema>
 export type AlertsTimelineResponse = z.infer<typeof alertsTimelineResponseSchema>
 export type ContractError = z.infer<typeof contractErrorSchema>
-export type RuntimeInfo = z.infer<typeof runtimeInfoSchema>
+export type RuntimeInfo = SharedRuntimeInfo
+export type EvidenceEnvelope = SharedEvidenceEnvelope
 export type HydrologyDashboard = z.infer<typeof hydrologyDashboardSchema>
 export type HydrologyItem = z.infer<typeof hydrologyItemSchema>
 export type DemoContactSubmission = z.infer<typeof demoContactSubmissionSchema>

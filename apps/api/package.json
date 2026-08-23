@@ -14,6 +14,7 @@
     "seed:corrientes-demo:cleanup": "tsx src/scripts/seed-corrientes-rice-demo.ts --cleanup",
     "seed:government-hydrology": "tsx src/scripts/seed-government-hydrology.ts",
     "verify-local": "tsx src/scripts/verify-hydrology-local-real.ts --all-sources --allow-empty",
+    "verify:agronautas:runtime": "tsx src/scripts/verify-agronautas-runtime-real.ts",
     "scheduler:once": "tsx src/scripts/run-hydrology-scheduler-once.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

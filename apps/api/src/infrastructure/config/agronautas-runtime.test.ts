@@ -44,3 +44,9 @@ test('MongoDB readiness can be explicitly enabled', () => {
     ['mongodb'],
   )
 })
+
+test('scheduler is disabled by default and only reports explicit configuration', () => {
+  assert.equal(getAgronautasRuntimeConfig({}).schedulerEnabled, false)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_SCHEDULER_ENABLED: 'true' }).schedulerEnabled, true)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_SCHEDULER_ENABLED: 'TRUE' }).schedulerEnabled, true)
+})

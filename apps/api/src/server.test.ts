@@ -47,6 +47,7 @@ test('health and readiness remain controlled boundaries without live acquisition
       mode: 'real',
       routePrefix: '/agronautas',
       trustProxy: false,
+      schedulerEnabled: false,
       optionalReadinessServices: [],
       runtimeRequired: false,
       workerHeartbeatMaxAgeSeconds: 180,
@@ -67,12 +68,19 @@ test('health and readiness remain controlled boundaries without live acquisition
   const body = await readiness.json() as {
     ready: boolean
     revision: string
-    requiredChecks: { postgres: boolean; redis: boolean; worker: boolean }
+    requiredChecks: { postgres: boolean; redis: boolean }
+    checks: { worker: boolean }
+    worker: { required: boolean; healthy: boolean | null; status: string; reason: string }
   }
   assert.equal(readiness.status, 503)
   assert.equal(body.ready, false)
   assert.equal(body.revision, 'abcdef0123456789')
-  assert.deepEqual(body.requiredChecks, { postgres: true, redis: false, worker: true })
+  assert.deepEqual(body.requiredChecks, { postgres: true, redis: false })
+  assert.equal(body.checks.worker, false)
+  assert.equal(body.worker.required, false)
+  assert.equal(body.worker.healthy, null)
+  assert.equal(body.worker.status, 'unavailable')
+  assert.equal(body.worker.reason, 'worker_not_configured')
   assert.equal(calls.postgres, 1)
   assert.equal(calls.redis, 1)
   assert.equal(calls.mongo, 0)
@@ -86,11 +94,24 @@ test('Agronautas scheduler startup seam is disabled safely without feature flag'
   assert.equal(runtime.intervalMs, 60 * 60 * 1000)
 })
 
-test('Agronautas scheduler startup seam enables hourly runtime behind config flag', () => {
+test('Agronautas scheduler refuses an unproven dispatcher even when the flag is enabled', () => {
   const runtime = startAgronautasSchedulerFromEnv({ AGRONAUTAS_SCHEDULER_ENABLED: 'true' })
 
-  assert.equal(runtime.started, true)
+  assert.equal(runtime.started, false)
+  assert.equal(runtime.status, 'unavailable')
+  assert.equal(runtime.reason, 'scheduler_dispatch_capability_not_configured')
   runtime.stop()
+})
+
+test('Agronautas scheduler refuses startup when worker proof exists without a compatible dispatcher', () => {
+  const runtime = startAgronautasSchedulerFromEnv(
+    { AGRONAUTAS_SCHEDULER_ENABLED: 'true' },
+    { dispatchCapability: { workerCapabilityProven: true } as never },
+  )
+
+  assert.equal(runtime.started, false)
+  assert.equal(runtime.status, 'unavailable')
+  assert.equal(runtime.reason, 'scheduler_dispatch_capability_not_configured')
 })
 
 test('Agronautas scheduler startup reads persisted source cadence and last success state', async () => {
@@ -105,6 +126,13 @@ test('Agronautas scheduler startup reads persisted source cadence and last succe
         async tick(windows) {
           ticked.push(windows.map((window) => `${window.provider}:${window.signalType}`))
           return { enqueued: windows, skipped: [], deadLettered: [] }
+        },
+      },
+      dispatchCapability: {
+        workerCapabilityProven: true,
+        dispatcher: {
+          async enqueue() {},
+          async deadLetter() {},
         },
       },
       sourceCadenceRepository: {

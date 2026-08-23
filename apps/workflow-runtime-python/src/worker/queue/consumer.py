@@ -13,7 +13,7 @@ from worker.core.config import get_settings
 from worker.core.platform import run_worker
 from worker.core.telemetry import build_logger, traced_operation
 from worker.graph.base import build_graph
-from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, handle_agronautas_job
+from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, handle_agronautas_job, handle_scheduled_window_job
 
 
 class RetryableAgronautasJobError(ConnectionError):
@@ -33,6 +33,7 @@ class WorkflowQueueConsumer:
         self.queue_name = f"bull:{queue_name}:wait"
         self.processing_queue_name = self._processing_queue_name(queue_name)
         self.dead_letter_queue_name = self._dead_letter_queue_name(queue_name)
+        self.completed_queue_name = f"bull:{queue_name}:completed"
         self.results_key = f"bull:{queue_name}:results"
         self.max_recovery_attempts = 3
         postgres_dsn = getattr(self.settings, "postgres_dsn", None)
@@ -55,13 +56,35 @@ class WorkflowQueueConsumer:
             try:
                 job = json.loads(payload)
                 await self.handle_job(job)
-                await self._ack(payload)
+                if job.get("workflowId") == "agronautas-scheduled-window":
+                    result = json.loads((await self.redis.hget(self.results_key, job["jobId"])) or "{}")
+                    if result.get("status") == "unavailable":
+                        await self._dead_letter(payload, str(result.get("reason", "scheduled_window_unavailable")))
+                    elif result.get("status") == "succeeded":
+                        await self._ack(payload)
+                    else:
+                        await self._ack(payload)
+                else:
+                    await self._ack(payload)
             except Exception as exc:
                 self.logger.exception("job.failed", extra={"queue": self.queue_name, "error": str(exc)})
                 await self._handle_failure(payload, exc)
 
     async def handle_job(self, job: dict[str, Any]) -> dict[str, Any]:
         self.validator.validate(job)
+        heartbeat_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        await self.redis.hset("bull:agronautas-runtime:status", job["jobId"], json.dumps({"status": "processing", "runId": job["runId"]}))
+        await self.redis.hset("bull:agronautas-runtime:heartbeat", job["jobId"], heartbeat_at)
+        self.logger.info("queue.heartbeat", extra={"job_id": job["jobId"], "run_id": job["runId"], "heartbeat_at": heartbeat_at})
+        if job.get("workflowId") == "agronautas-scheduled-window":
+            validate_scheduled_window_job(job)
+            result = await self._run_scheduled_window_job(job)
+            await self.redis.hset(self.results_key, job["jobId"], json.dumps(result))
+            if result.get("status") == "succeeded":
+                await self.redis.rpush(self.completed_queue_name, json.dumps(result))
+                self.logger.info("queue.result", extra={"job_id": job["jobId"], "run_id": job["runId"], "status": result["status"]})
+            return result
+
         if job.get("workflowId") == "agronautas-risk-recompute":
             with traced_operation(
                 "agronautas-risk-recompute.process",
@@ -69,6 +92,9 @@ class WorkflowQueueConsumer:
             ):
                 result = await self._run_agronautas_job(job)
                 await self.redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
+                if result.get("status") == "succeeded":
+                    await self.redis.rpush(self.completed_queue_name, json.dumps(result))
+                    self.logger.info("queue.result", extra={"job_id": job["jobId"], "run_id": job["runId"], "status": result["status"]})
                 return result
 
         with traced_operation("workflow-job.process", {"jobId": job["jobId"], "workflowId": job["workflowId"]}):
@@ -82,6 +108,8 @@ class WorkflowQueueConsumer:
             result = await self._run_graph_job(state, job["runId"])
             await self.redis.hset(self.results_key, job["jobId"], json.dumps(result))
             self.logger.info("job.completed", extra={"job_id": job["jobId"], "run_id": job["runId"]})
+            await self.redis.rpush(self.completed_queue_name, json.dumps(result))
+            self.logger.info("queue.result", extra={"job_id": job["jobId"], "run_id": job["runId"], "status": result.get("status", "completed")})
             return result
 
     async def _ack(self, payload: str) -> None:
@@ -104,6 +132,7 @@ class WorkflowQueueConsumer:
         }
         await self.redis.rpush(self.dead_letter_queue_name, json.dumps(envelope))
         await self._ack(payload)
+        self.logger.error("queue.dlq", extra={"job_id": job["jobId"], "run_id": job["runId"], "reason": reason, "attempt": attempt})
 
     async def _handle_failure(self, payload: str, exc: Exception) -> None:
         job = json.loads(payload)
@@ -175,6 +204,9 @@ class WorkflowQueueConsumer:
             raise RetryableAgronautasJobError(str(result.get("error", "retryable_failure")))
         return result
 
+    async def _run_scheduled_window_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        return await handle_scheduled_window_job(job, self.redis, self.logger, self.job_store, self.job_store.worker_id if self.job_store is not None else None)
+
     async def _run_graph_job(self, state: dict[str, Any], run_id: str) -> dict[str, Any]:
         graph = await build_graph()
         return await self._execute_with_retry(graph.ainvoke, state, {"configurable": {"thread_id": run_id}})
@@ -186,3 +218,15 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def validate_scheduled_window_job(job: dict[str, Any]) -> None:
+    source_window = job.get("payload", {}).get("sourceWindow")
+    if not isinstance(source_window, dict):
+        raise ValueError("scheduled_window_payload_missing")
+    if source_window.get("runId") != job.get("runId"):
+        raise ValueError("scheduled_window_run_id_mismatch")
+    start = datetime.fromisoformat(str(source_window["windowStart"]).replace("Z", "+00:00"))
+    end = datetime.fromisoformat(str(source_window["windowEnd"]).replace("Z", "+00:00"))
+    if end <= start:
+        raise ValueError("scheduled_window_end_must_follow_start")

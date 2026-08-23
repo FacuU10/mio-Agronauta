@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, HttpUrl
+from pydantic import AliasChoices, Field, HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from worker.contracts import resolve_contracts_root
@@ -29,7 +29,7 @@ class RuntimeSettings(BaseSettings):
     langsmith_endpoint: HttpUrl | str = Field(default="https://api.smith.langchain.com")
     langsmith_project: str = Field(default="golden-boilerplate")
 
-    redis_url: str = Field(default="redis://localhost:6379/0")
+    redis_url: str = Field(default="redis://localhost:6379/0", validation_alias=AliasChoices("WORKER_REDIS_URL", "REDIS_URL"))
     postgres_dsn: str = Field(default="postgresql://postgres:postgres@localhost:5432/workflows")
     vector_store_backend: str = Field(default="pgvector")
     vector_collection: str = Field(default="workflow_documents")

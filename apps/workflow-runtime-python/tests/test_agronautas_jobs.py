@@ -14,7 +14,7 @@ os.environ.setdefault(
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job
+from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job, handle_scheduled_window_job
 
 
 class FakeRedis:
@@ -322,6 +322,22 @@ async def test_handle_agronautas_job_sends_exhausted_failures_to_dlq(monkeypatch
     assert result["accepted"] is False
     assert result["status"] == "dlq"
     assert any(key == "agronautas:job-runs:dlq" for key, _, _ in redis.calls)
+
+
+@pytest.mark.asyncio
+async def test_handle_scheduled_window_keeps_unconfigured_provider_explicitly_unavailable() -> None:
+    redis = FakeRedis()
+    logger = FakeLogger()
+    job = {
+        "jobId": "window-job-1",
+        "runId": "open-meteo:climate:2026-06-05T00:00:00Z",
+        "payload": {"sourceWindow": {"provider": "open-meteo", "signalType": "climate", "windowStart": "2026-06-05T00:00:00Z", "windowEnd": "2026-06-05T01:00:00Z", "runId": "open-meteo:climate:2026-06-05T00:00:00Z"}},
+        "trace": {"traceId": "trace-window-1"},
+    }
+
+    result = await handle_scheduled_window_job(job, redis, logger)
+
+    assert result == {"accepted": False, "status": "unavailable", "reason": "scheduled_window_processor_not_configured", "runId": job["runId"], "jobId": job["jobId"]}
 
 
 @pytest.mark.asyncio

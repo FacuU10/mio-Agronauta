@@ -1,0 +1,79 @@
+## Exploration: agronautas-reality-hardening-provider-foundation
+
+### Current State
+The repository has a typed Agronautas API/BFF, persisted field/risk/evidence contracts, Redis-backed recompute dispatch, a Python Redis queue consumer, and a provider evidence vocabulary (`live`, `seam`, `mock`, `unavailable`). The current branch is clean at `main` `b6805bf`; the runtime audit and provider research are treated as evidence, not as implementation proof.
+
+1. **Code-buildable defects to fix immediately**
+   - `apps/api/src/presentation/routes/agronautas.ts` protects most field routes with `requireRead`, but `GET /fields/:fieldId/status` has no auth middleware and `POST /fields/:fieldId/chat` has neither `requireRead` nor `requireFieldAccess`. The chat handler can therefore reach grounded-chat execution for an arbitrary identifier, while the status path is publicly readable whenever the global auth flag is enabled. `requireFieldAccess` currently proves only field existence; tenant/workspace ownership is not yet represented.
+   - `apps/api/src/presentation/middleware/agronautas-auth.ts` authenticates shared role tokens only. It does not attach an identity to the request or authorize a field/workspace owner. Route protection and explicit field-access middleware are an immediate boundary fix; durable identity, tenant, and ownership semantics remain a blocker category below.
+   - `apps/web/src/components/landing/homepage.tsx` contains product claims and illustrative values rendered as if operational: real-time/all-lot monitoring, exact-looking `96%` pricing precision, static `0.78` indicators, recent alert timestamps, and roadmap items such as insurance. These need truthful copy or explicit “demo/illustrative/not available” labeling, not new backend behavior.
+   - `apps/api/src/server.ts:111-128` starts the Agronautas scheduler with a dispatcher whose `enqueue` implementation only logs `Agronautas scheduler due window planned`. `AgronautasSignalScheduler` has a real enqueue/DLQ contract, and `RedisAgronautasRuntimeDispatcher` can publish recompute jobs, but the scheduled source-window path is not connected to a Redis job producer. Existing scheduler tests prove planning and injected dispatch behavior, not production queue delivery.
+   - `apps/workflow-runtime-python/src/worker/queue/consumer.py` consumes `bull:agronautas-runtime:wait` and handles the risk-recompute workflow, but the audit could not start the worker because its runtime dependencies were not installed (`jsonschema` was missing). `render.yaml` deploys API, web, and a hydrology cron but has no Python worker service. `package.json` exposes separate `worker:install` and `worker:run` commands, while the default local `pnpm dev` path does not establish a verified API + web + worker + cron runtime.
+
+2. **Provider-backed vertical slices buildable without paid credentials**
+   - **Georef 2.1** is a suitable first normalization adapter for Argentine province/locality/department/municipality and coordinate reverse lookup. The official endpoint `https://apis.datos.gob.ar/georef/api/v2.1` responded for Corrientes during this exploration. It supplies official names/codes and centroids, but not a domain observation timestamp; the contract must distinguish provider retrieval time from source validity time. Coordinates must remain WGS84 degrees and be provenance-bearing.
+   - **NASA POWER Daily** is suitable for historical/agrometeorological context without a paid key. The official point endpoint returned Corrientes data with `T2M` in `C` and `PRECTOTCORR` in `mm/day`. POWER defaults daily responses to local solar time unless `time-standard=UTC` is requested, so the adapter must request and persist the time standard rather than silently calling a local-solar timestamp “UTC”. It is not a substitute for NRT alerts or a licensed market feed.
+   - **Open-Meteo** already has an HTTP adapter in `apps/api/src/infrastructure/adapters/agronautas-provider-adapters.ts`, and the official forecast endpoint returned daily values in `°C` and `mm`. The adapter currently requests daily maximum temperature and precipitation, aggregates all returned days into a field named `rainfallMm7d`, and derives `observedAt` from the first forecast date. That is a usable seam but not yet a complete production evidence contract: the requested horizon, forecast/model issue time, retrieved time, units, freshness calculation, timeout, and response validation need to be explicit. Commercial use also requires a license/API decision even though the public endpoint is accessible without a paid credential.
+   - The three slices should share typed ports/adapters and a persisted evidence envelope containing provider, signal, source URL, retrieved/observed timestamps, freshness, units, raw payload hash, mode, schema/HTTP outcome, run ID, and degradation reason. Observability should record request start/success/failure, latency, HTTP status, parse failure, retry/circuit state, and correlation/run identifiers through the existing Agronautas telemetry channel.
+
+3. **Credential, data, and approval blockers**
+   - Google Maps browser/geocoding/routing requires a billing-enabled project and controlled key restrictions; it cannot be represented as live merely because the UI can render a map.
+   - INTA/official soil-layer coverage and machine-readable access still require source/layer validation, licensing/attribution confirmation, and an Argentine domain mapping. SoilGrids can be a fallback research source, not an unqualified official INTA substitute.
+   - BCRA/market/commodity data requires a verified current API or licensed machine-readable feed, with terms and cadence. A portal or a stale endpoint is not evidence of a production integration.
+   - Official Iberá geometry and boundary/version semantics must be identified and approved before publishing “official Iberá” coverage or risk calculations against it.
+   - User identity, workspace/tenant membership, field ownership, role assignment, and audit semantics are not solved by the current shared bearer-token middleware. They must be decided before exposing private fields or treating a route-level field lookup as authorization.
+   - Marketplace, credit, insurance, parametric claims, profitability, and regulatory product scope remain future approval/data domains. Landing-roadmap language must not imply these capabilities are currently delivered.
+
+4. **Runtime verification boundary**
+   - Existing unit/integration tests are largely contract-fixture tests: provider tests inject `fetch`, route tests use in-memory repositories and fake providers, scheduler tests inject locks/dispatchers, and `provider-matrix.test.ts` uses environment overrides. They are valuable RED tests but do not prove external-provider, Postgres, Redis, worker, cron, Render, or browser-network behavior.
+   - Existing Playwright specs are supplemental and explicitly stub network responses with `page.route`; `apps/web/playwright.config.mjs` starts development API/web harnesses, not a verified production worker/cron topology. The E2E README correctly says stubbed browser traffic is not a release proof.
+   - The real verification plan must use Playwright/browser snapshots and screenshots plus captured network and console output; call API and BFF endpoints with real auth; validate real Postgres migrations, field/workspace ownership records, ingestion/evidence rows and job-run state; inspect Redis `PING`, queue movement, results, retries and DLQ; run the worker with installed dependencies; execute the cron with an explicit owner/token; and inspect Render service/deploy/log wiring. Provider requests must be real for Georef, NASA POWER, and Open-Meteo unless a test is explicitly labeled as a contract fixture.
+   - Evidence must separate stubbed tests from real E2E. A passing injected-fetch test can prove serialization/normalization only; it cannot be reported as provider availability, freshness, or worker completion. A blocked credential, missing Render worker, absent queue transition, or unsafe production write must remain blocked rather than being replaced with mock data.
+
+### Affected Areas
+- `apps/api/src/presentation/routes/agronautas.ts` — add the immediate auth/field-access boundary for status and chat; preserve a separate future ownership authorization port.
+- `apps/api/src/presentation/middleware/agronautas-auth.ts` — attach/propagate identity only as far as the approved token model permits; do not invent tenant semantics.
+- `apps/api/src/application/usecases/grounded-chat-usecase.ts` and `apps/api/src/domain/repositories/agronautas.ts` — verify that chat context is field-scoped and that future ownership checks have a stable port.
+- `apps/web/src/components/landing/homepage.tsx` and `apps/web/src/components/landing/homepage.test.tsx` — remove or label unsupported claims and static illustrative metrics.
+- `apps/api/src/server.ts` — replace log-only scheduled dispatch with an explicit queue adapter or keep the feature disabled until a compatible job contract exists.
+- `apps/api/src/infrastructure/jobs/agronautas-scheduler.ts` and `apps/api/src/infrastructure/database/redis/scheduler-lock.ts` — preserve idempotent window locks, enqueue outcomes, and DLQ/telemetry semantics.
+- `apps/api/src/infrastructure/queue/agronautas-runtime-dispatcher.ts`, `apps/workflow-runtime-python/src/worker/queue/consumer.py`, and `apps/workflow-runtime-python/src/worker/runtime/agronautas_jobs.py` — align scheduled ingestion job envelopes, worker handling, lease/heartbeat, retry, result, and failure transitions.
+- `render.yaml`, `package.json`, `apps/api/package.json`, and `apps/workflow-runtime-python/pyproject.toml` — make API/web/worker/cron startup and environment wiring explicit; add a Render worker target before claiming deployed execution.
+- `apps/api/src/infrastructure/adapters/agronautas-provider-adapters.ts` — extend the existing port with Georef 2.1 and NASA POWER and harden Open-Meteo’s horizon, timestamp, unit, timeout, schema, and freshness semantics.
+- `apps/api/src/infrastructure/config/provider-matrix.ts` and `apps/api/src/infrastructure/observability/agronautas-telemetry.ts` — make provider proof and telemetry reflect actual adapter requests and persisted runs rather than only DB presence or example URLs.
+- `packages/zod-schemas/src/agronautas.ts`, `apps/web/src/lib/agronautas/schemas.ts`, and `apps/web/src/lib/visibility/evidence-state.ts` — define the shared evidence/source/freshness/unit contract and keep seam/mock/unavailable states impossible to display as live.
+- `apps/api/src/presentation/routes/agronautas.test.ts`, `apps/api/src/infrastructure/adapters/agronautas-provider-adapters.test.ts`, `apps/api/src/infrastructure/jobs/agronautas-scheduler.test.ts`, `apps/api/src/infrastructure/config/provider-matrix.test.ts`, and `apps/web/tests/e2e/*` — add strict-TDD red tests for route auth, real-adapter contract fixtures, queue dispatch, and a separately named real-runtime smoke suite.
+- `render.yaml`, configured Postgres/Redis, Render logs, and browser network/console traces — required verification surfaces; no local stub can substitute for them.
+
+### Approaches
+1. **Incremental foundation slices (recommended)** — first harden route auth/truthful UI and make scheduler/worker wiring explicit; then add Georef 2.1, NASA POWER, and Open-Meteo through one evidence/observability contract; leave credentialed and approval-bound domains unavailable.
+   - Pros: fixes verified defects quickly; preserves current ports and schemas; enables real provider value without paid credentials; isolates blockers; supports strict RED-GREEN-REFACTOR and rollback per slice.
+   - Cons: requires temporary seam/unavailable states; worker queue contract must be designed before enabling scheduled ingestion; real E2E needs configured Postgres/Redis and external network access.
+   - Effort: High
+
+2. **Provider-first ingestion expansion** — implement all three free/low-barrier providers before touching route authorization or deployment wiring.
+   - Pros: produces visible source-backed data quickly and exercises the adapter abstraction.
+   - Cons: leaves known private-route and misleading-claim defects exposed; cannot prove value end-to-end while the worker is not deployed; increases risk of persisting data that the UI cannot correctly authorize or label.
+   - Effort: High
+
+3. **Runtime-topology rewrite** — replace the current split Node/Python startup and scheduler seams with a new unified job platform before adding providers.
+   - Pros: could simplify long-term operations and Render deployment.
+   - Cons: unnecessary rewrite; high blast radius; conflicts with the existing tested queue/job contracts; delays immediate security and truthfulness fixes; still would not resolve Google/INTA/market/Iberá/ownership approvals.
+   - Effort: Very high
+
+### Recommendation
+Use incremental foundation slices with strict TDD and no default mock data. The proposal should sequence: (1) RED tests and fixes for status/chat auth plus field existence, truthful landing labels, and a startup/preflight contract; (2) a real scheduled-window queue adapter and worker/Render wiring with observable enqueue-to-completion/DLQ transitions, keeping the scheduler disabled until that path is proven; (3) a shared evidence envelope and the Georef 2.1, NASA POWER Daily, and Open-Meteo adapters, each with explicit source, freshness, timestamp/time-standard, units, rate/timeout, and observability behavior; and (4) real runtime verification across browser, API/BFF, Postgres, Redis, worker, cron, and Render.
+
+The proposal must explicitly keep Google Maps, official soil, licensed economics, official Iberá geometry, identity/ownership semantics, and regulated marketplace/credit/insurance behavior as blocked or unavailable scope. Contract fixtures may be used only to prove parser and error behavior and must be labeled; they must never be used as evidence that a provider, worker, cron, or production deployment is live.
+
+### Risks
+- Adding `requireRead` without solving tenant/owner identity may stop anonymous access but still over-authorize any authenticated shared-token holder; the proposal must distinguish route authentication from ownership authorization.
+- Enabling the current scheduler before replacing the log-only dispatcher would create false operational success and locked `signal_ingestion_runs` without a corresponding queue job.
+- The Python worker’s dependency installation, LangGraph/LLM credential requirements, Redis URL, Postgres DSN, and contract-root resolution must be verified together; a green API build does not prove worker readiness.
+- NASA POWER local-solar timestamps, Open-Meteo forecast dates, and Georef retrieval-only responses can be misrepresented as observations unless timestamp semantics are explicit in the contract.
+- External provider rate limits, transient 4xx/5xx responses, schema drift, and incomplete coverage can degrade the vertical slices; circuit breaking and latest-good evidence must remain visible rather than silently substituted.
+- Render currently has no Python worker service and disables both Agronautas and hydrology schedulers in the blueprint; production verification cannot pass until the intended topology and secrets are configured and observed in logs.
+- Real Postgres/Redis verification can mutate durable state; use an authorized isolated test namespace or explicit read-only checks, and mark writes/cron/provider runs blocked when that authorization is absent.
+
+### Ready for Proposal
+Yes. The proposal should use the recommended four-slice sequence, define strict-TDD acceptance criteria and rollback for each slice, and preserve the listed credential/data/approval blockers as explicit unavailable outcomes rather than inventing data or credentials.

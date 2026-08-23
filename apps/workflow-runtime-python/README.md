@@ -15,13 +15,14 @@ This keeps runtime responsibilities explicit:
 ## Hosting boundary prerequisite
 
 The Python worker requires **separate hosting** from the Native Node services in
-`render.yaml`. Render currently deploys only `agronautas-api` and
-`agronautas-web`; this is not a Render Python worker deployment and must not be
-interpreted as Python worker availability.
+`render.yaml`. The manifest now contains an explicit `agronautas-runtime-worker`
+service with the local package install and `workflow-runtime-consumer` command;
+the manifest is configuration only and is not deployment, heartbeat, queue, or
+provider proof.
 Before enabling production recompute, an approved worker host must provide the
 Python process, PostgreSQL, Redis, provider configuration, and the additive
-Agronautas runtime migration. This documentation is a prerequisite, not live
-deployment evidence.
+Agronautas runtime migration. This documentation and the Render service
+definition are prerequisites, not live deployment evidence.
 
 ## JSON Schema bridge (cross-runtime contract)
 
@@ -57,17 +58,27 @@ The TypeScript/JavaScript LangGraph worker is intentionally deferred. The baseli
 ## Minimal local run
 
 ```bash
-# from monorepo root
-make worker-install
-make worker-run
+# from monorepo root: install the package and its test extras
+pnpm worker:install
+pnpm worker:test
+
+# start the worker only when authorized Postgres/Redis are available
+pnpm worker:run
 ```
 
 Or via npm scripts:
 
 ```bash
 pnpm run worker:install
+pnpm run worker:test
 pnpm run worker:run
 ```
+
+The equivalent package-local commands are `python -m pip install -e ".[dev]"`
+and `python -m pytest tests -q` from `apps/workflow-runtime-python`. The runtime
+harness uses that same package-local pytest command; if Python or pytest is not
+available it records `worker_tests: unavailable` and never reports a historical
+pass.
 
 ### Windows psycopg event-loop boundary
 

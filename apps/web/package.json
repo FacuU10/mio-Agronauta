@@ -10,6 +10,7 @@
     "lint:security": "eslint . --ext .ts,.tsx --max-warnings 0",
     "test": "node --import tsx --test src/**/*.test.ts src/**/*.test.tsx",
     "test:e2e": "playwright test",
+    "test:e2e:agronautas-runtime": "playwright test tests/e2e/agronautas-reality-runtime.spec.ts",
     "clean": "node scripts/clean.mjs"
   },
   "dependencies": {

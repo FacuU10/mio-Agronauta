@@ -10,6 +10,7 @@ const baseConfig = {
   mode: 'real' as const,
   routePrefix: '/agronautas',
   trustProxy: false,
+  schedulerEnabled: false,
   optionalReadinessServices: [],
   runtimeRequired: false,
   workerHeartbeatMaxAgeSeconds: 180,
@@ -158,9 +159,49 @@ test('GET /ready exposes worker requirement when runtime is mandatory', async ()
 
   const response = await request(app, '/agronautas/ready')
   assert.equal(response.status, 503)
-  const body = await response.json() as { worker?: { required: boolean; heartbeatMaxAgeSeconds: number } }
+  const body = await response.json() as { worker?: { required: boolean; status: string; reason: string; heartbeatMaxAgeSeconds: number }; failedRequiredChecks: string[] }
   assert.equal(body.worker?.required, true)
+  assert.equal(body.worker?.status, 'unavailable')
+  assert.equal(body.worker?.reason, 'worker_heartbeat_not_available')
   assert.equal(body.worker?.heartbeatMaxAgeSeconds, 120)
+  assert.deepEqual(body.failedRequiredChecks, ['worker'])
+})
+
+test('GET /ready reports an unavailable worker without claiming it is healthy when worker is optional', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => false,
+    checkRedis: async () => true,
+    getConfig: () => baseConfig,
+    getWorkerReadiness: async () => {
+      throw new Error('worker readiness must not be queried when worker is optional')
+    },
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  assert.equal(response.status, 200)
+  const body = await response.json() as {
+    ready: boolean
+    checks: { worker: boolean }
+    requiredChecks: Record<string, boolean>
+    worker?: { required: boolean; healthy: boolean | null; status: string; reason: string }
+  }
+
+  assert.equal(body.ready, true)
+  assert.equal(body.checks.worker, false)
+  assert.equal('worker' in body.requiredChecks, false)
+  assert.deepEqual(body.worker, {
+    required: false,
+    healthy: null,
+    status: 'unavailable',
+    reason: 'worker_not_configured',
+    latestHeartbeatAt: null,
+    latestLeaseExpiresAt: null,
+    latestJobId: null,
+    latestRunId: null,
+    heartbeatMaxAgeSeconds: 180,
+  })
 })
 
 test('worker readiness query guards against expired leases and non-running jobs', async () => {
@@ -235,13 +276,14 @@ test('GET /ready stays a dependency-readiness boundary, not on-demand acquisitio
   const response = await request(app, '/agronautas/ready')
   const body = await response.json() as {
     ready: boolean
+    checks: { worker: boolean }
     requiredChecks: { postgres: boolean; redis: boolean; worker: boolean }
-    [key: string]: unknown
   }
 
   assert.equal(response.status, 200)
   assert.equal(body.ready, true)
-  assert.deepEqual(body.requiredChecks, { postgres: true, redis: true, worker: true })
+  assert.deepEqual(body.requiredChecks, { postgres: true, redis: true })
+  assert.equal(body.checks.worker, false)
   assert.equal('requestId' in body, false)
   assert.equal('runId' in body, false)
   assert.equal('source' in body, false)

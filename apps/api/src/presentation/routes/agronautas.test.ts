@@ -34,6 +34,92 @@ test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async (
   }
 })
 
+test('GET status y POST chat requieren bearer antes de consultar el lote o ejecutar el chat', { concurrency: false }, async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  let fieldLookups = 0
+  const fieldRepository = createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() })
+  const app = createTestApp({
+    fieldRepository: {
+      ...fieldRepository,
+      async findById(fieldId) {
+        fieldLookups += 1
+        return fieldRepository.findById(fieldId)
+      },
+    },
+  })
+
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  try {
+    const [status, chat] = await Promise.all([
+      request(app, '/agronautas/fields/field-protected/status'),
+      request(app, '/agronautas/fields/field-protected/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contractVersion: '1.0.0', message: 'Explicá el riesgo actual' }),
+      }),
+    ])
+
+    assert.equal(status.status, 401)
+    assert.equal(chat.status, 401)
+    assert.equal(fieldLookups, 0)
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
+test('status y chat devuelven 404 y no ejecutan downstream para un lote inexistente', { concurrency: false }, async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  let snapshotLookups = 0
+  let alertLookups = 0
+  const app = createTestApp({
+    riskSnapshotRepository: {
+      async save() {},
+      async getLatest() {
+        snapshotLookups += 1
+        return null
+      },
+      async listTimeline() { return [] },
+    },
+    alertSnapshotRepository: {
+      async saveMany() {},
+      async getLatestForField() {
+        alertLookups += 1
+        return []
+      },
+      async listTimeline() { return [] },
+    },
+  })
+
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  try {
+    const [status, chat] = await Promise.all([
+      request(app, '/agronautas/fields/missing-protected/status', { headers: { authorization: 'Bearer reader-token' } }),
+      request(app, '/agronautas/fields/missing-protected/chat', {
+        method: 'POST',
+        headers: { authorization: 'Bearer reader-token', 'content-type': 'application/json' },
+        body: JSON.stringify({ contractVersion: '1.0.0', message: 'Explicá el riesgo actual' }),
+      }),
+    ])
+
+    assert.equal(status.status, 404)
+    assert.equal(chat.status, 404)
+    assert.equal(snapshotLookups, 0)
+    assert.equal(alertLookups, 0)
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
 test('management routes enforce auth, invalid identifiers, unavailable storage, empty pages, and read-only activity', async () => {
   const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
   const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
@@ -189,6 +275,8 @@ test('GET /agronautas/v1/runtime preserva compatibilidad versionada', async () =
     routePrefix: '/agronautas/v1',
     compatibilityPrefix: '/agronautas',
     contractVersion: '1.0.0',
+    scheduler: { enabled: false, status: 'disabled' },
+    worker: { status: 'unavailable', reason: 'worker_readiness_not_verified' },
   })
 
   delete process.env['AGRONAUTAS_AUTH_ENABLED']
@@ -748,7 +836,14 @@ test('GET /agronautas/runtime expone modo y prefijo activos', async () => {
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('x-agronautas-mode'), 'demo')
   assert.equal(response.headers.get('x-agronautas-route-compatibility'), '/agronautas/v1')
-  assert.deepEqual(await response.json(), { mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' })
+  assert.deepEqual(await response.json(), {
+    mode: 'demo',
+    routePrefix: '/agronautas',
+    compatibilityPrefix: '/agronautas/v1',
+    contractVersion: '1.0.0',
+    scheduler: { enabled: false, status: 'disabled' },
+    worker: { status: 'unavailable', reason: 'worker_readiness_not_verified' },
+  })
 
   delete process.env['AGRONAUTAS_RUNTIME_MODE']
   delete process.env['AGRONAUTAS_ROUTE_PREFIX']
@@ -894,7 +989,7 @@ test('POST /fields/:id/chat responde con resumen grounded y action trace', async
 })
 
 test('POST /fields/:id/chat rechaza preguntas fuera del alcance aprobado', async () => {
-  const response = await request(createTestApp(), '/agronautas/fields/field-1/chat', {
+  const response = await request(createTestApp({ fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map([['field-1', testField('field-1')]]) }) }), '/agronautas/fields/field-1/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', message: 'Dame un clima futuro exacto para 30 días' }),
@@ -945,7 +1040,7 @@ test('POST /fields/:id/chat cae a modo degradado cuando Groq no está disponible
 
 test('POST /fields/:id/chat aplica rate limit por IP sin afectar otros endpoints', async () => {
   process.env['RATE_LIMIT_STORE'] = 'memory'
-  const app = createTestApp()
+  const app = createTestApp({ fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map([['field-1', testField('field-1')]]) }) })
 
   let limitedResponse: Response | undefined
   for (let attempt = 0; attempt < 11; attempt += 1) {
@@ -975,7 +1070,7 @@ test('POST /fields/:id/chat aplica rate limit por IP sin afectar otros endpoints
 })
 
 test('POST /fields/:id/chat rechaza mensajes oversized con error contractual', async () => {
-  const response = await request(createTestApp(), '/agronautas/fields/field-1/chat', {
+  const response = await request(createTestApp({ fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map([['field-1', testField('field-1')]]) }) }), '/agronautas/fields/field-1/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ contractVersion: '1.0.0', message: 'x'.repeat(501) }),
@@ -1132,6 +1227,31 @@ test('seeded Corrientes demo rows can power overview, weather, alerts, status an
   assert.equal((await status.json() as { riskStatus: string }).riskStatus, 'fresh')
   assert.equal(chat.status, 200)
   assert.equal((await chat.json() as { supportingFacts: Array<{ label: string }> }).supportingFacts[0]?.label, 'Score')
+})
+
+test('GET /agronautas/runtime no declara habilitado un scheduler sin dispatcher probado', async () => {
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
+  process.env['AGRONAUTAS_SCHEDULER_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  try {
+    const response = await request(createTestApp(), '/agronautas/runtime', {
+      headers: { authorization: 'Bearer reader-token' },
+    })
+
+    assert.equal(response.status, 200)
+    assert.deepEqual((await response.json() as { scheduler: unknown }).scheduler, {
+      enabled: false,
+      status: 'unavailable',
+      reason: 'scheduler_dispatch_capability_not_configured',
+    })
+  } finally {
+    delete process.env['AGRONAUTAS_RUNTIME_MODE']
+    delete process.env['AGRONAUTAS_SCHEDULER_ENABLED']
+    delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  }
 })
 
 test('GET /fields/:id/intelligence explains persisted evidence and blocks economic recommendations', async () => {

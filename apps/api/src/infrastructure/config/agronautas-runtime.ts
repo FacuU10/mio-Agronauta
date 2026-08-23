@@ -5,11 +5,13 @@ const DEFAULT_OPTIONAL_READINESS_SERVICES: string[] = []
 const DISABLED_OPTIONAL_READINESS_SERVICES = new Set(['none', 'disabled', 'off'])
 export const DEFAULT_READINESS_DEPENDENCY_TIMEOUT_MS = 2000
 export const MAX_READINESS_DEPENDENCY_TIMEOUT_MS = 60_000
+export const AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON = 'scheduler_dispatch_capability_not_configured'
 
 export interface AgronautasRuntimeConfig {
   mode: RuntimeMode
   routePrefix: string
   trustProxy: boolean | number | string
+  schedulerEnabled: boolean
   optionalReadinessServices: string[]
   runtimeRequired: boolean
   workerHeartbeatMaxAgeSeconds: number
@@ -22,6 +24,7 @@ export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env)
     mode: parseRuntimeMode(env['AGRONAUTAS_RUNTIME_MODE']),
     routePrefix: normalizeRoutePrefix(env['AGRONAUTAS_ROUTE_PREFIX']),
     trustProxy: parseTrustProxy(env['TRUST_PROXY'], env['RENDER']),
+    schedulerEnabled: parseBoolean(env['AGRONAUTAS_SCHEDULER_ENABLED'], false),
     optionalReadinessServices: parseOptionalReadinessServices(env['READINESS_OPTIONAL_SERVICES']),
     runtimeRequired: parseBoolean(env['AGRONAUTAS_RUNTIME_REQUIRED'], false),
     workerHeartbeatMaxAgeSeconds: parsePositiveInteger(env['AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS'], 180),

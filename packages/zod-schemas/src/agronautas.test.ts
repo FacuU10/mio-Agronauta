@@ -18,11 +18,14 @@ import {
   hydrologyProviderPayloadGuardSchema,
   hydrologyTelemetrySchema,
   pdfReportRequestSchema,
+  runtimeInfoSchema,
   schedulerStatusSchema,
   signalEvidenceSchema,
   sourceCadenceSchema,
   agronautasFieldIndexResponseSchema,
   agronautasEvidenceSchema,
+  agronautasEvidenceContractVersion,
+  evidenceEnvelopeSchema,
   agronautasReportMetadataSchema,
   agronautasRiskClimateExplanationSchema,
   hydrologyIberaRunHistoryResponseSchema,
@@ -659,6 +662,37 @@ test('field geometry response preserves server-derived area, centroid, perimeter
   assert.equal(parsed.status, 'saved')
 })
 
+test('runtime contract preserves unavailable scheduler reasons without enabled or live status claims', () => {
+  const runtime = runtimeInfoSchema.parse({
+    mode: 'real',
+    routePrefix: '/agronautas/v1',
+    compatibilityPrefix: '/agronautas',
+    contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+    scheduler: {
+      enabled: false,
+      status: 'unavailable',
+      reason: 'scheduler_dispatch_capability_not_configured',
+    },
+    worker: { status: 'unavailable', reason: 'worker_readiness_not_verified' },
+  })
+
+  assert.equal(runtime.scheduler.status, 'unavailable')
+  assert.equal(runtime.scheduler.reason, 'scheduler_dispatch_capability_not_configured')
+  assert.equal(runtime.scheduler.enabled, false)
+  assert.equal(runtimeInfoSchema.safeParse({
+    ...runtime,
+    scheduler: { enabled: false, status: 'unavailable' },
+  }).success, false)
+  assert.equal(runtimeInfoSchema.safeParse({
+    ...runtime,
+    scheduler: { enabled: true, status: 'enabled' },
+  }).success, false)
+  assert.equal(runtimeInfoSchema.safeParse({
+    ...runtime,
+    scheduler: { enabled: true, status: 'live' },
+  }).success, false)
+})
+
 test('evidence, cadence, scheduler, dashboard y PDF contract fields are explicit', () => {
   const evidence = signalEvidenceSchema.parse({
     evidenceId: 'ev-weather-smn-1',
@@ -771,4 +805,75 @@ test('management activity contracts require a source label and reject authored-h
   assert.equal(Reflect.has(activity.items[0] ?? {}, 'actorId'), false)
   assert.equal(Reflect.has(activity.items[0] ?? {}, 'decision'), false)
   assert.equal(agronautasActivityResponseSchema.safeParse({ ...activity, items: [{ ...activity.items[0], sourceType: 'operator' }] }).success, false)
+})
+
+test('provider evidence envelopes keep retrieval, observation, forecast, units, and lineage semantics explicit', () => {
+  const envelope = evidenceEnvelopeSchema.parse({
+    contractVersion: agronautasEvidenceContractVersion,
+    evidenceId: 'evidence-open-meteo-1',
+    provider: 'open-meteo',
+    signalType: 'climate',
+    sourceUrl: 'https://api.open-meteo.com/v1/forecast',
+    providerMode: 'live',
+    observedAt: null,
+    forecastAt: '2026-08-23T00:00:00.000Z',
+    retrievedAt: '2026-08-22T23:59:00.000Z',
+    timeStandard: 'UTC',
+    forecastHorizonDays: 1,
+    model: 'best_match',
+    units: { temperature: '°C', precipitation: 'mm' },
+    freshness: 'fresh',
+    rawHash: 'sha256:payload-1',
+    runId: 'run-1',
+    requestId: 'request-1',
+    httpStatus: 200,
+    schemaStatus: 'valid',
+    http: { status: 200, ok: true },
+    schema: { status: 'valid' },
+    lineage: { sourceUrl: 'https://api.open-meteo.com/v1/forecast', rawHash: 'sha256:payload-1', parentRunId: null },
+    degradationReasons: [],
+    lastSuccessfulObservedAt: null,
+    latencyMs: 42,
+    value: { temperatureMaxC: 21, rainfallMm: 3 },
+  })
+
+  assert.equal(envelope.retrievedAt, '2026-08-22T23:59:00.000Z')
+  assert.equal(envelope.forecastAt, '2026-08-23T00:00:00.000Z')
+  assert.equal(envelope.timeStandard, 'UTC')
+  assert.equal(envelope.lineage.rawHash, 'sha256:payload-1')
+  assert.equal(envelope.freshness, 'fresh')
+})
+
+test('provider evidence envelopes reject provider-specific unit drift and stale evidence without latest-good lineage', () => {
+  const base = {
+    contractVersion: agronautasEvidenceContractVersion,
+    evidenceId: 'evidence-power-1',
+    provider: 'nasa-power-daily',
+    signalType: 'climate',
+    sourceUrl: 'https://power.larc.nasa.gov/api/temporal/daily/point',
+    providerMode: 'live' as const,
+    observedAt: '2026-08-22T00:00:00.000Z',
+    forecastAt: null,
+    retrievedAt: '2026-08-23T00:00:00.000Z',
+    timeStandard: 'UTC',
+    forecastHorizonDays: null,
+    model: null,
+    units: { temperature: 'C', precipitation: 'mm/day' },
+    freshness: 'fresh' as const,
+    rawHash: 'sha256:payload-2',
+    runId: 'run-2',
+    requestId: 'request-2',
+    httpStatus: 200,
+    schemaStatus: 'valid' as const,
+    http: { status: 200, ok: true },
+    schema: { status: 'valid' as const },
+    lineage: { sourceUrl: 'https://power.larc.nasa.gov/api/temporal/daily/point', rawHash: 'sha256:payload-2', parentRunId: null },
+    degradationReasons: [],
+    lastSuccessfulObservedAt: null,
+    latencyMs: 21,
+  }
+
+  assert.equal(evidenceEnvelopeSchema.safeParse({ ...base, units: { temperature: 'F', precipitation: 'mm/day' } }).success, false)
+  assert.equal(evidenceEnvelopeSchema.safeParse({ ...base, freshness: 'stale', lastSuccessfulObservedAt: null }).success, false)
+  assert.equal(evidenceEnvelopeSchema.safeParse({ ...base, freshness: 'stale', lastSuccessfulObservedAt: '2026-08-20T00:00:00.000Z' }).success, true)
 })

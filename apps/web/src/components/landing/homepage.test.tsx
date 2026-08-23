@@ -69,3 +69,31 @@ test('landing elimina el flujo contact-first heredado', () => {
   assert.doesNotMatch(markup, /\?Qué necesitás resolver\?/)
   assert.doesNotMatch(markup, /api\/contact-intake/)
 })
+
+test('landing labels unsupported metrics, recency, monitoring, and insurance as unavailable or illustrative', () => {
+  const markup = renderToStaticMarkup(<LandingHomepage initialShowSplash={false} />)
+
+  assert.match(markup, /No disponible/)
+  assert.match(markup, /ilustrativ/i)
+  assert.match(markup, /No disponible para contratación/i)
+  assert.doesNotMatch(markup, new RegExp('>96%<|>100%<|>1\\.2M<|15\\+ fuentes|Hace 2 minutos|USD 1\\.85/kg|Liquidación 7 días'))
+})
+
+test('landing marks roadmap phases and dates as illustrative and insurance as unavailable', () => {
+  const markup = renderToStaticMarkup(<LandingHomepage initialShowSplash={false} />)
+
+  assert.match(markup, /Hoja de Ruta ilustrativa/i)
+  assert.match(markup, /fechas y fases no confirmadas/i)
+  assert.match(markup, /Plan ilustrativo 1/i)
+  assert.match(markup, /Fecha no confirmada/i)
+  assert.match(markup, /Capacidad futura no disponible: seguros para heladas/i)
+  assert.doesNotMatch(markup, /Q1 2025|Q2 2025|Q3 2025|Q4 2025|Q1 2026/)
+  assert.doesNotMatch(markup, /Seguros diseñados para heladas, anegamientos y sequías de Corrientes/)
+})
+
+test('landing gives every roadmap entry an unconfirmed illustrative phase and date', () => {
+  const markup = renderToStaticMarkup(<LandingHomepage initialShowSplash={false} />)
+
+  assert.equal((markup.match(/Plan ilustrativo [1-5]/g) ?? []).length, 5)
+  assert.equal((markup.match(/Fecha no confirmada/g) ?? []).length, 5)
+})

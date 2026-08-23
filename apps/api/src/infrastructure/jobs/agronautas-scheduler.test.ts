@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { AGRONAUTAS_SOURCE_CADENCES, AgronautasSignalScheduler, calculateRetryBackoff, createAgronautasSchedulerRuntime, dueSourceWindows, type SourceWindow } from './agronautas-scheduler'
+import { RedisAgronautasRuntimeDispatcher } from '../queue/agronautas-runtime-dispatcher'
+import { agronautasScheduledWindowSchema } from '@repo/zod-schemas'
 
 test('calculateRetryBackoff applies extended waits and desists after attempt four until the hourly run', () => {
   const now = new Date('2026-07-04T20:05:00.000Z')
@@ -95,4 +97,60 @@ test('scheduler runtime reads persisted cadences and last success on every run',
   await runtime.runOnce()
 
   assert.deepEqual(calls, ['cadences', 'last-success', 'tick:persisted-weather:climate:2026-07-04T20:00:00.000Z'])
+})
+
+test('scheduled-window dispatcher publishes one typed Bull envelope and suppresses duplicate run IDs', async () => {
+  const lists: Record<string, string[]> = {}
+  const keys = new Set<string>()
+  const redis = {
+    async set(key: string) {
+      if (keys.has(key)) return null
+      keys.add(key)
+      return 'OK'
+    },
+    async del(key: string) {
+      keys.delete(key)
+      return 1
+    },
+    async lpush(key: string, value: string) {
+      lists[key] ??= []
+      lists[key].unshift(value)
+      return lists[key].length
+    },
+    async rpush(key: string, value: string) {
+      lists[key] ??= []
+      lists[key].push(value)
+      return lists[key].length
+    },
+  }
+  const dispatcher = new RedisAgronautasRuntimeDispatcher(redis)
+  const window: SourceWindow = { provider: 'open-meteo', signalType: 'climate', windowStart: new Date('2026-07-04T19:00:00.000Z'), windowEnd: new Date('2026-07-04T20:00:00.000Z'), runId: 'open-meteo:climate:2026-07-04T19:00:00.000Z' }
+
+  await dispatcher.enqueue(window)
+  await dispatcher.enqueue(window)
+
+  const payload = JSON.parse(lists['bull:agronautas-runtime:wait']?.[0] ?? '{}') as unknown
+  const parsed = agronautasScheduledWindowSchema.parse(payload)
+  assert.equal(lists['bull:agronautas-runtime:wait']?.length, 1)
+  assert.equal(parsed.payload.sourceWindow.runId, window.runId)
+  assert.equal(parsed.status, 'pending')
+})
+
+test('scheduled-window schema rejects malformed windows and contract drift before queue publication', () => {
+  const malformed = {
+    contractVersion: '0.9.0',
+    jobId: 'job-1',
+    workflowId: 'agronautas-scheduled-window',
+    runId: 'run-1',
+    kind: 'agronautas-scheduled-window',
+    status: 'pending',
+    priority: 50,
+    createdAt: '2026-07-04T19:00:00.000Z',
+    lease: { attempt: 1, maxAttempts: 3 },
+    trace: { traceId: 'trace-1234567890123456', correlationId: 'corr-12345678', causationId: 'run-1' },
+    payload: { sourceWindow: { provider: '', signalType: 'climate', windowStart: 'not-a-date', windowEnd: '2026-07-04T20:00:00.000Z', runId: 'run-2' } },
+    labels: { domain: 'agronautas', operation: 'scheduled-window' },
+  }
+
+  assert.equal(agronautasScheduledWindowSchema.safeParse(malformed).success, false)
 })

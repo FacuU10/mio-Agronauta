@@ -44,7 +44,7 @@ import { PostgresAgronautasJobRunRepository } from '../../infrastructure/databas
 import { PostgresRiskSnapshotRepository } from '../../infrastructure/database/postgres/agronautas-risk-snapshot-repository'
 import { PostgresSignalSummaryRepository } from '../../infrastructure/database/postgres/agronautas-signal-summary-repository'
 import { RedisRecomputeLockRepository } from '../../infrastructure/database/redis/agronautas-recompute-lock-repository'
-import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
+import { AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON, getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
 import { createGroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import { RedisAgronautasRuntimeDispatcher } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
 import { createDemoAlerts, createDemoCopilotContext, createDemoDashboardSnapshot, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
@@ -53,7 +53,8 @@ import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import type { Field } from '../../domain/entities/agronautas'
-import { ProviderEvidencePort, RealProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
+import { createRealProviderEvidencePort, ProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
+import { createAgronautasTelemetry } from '../../infrastructure/observability/agronautas-telemetry'
 import { UpdateFieldGeometryUseCase } from '../../application/usecases/update-field-geometry-usecase'
 import type { FieldGeometryRepository } from '../../domain/repositories/agronautas'
 import { toAgronautasFieldIndexItem } from '../../application/viewmodels/agronautas-pilot'
@@ -102,7 +103,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     hydrologyCopilotService: deps.hydrologyCopilotService ?? new HydrologyCopilotService(),
     groqProvider: deps.groqProvider ?? createGroqChatProvider(),
     isVersionedNamespace: deps.isVersionedNamespace ?? false,
-    providerEvidencePort: deps.providerEvidencePort ?? new RealProviderEvidencePort(),
+    providerEvidencePort: deps.providerEvidencePort ?? createRealProviderEvidencePort(createAgronautasTelemetry()),
     geometryRepository: deps.geometryRepository ?? (fieldRepository as unknown as FieldGeometryRepository),
     workspaceRepository: deps.workspaceRepository ?? new PostgresAgronautasManagementRepository(),
   }
@@ -138,6 +139,15 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       routePrefix: resolved.isVersionedNamespace ? `${runtimeConfig.routePrefix}/v1` : runtimeConfig.routePrefix,
       compatibilityPrefix: resolved.isVersionedNamespace ? runtimeConfig.routePrefix : `${runtimeConfig.routePrefix}/v1`,
       contractVersion: '1.0.0',
+      scheduler: {
+        enabled: false,
+        status: runtimeConfig.schedulerEnabled ? 'unavailable' : 'disabled',
+        ...(runtimeConfig.schedulerEnabled ? { reason: AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON } : {}),
+      },
+      worker: {
+        status: 'unavailable',
+        reason: 'worker_readiness_not_verified',
+      },
     })
   })
 
@@ -358,7 +368,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json({ fieldId, items: snapshots.map((snapshot) => riskSnapshotSchema.parse(snapshot.toContract())) })
   })
 
-  router.get('/fields/:fieldId/status', async (req, res) => {
+  router.get('/fields/:fieldId/status', requireRead, requireFieldAccessOrDemo(resolved.fieldRepository, runtimeConfig.mode), async (req: RequestWithField, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
@@ -379,13 +389,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       }))
     }
 
-    const [field, snapshot, alerts] = await Promise.all([
-      resolved.fieldRepository.findById(fieldId),
+    const field = req.field
+    if (!field) return res.status(404).json({ error: 'Field not found' })
+    const [snapshot, alerts] = await Promise.all([
       resolved.riskSnapshotRepository.getLatest(fieldId),
       resolved.alertSnapshotRepository.getLatestForField(fieldId),
     ])
-
-    if (!field) return res.status(404).json({ error: 'Field not found' })
 
     const riskStatus = snapshot ? snapshot.freshness : 'missing'
     const alertsStatus = alerts.length > 0 ? deriveAlertStatus(alerts) : snapshot ? snapshot.freshness : 'missing'
@@ -633,9 +642,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
   })
 
-  router.post('/fields/:fieldId/chat', chatRateLimitMiddleware, async (req, res) => {
+  router.post('/fields/:fieldId/chat', requireRead, requireFieldAccessOrDemo(resolved.fieldRepository, runtimeConfig.mode), chatRateLimitMiddleware, async (req: RequestWithField, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+    if (!req.field && !shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
+      return res.status(404).json({ error: 'Field not found' })
+    }
 
     const parsed = groundedChatRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
@@ -693,7 +705,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
          acquiredAt: (item.acquiredAt ?? item.observedAt).toISOString(),
          freshness: item.freshness ?? (item.staleCause ? 'degraded' as const : 'fresh' as const),
         providerMode: evidence.mode,
-        lastSuccessfulObservedAt: evidence.observedAt.toISOString(),
+         lastSuccessfulObservedAt: evidence.lastSuccessfulObservedAt,
         nextDueAt: snapshotContract.validUntil,
          degradationReasons: item.degradationReasons ?? (item.staleCause ? ['weather_data_stale' as const] : [])
       }
@@ -810,6 +822,20 @@ function requireFieldAccess(fieldRepository: FieldRepository) {
   return async (req: RequestWithField, res: Response, next: NextFunction) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+
+    const field = await fieldRepository.findById(fieldId)
+    if (!field) return res.status(404).json({ error: 'Field not found' })
+
+    req.field = field
+    return next()
+  }
+}
+
+function requireFieldAccessOrDemo(fieldRepository: FieldRepository, runtimeMode: ReturnType<typeof getAgronautasRuntimeConfig>['mode']) {
+  return async (req: RequestWithField, res: Response, next: NextFunction) => {
+    const fieldId = requireFieldId(req, res)
+    if (!fieldId) return
+    if (shouldUseDemoData(req, fieldId, runtimeMode)) return next()
 
     const field = await fieldRepository.findById(fieldId)
     if (!field) return res.status(404).json({ error: 'Field not found' })

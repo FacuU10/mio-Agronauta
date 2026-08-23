@@ -6,6 +6,12 @@ import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronaut
 import { PostgresAgronautasRuntimeReadinessRepository } from '../../infrastructure/database/postgres/agronautas-runtime-readiness-repository'
 
 export const READINESS_DEPENDENCY_TIMEOUT_MS = 2000
+const WORKER_STATUS = {
+  AVAILABLE: 'available',
+  UNAVAILABLE: 'unavailable',
+} as const
+
+type WorkerStatus = (typeof WORKER_STATUS)[keyof typeof WORKER_STATUS]
 
 export interface ReadinessDependencyResult {
   service: string
@@ -95,13 +101,13 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         postgres: postgres.ok,
         redis: redis.ok,
         mongodb: mongo.ok,
-        worker: config.runtimeRequired ? worker?.workerHealthy ?? false : true,
+        worker: worker?.workerHealthy ?? false,
       }
 
       const requiredChecks = {
         postgres: dependencyChecks.postgres,
         redis: dependencyChecks.redis,
-        worker: dependencyChecks.worker,
+        ...(config.runtimeRequired ? { worker: dependencyChecks.worker } : {}),
       }
 
       const ready = Object.values(requiredChecks).every(Boolean)
@@ -111,6 +117,21 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
       const degraded = Object.entries(dependencyChecks)
         .filter(([service, ok]) => optionalServices.has(service) && !ok)
         .map(([service]) => service)
+
+      const workerStatus: WorkerStatus = worker?.workerHealthy ? WORKER_STATUS.AVAILABLE : WORKER_STATUS.UNAVAILABLE
+      const workerDetails = {
+        required: config.runtimeRequired,
+        healthy: config.runtimeRequired ? worker?.workerHealthy ?? false : null,
+        status: workerStatus,
+        reason: worker?.workerHealthy
+          ? undefined
+          : config.runtimeRequired ? 'worker_heartbeat_not_available' : 'worker_not_configured',
+        latestHeartbeatAt: worker?.latestHeartbeatAt ?? null,
+        latestLeaseExpiresAt: worker?.latestLeaseExpiresAt ?? null,
+        latestJobId: worker?.latestJobId ?? null,
+        latestRunId: worker?.latestRunId ?? null,
+        heartbeatMaxAgeSeconds: config.workerHeartbeatMaxAgeSeconds,
+      }
 
       res.status(ready ? 200 : 503).json({
         ready,
@@ -127,25 +148,7 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
           redis,
           mongodb: mongo,
         },
-        worker: config.runtimeRequired
-          ? {
-              required: true,
-              healthy: worker?.workerHealthy ?? false,
-              latestHeartbeatAt: worker?.latestHeartbeatAt ?? null,
-              latestLeaseExpiresAt: worker?.latestLeaseExpiresAt ?? null,
-              latestJobId: worker?.latestJobId ?? null,
-              latestRunId: worker?.latestRunId ?? null,
-              heartbeatMaxAgeSeconds: config.workerHeartbeatMaxAgeSeconds,
-            }
-          : {
-              required: false,
-              healthy: worker?.workerHealthy ?? null,
-              latestHeartbeatAt: worker?.latestHeartbeatAt ?? null,
-              latestLeaseExpiresAt: worker?.latestLeaseExpiresAt ?? null,
-              latestJobId: worker?.latestJobId ?? null,
-              latestRunId: worker?.latestRunId ?? null,
-              heartbeatMaxAgeSeconds: config.workerHeartbeatMaxAgeSeconds,
-            },
+        worker: workerDetails,
         capabilities: {
           mongodb: {
             required: false,

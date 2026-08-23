@@ -10,7 +10,10 @@
     "lint": "turbo run lint",
     "lint:security": "turbo run lint:security",
     "verify-local": "pnpm --dir apps/api verify-local",
+    "verify:agronautas:runtime": "pnpm --dir apps/api verify:agronautas:runtime",
+    "verify:agronautas:browser": "pnpm --dir apps/web test:e2e:agronautas-runtime",
     "worker:install": "python -m pip install -e ./apps/workflow-runtime-python[dev]",
+    "worker:test": "python -m pytest apps/workflow-runtime-python/tests -q",
     "worker:run": "python -m worker.main",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo run clean && node scripts/clean-root.mjs"

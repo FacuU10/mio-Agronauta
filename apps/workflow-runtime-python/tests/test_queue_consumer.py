@@ -57,6 +57,9 @@ class FakeRedis:
     async def hset(self, key: str, field: str, value: str) -> None:
         self.hashes[key][field] = value
 
+    async def hget(self, key: str, field: str) -> str | None:
+        return self.hashes[key].get(field)
+
 
 @pytest.fixture
 def consumer(monkeypatch: pytest.MonkeyPatch) -> WorkflowQueueConsumer:
@@ -87,6 +90,31 @@ def _job(*, workflow_id: str = "demo-workflow", attempt: int = 1, max_attempts: 
         "trace": {"traceId": "1234567890abcdef", "correlationId": "abcdefgh"},
         "payload": {"assetId": "asset-1", "inputUri": "https://example.com/input.json"},
         "lease": {"attempt": attempt, "maxAttempts": max_attempts},
+    }
+
+
+def _scheduled_window_job(*, attempt: int = 1, max_attempts: int = 3) -> dict:
+    return {
+        "contractVersion": "1.0.0",
+        "jobId": "window-job-123",
+        "workflowId": "agronautas-scheduled-window",
+        "runId": "open-meteo:climate:2026-06-05T00:00:00Z",
+        "kind": "agronautas-scheduled-window",
+        "status": "pending",
+        "priority": 50,
+        "createdAt": "2026-06-05T00:00:00Z",
+        "trace": {"traceId": "1234567890abcdef", "correlationId": "abcdefgh", "causationId": "run-123"},
+        "payload": {
+            "sourceWindow": {
+                "provider": "open-meteo",
+                "signalType": "climate",
+                "windowStart": "2026-06-05T00:00:00Z",
+                "windowEnd": "2026-06-05T01:00:00Z",
+                "runId": "open-meteo:climate:2026-06-05T00:00:00Z",
+            }
+        },
+        "lease": {"attempt": attempt, "maxAttempts": max_attempts},
+        "labels": {"domain": "agronautas", "operation": "scheduled-window"},
     }
 
 
@@ -286,3 +314,46 @@ async def test_processing_payload_remains_recoverable_until_ack(consumer: Workfl
     assert consumer.redis.lists[consumer.processing_queue_name] == [payload]
     await consumer._dead_letter(payload, "manual recovery")
     assert consumer.redis.lists[consumer.processing_queue_name] == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_window_unavailable_is_not_reported_as_success(consumer: WorkflowQueueConsumer) -> None:
+    result = await consumer.handle_job(_scheduled_window_job())
+
+    assert result["accepted"] is False
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "scheduled_window_processor_not_configured"
+    assert consumer.redis.hashes[consumer.results_key]["window-job-123"] == json.dumps(result)
+    assert consumer.redis.lists.get(consumer.completed_queue_name, []) == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_window_success_records_result_and_completed_transition(consumer: WorkflowQueueConsumer, monkeypatch: pytest.MonkeyPatch) -> None:
+    job = _scheduled_window_job()
+    consumer.redis.blmove_payload = json.dumps(job)
+
+    async def fake_blmove(source: str, destination: str, timeout: int, src: str, dest: str) -> str | None:
+        if consumer.redis.blmove_payload is not None:
+            return await FakeRedis.blmove(consumer.redis, source, destination, timeout, src, dest)
+        raise CancelledError
+
+    async def fake_scheduled_window(received_job: dict) -> dict:
+        return {"accepted": True, "status": "succeeded", "jobId": received_job["jobId"], "runId": received_job["runId"]}
+
+    monkeypatch.setattr(consumer.redis, "blmove", fake_blmove)
+    monkeypatch.setattr(consumer, "_run_scheduled_window_job", fake_scheduled_window)
+
+    with pytest.raises(CancelledError):
+        await consumer.consume_forever()
+
+    assert consumer.redis.lists[consumer.processing_queue_name] == []
+    assert len(consumer.redis.lists[consumer.completed_queue_name]) == 1
+    assert json.loads(consumer.redis.hashes[consumer.results_key][job["jobId"]])["status"] == "succeeded"
+
+
+def test_scheduled_window_schema_rejects_duplicate_identity() -> None:
+    job = _scheduled_window_job()
+    job["payload"]["sourceWindow"]["runId"] = "other-run"
+
+    with pytest.raises(Exception):
+        consumer_module.validate_scheduled_window_job(job)

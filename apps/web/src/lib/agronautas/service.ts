@@ -144,7 +144,14 @@ export function createAgronautasMockService(): AgronautasService {
       })
     },
     async getRuntime() {
-      return runtimeInfoSchema.parse({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: AGRONAUTAS_CONTRACT_VERSION })
+      return runtimeInfoSchema.parse({
+        mode: 'demo',
+        routePrefix: '/agronautas',
+        compatibilityPrefix: '/agronautas/v1',
+        contractVersion: AGRONAUTAS_CONTRACT_VERSION,
+        scheduler: { enabled: false, status: 'disabled' },
+        worker: { status: 'unavailable', reason: 'worker_readiness_not_verified' },
+      })
     },
     async createFieldIntake(input) {
       if (input.location.lat < -32 || input.location.lat > -27 || input.location.lng < -60.5 || input.location.lng > -56) {

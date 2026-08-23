@@ -35,7 +35,7 @@
       "minLength": 1
     },
     "kind": {
-      "enum": ["ingest", "transform", "render", "publish", "agronautas-risk-recompute"]
+      "enum": ["ingest", "transform", "render", "publish", "agronautas-risk-recompute", "agronautas-scheduled-window"]
     },
     "status": {
       "enum": ["pending", "leased", "running", "waiting", "succeeded", "failed", "dlq", "cancelled"]
@@ -130,6 +130,9 @@
         },
         {
           "$ref": "./agronautas-runtime-recompute-job.schema.json"
+        },
+        {
+          "$ref": "./agronautas-scheduled-window-job.schema.json"
         }
       ]
     },

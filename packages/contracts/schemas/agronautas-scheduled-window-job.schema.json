@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://golden-boilerplate.dev/contracts/agronautas-scheduled-window-job.v1.schema.json",
+  "title": "AgronautasScheduledWindowJobV1",
+  "type": "object",
+  "required": ["sourceWindow"],
+  "properties": {
+    "sourceWindow": {
+      "type": "object",
+      "required": ["provider", "signalType", "windowStart", "windowEnd", "runId"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "signalType": { "enum": ["climate", "satellite", "weather_alert", "fire", "soil"] },
+        "windowStart": { "type": "string", "format": "date-time" },
+        "windowEnd": { "type": "string", "format": "date-time" },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 160 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

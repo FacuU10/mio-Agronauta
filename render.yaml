@@ -30,6 +30,19 @@ services:
       - key: GROQ_TIMEOUT_MS
         sync: false
 
+  - type: worker
+    runtime: python
+    name: agronautas-runtime-worker
+    buildCommand: pip install ./apps/workflow-runtime-python
+    startCommand: workflow-runtime-consumer
+    envVars:
+      - key: REDIS_URL
+        sync: false
+      - key: WORKER_POSTGRES_DSN
+        sync: false
+      - key: WORKER_CONTRACTS_ROOT
+        sync: false
+
   - type: cron
     runtime: node
     name: ibera-hydrology-cron

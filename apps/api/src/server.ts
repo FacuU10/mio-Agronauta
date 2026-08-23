@@ -9,8 +9,8 @@ import { corsMiddleware } from './presentation/middleware/cors'
 import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
 import { createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, type GovernmentIngestionResponse, type HydrologyIngestionCoordinator, type HydrologyIngestionInput } from './presentation/routes/hydrology-government'
-import { getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
-import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type SourceWindow, type ScheduledWindowLock } from './infrastructure/jobs/agronautas-scheduler'
+import { AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON, getAgronautasRuntimeConfig } from './infrastructure/config/agronautas-runtime'
+import { AgronautasSignalScheduler, createAgronautasSchedulerRuntime, type ScheduledWindowDispatcher, type SourceWindow, type ScheduledWindowLock } from './infrastructure/jobs/agronautas-scheduler'
 import { PostgresSignalIngestionRepository } from './infrastructure/database/postgres/agronautas-signal-ingestion-repository'
 import { HydrologyRepository } from '@repo/hydrology-engine'
 import { getPostgresPool } from './infrastructure/database/postgres/pool'
@@ -102,6 +102,10 @@ interface AgronautasSchedulerStartupDependencies {
   signalIngestionRepository?: Pick<SignalIngestionRepository, 'getLastSuccessfulObservedAtBySource'>
   sourceCadenceRepository?: Pick<SourceCadenceRepository, 'listEnabled'>
   scheduler?: Pick<AgronautasSignalScheduler, 'tick'>
+  dispatchCapability?: {
+    dispatcher: ScheduledWindowDispatcher
+    workerCapabilityProven: boolean
+  }
   schedulerLock?: ScheduledWindowLock
   now?: () => Date
   setInterval?: typeof setInterval
@@ -109,15 +113,24 @@ interface AgronautasSchedulerStartupDependencies {
 }
 
 export function startAgronautasSchedulerFromEnv(env: NodeJS.ProcessEnv = process.env, dependencies: AgronautasSchedulerStartupDependencies = {}) {
-  const enabled = env['AGRONAUTAS_SCHEDULER_ENABLED'] === 'true'
+  const requested = getAgronautasRuntimeConfig(env).schedulerEnabled
+  const capability = dependencies.dispatchCapability
+  const enabled = requested && Boolean(capability?.workerCapabilityProven && capability.dispatcher)
   const signalIngestionRepository = dependencies.signalIngestionRepository ?? new PostgresSignalIngestionRepository()
   const sourceCadenceRepository = dependencies.sourceCadenceRepository ?? new PostgresSourceCadenceRepository()
   const lock = dependencies.schedulerLock ?? new RedisSchedulerWindowLock()
-  return createAgronautasSchedulerRuntime({
+  const runtime = createAgronautasSchedulerRuntime({
     enabled,
     scheduler: dependencies.scheduler ?? new AgronautasSignalScheduler(
       lock,
-      { async enqueue(window: SourceWindow) { logger.info({ runId: window.runId, provider: window.provider, signalType: window.signalType }, 'Agronautas scheduler due window planned') }, async deadLetter(window: SourceWindow, error: Error) { logger.error({ runId: window.runId, error: error.message }, 'Agronautas scheduler enqueue failed') } },
+      capability?.dispatcher ?? {
+        async enqueue(window: SourceWindow) {
+          logger.info({ runId: window.runId, provider: window.provider, signalType: window.signalType }, 'Agronautas scheduler due window planned')
+        },
+        async deadLetter(window: SourceWindow, error: Error) {
+          logger.error({ runId: window.runId, error: error.message }, 'Agronautas scheduler enqueue failed')
+        },
+      },
     ),
     cadences: undefined,
     getLastSuccess: async () => signalIngestionRepository.getLastSuccessfulObservedAtBySource?.() ?? new Map(),
@@ -125,6 +138,13 @@ export function startAgronautasSchedulerFromEnv(env: NodeJS.ProcessEnv = process
     now: dependencies.now,
     setInterval: dependencies.setInterval,
     clearInterval: dependencies.clearInterval,
+  })
+  if (requested && !enabled) {
+    logger.warn({ reason: AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON }, 'Agronautas scheduler disabled because queue/worker dispatch capability is unavailable')
+  }
+  return Object.assign(runtime, {
+    status: enabled ? 'enabled' as const : requested ? 'unavailable' as const : 'disabled' as const,
+    reason: enabled ? null : requested ? AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON : 'scheduler_disabled',
   })
 }
 

@@ -189,32 +189,38 @@ test('api environment template uses a secret-manager placeholder for ingest', as
   assert.match(envExample, /^HYDROLOGY_INGEST_TOKEN=replace-with-secret-manager-reference$/m)
 })
 
-test('Render manifest declares two current Native Node services and one hydrology Cron', async () => {
+test('Render manifest declares two Native Node services, one Python worker, and one hydrology Cron', async () => {
   const renderYaml = await readRootText('render.yaml')
   const serviceNames = [...renderYaml.matchAll(/^\s+name: ([a-z0-9-]+)$/gm)].map((match) => match[1])
 
   assert.equal((renderYaml.match(/^\s+- type: web$/gm) ?? []).length, 2)
   assert.equal((renderYaml.match(/^\s+runtime: node$/gm) ?? []).length, 3)
+  assert.equal((renderYaml.match(/^\s+- type: worker$/gm) ?? []).length, 1)
+  assert.match(renderYaml, /^\s+runtime: python$/m)
   assert.equal((renderYaml.match(/^\s+- type: cron$/gm) ?? []).length, 1)
-  assert.deepEqual(serviceNames, ['agronautas-api', 'ibera-hydrology-cron', 'agronautas-web'])
-  assert.doesNotMatch(renderYaml, /docker|python|type:\s*worker|worker:/i)
+  assert.deepEqual(serviceNames, ['agronautas-api', 'agronautas-runtime-worker', 'ibera-hydrology-cron', 'agronautas-web'])
+  assert.doesNotMatch(renderYaml, /docker/i)
   assert.doesNotMatch(renderYaml, /\$\{|\{\{|\}\}|<%/)
 })
 
-test('Render baseline does not claim Python worker availability or recompute readiness', async () => {
+test('Render worker wiring is explicit but scheduler remains disabled and deployment is not claimed', async () => {
   const renderYaml = await readRootText('render.yaml')
   const workerProject = await readRootText('apps/workflow-runtime-python/pyproject.toml')
 
-  assert.doesNotMatch(renderYaml, /python|worker|agronautas-risk-recompute/i)
+  assert.match(renderYaml, /agronautas-runtime-worker/)
+  assert.match(renderYaml, /workflow-runtime-consumer/)
+  assert.match(renderYaml, /WORKER_POSTGRES_DSN/)
+  assert.match(renderYaml, /REDIS_URL/)
+  assert.match(renderYaml, /AGRONAUTAS_SCHEDULER_ENABLED[\s\S]*?value: false/)
   assert.match(workerProject, /workflow-runtime\s*=\s*"worker\.main:main"/)
-  assert.doesNotMatch(renderYaml, /workflow-runtime-python|WORKER_CONTRACTS_ROOT/i)
+  assert.doesNotMatch(renderYaml, /deploy(ed|ment)\s*(proof|verified)/i)
 })
 
 test('Python worker hosting is documented as a separate prerequisite from Render Node services', async () => {
   const workerReadme = await readRootText('apps/workflow-runtime-python/README.md')
   assert.match(workerReadme, /separate.*hosting|hosting.*separate/i)
   assert.match(workerReadme, /PostgreSQL|Redis/i)
-  assert.match(workerReadme, /not.*Render|Render.*not/i)
+  assert.match(workerReadme, /not live deployment evidence|configuration only/i)
 })
 
 test('Render commands match current workspace scripts and preserve separate routes', async () => {
