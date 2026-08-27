@@ -152,6 +152,18 @@ export type RuntimeResult = z.infer<typeof runtimeResultSchema>
 export const riskRuntimeResultSchema = runtimeResultSchema
 export type RiskRuntimeResult = RuntimeResult
 
+const runtimeSourceWindowSchema = z.object({
+  provider: z.string().trim().min(1).max(80),
+  signalType: z.enum(['climate', 'satellite', 'weather_alert', 'fire', 'soil']),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+  runId: z.string().trim().min(1).max(160),
+}).strict().superRefine((window, ctx) => {
+  if (new Date(window.windowEnd).getTime() <= new Date(window.windowStart).getTime()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'windowEnd must be after windowStart', path: ['windowEnd'] })
+  }
+})
+
 export const runtimeJobEnvelopeSchema = z.object({
   contractVersion: z.literal('2.0.0'),
   jobId: z.string().trim().min(1).max(160),
@@ -163,8 +175,19 @@ export const runtimeJobEnvelopeSchema = z.object({
   runtime: z.object({ mode: runtimeModeSchema }).strict(),
   state: runtimeStateSchema,
   lease: leaseMetadataSchema,
+  sourceWindow: runtimeSourceWindowSchema.optional(),
   result: runtimeResultSchema.optional(),
-}).strict()
+}).strict().superRefine((job, ctx) => {
+  if (job.operation === RUNTIME_OPERATION.SCHEDULED_WINDOW && !job.sourceWindow) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'scheduled-window envelopes require sourceWindow', path: ['sourceWindow'] })
+  }
+  if (job.operation === RUNTIME_OPERATION.RISK_RECOMPUTE && job.sourceWindow) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'risk-recompute envelopes must not contain sourceWindow', path: ['sourceWindow'] })
+  }
+  if (job.sourceWindow && job.sourceWindow.runId !== job.runId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'sourceWindow runId must match envelope runId', path: ['sourceWindow', 'runId'] })
+  }
+})
 
 export type RuntimeJobEnvelope = z.infer<typeof runtimeJobEnvelopeSchema>
 

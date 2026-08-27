@@ -314,6 +314,27 @@ test('GET /ready exposes the v2 durable worker capability separately from proces
   assert.equal(body.worker?.durableCapability, 'available')
 })
 
+test('GET /ready explicitly reports disabled scheduler and unconfigured processor states', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => true,
+    checkRedis: async () => true,
+    getConfig: () => baseConfig,
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as {
+    scheduler?: { enabled: boolean; status: string; reason: string }
+    processor?: { status: string; reason: string }
+  }
+
+  assert.equal(body.scheduler?.enabled, false)
+  assert.equal(body.scheduler?.status, 'disabled')
+  assert.equal(body.scheduler?.reason, 'scheduler-disabled')
+  assert.deepEqual(body.processor, { status: 'not_configured', reason: 'processor_not_configured' })
+})
+
 async function request(app: express.Express, path: string) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))

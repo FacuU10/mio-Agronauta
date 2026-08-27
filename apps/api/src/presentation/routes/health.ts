@@ -9,6 +9,7 @@ export const READINESS_DEPENDENCY_TIMEOUT_MS = 2000
 const WORKER_STATUS = {
   AVAILABLE: 'available',
   UNAVAILABLE: 'unavailable',
+  NOT_CONFIGURED: 'not_configured',
 } as const
 
 type WorkerStatus = (typeof WORKER_STATUS)[keyof typeof WORKER_STATUS]
@@ -118,7 +119,9 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         .filter(([service, ok]) => optionalServices.has(service) && !ok)
         .map(([service]) => service)
 
-      const workerStatus: WorkerStatus = worker?.workerHealthy ? WORKER_STATUS.AVAILABLE : WORKER_STATUS.UNAVAILABLE
+      const workerStatus: WorkerStatus = !config.runtimeRequired
+        ? WORKER_STATUS.NOT_CONFIGURED
+        : worker?.workerHealthy ? WORKER_STATUS.AVAILABLE : WORKER_STATUS.UNAVAILABLE
       const workerDetails = {
         required: config.runtimeRequired,
         healthy: config.runtimeRequired ? worker?.workerHealthy ?? false : null,
@@ -152,6 +155,10 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
           mongodb: mongo,
         },
         worker: workerDetails,
+        scheduler: config.schedulerEnabled
+          ? { enabled: true, status: 'unverified' as const }
+          : { enabled: false, status: 'disabled' as const, reason: 'scheduler-disabled' },
+        processor: { status: 'not_configured' as const, reason: 'processor_not_configured' },
         capabilities: {
           mongodb: {
             required: false,
@@ -161,6 +168,10 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
               ? 'MongoDB está habilitado explícitamente para readiness.'
               : 'MongoDB no está habilitado para readiness; no se intentó conexión.',
           },
+          scheduler: config.schedulerEnabled
+            ? { enabled: true, status: 'unverified' as const }
+            : { enabled: false, status: 'disabled' as const, reason: 'scheduler-disabled' },
+          processor: { status: 'not_configured' as const, reason: 'processor_not_configured' },
         },
         timestamp: new Date().toISOString(),
       })

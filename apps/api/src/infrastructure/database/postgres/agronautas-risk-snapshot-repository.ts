@@ -44,19 +44,7 @@ export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
         computed_at, valid_until, rule_version, stale_cause,
         degradation_reasons, drivers, evidence_refs, summary_payload
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb)
-      ON CONFLICT (id) DO UPDATE SET
-        score = EXCLUDED.score,
-        confidence = EXCLUDED.confidence,
-        level = EXCLUDED.level,
-        freshness = EXCLUDED.freshness,
-        computed_at = EXCLUDED.computed_at,
-        valid_until = EXCLUDED.valid_until,
-        rule_version = EXCLUDED.rule_version,
-        stale_cause = EXCLUDED.stale_cause,
-        degradation_reasons = EXCLUDED.degradation_reasons,
-        drivers = EXCLUDED.drivers,
-        evidence_refs = EXCLUDED.evidence_refs,
-        summary_payload = EXCLUDED.summary_payload`,
+      ON CONFLICT (id) DO NOTHING`,
       [
         snapshot.props.snapshotId,
         snapshot.props.fieldId,

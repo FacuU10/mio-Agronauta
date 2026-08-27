@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Workflow orchestration contracts bridging TS/JS surfaces and Python LangGraph runtime",
+  "scripts": {
+    "build": "tsc"
+  },
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {

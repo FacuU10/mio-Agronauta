@@ -3,7 +3,7 @@ import { getRedisClient } from '../database/redis/client'
 import { getAgronautasRuntimeConfig } from '../config/agronautas-runtime'
 import { createAgronautasTelemetry } from '../observability/agronautas-telemetry'
 import { agronautasScheduledWindowSchema, runtimeJobEnvelopeSchema } from '@repo/zod-schemas'
-import { AGRONAUTAS_RUNTIME_QUEUE_KEY, createAgronautasRiskRecomputeJob, createAgronautasRuntimeJob, createAgronautasScheduledWindowJob } from '@golden/workflows'
+import { AGRONAUTAS_RUNTIME_QUEUE_KEY, createAgronautasRiskRecomputeJob, createAgronautasRuntimeJob, createAgronautasScheduledWindowJob, createAgronautasScheduledWindowRuntimeJob } from '@golden/workflows'
 import type { ScheduledWindowDispatcher, SourceWindow } from '../jobs/agronautas-scheduler'
 
 const telemetry = createAgronautasTelemetry()
@@ -79,22 +79,33 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
     const redis = this.getRedis()
     if (!redis.set) throw new AgronautasRuntimeDispatcherError('Scheduled-window idempotency requires Redis SET NX')
 
-    const job = createAgronautasScheduledWindowJob({
-      window,
-      requestId: `scheduler:${window.runId}`,
-      correlationId: window.runId,
-    })
-    const parsed = agronautasScheduledWindowSchema.parse(job)
+    const runtimeV2Enabled = getAgronautasRuntimeConfig().runtimeV2Enabled
+    const job = runtimeV2Enabled
+      ? createAgronautasScheduledWindowRuntimeJob({
+        provider: window.provider,
+        signalType: window.signalType,
+        windowStart: window.windowStart,
+        windowEnd: window.windowEnd,
+        runId: window.runId,
+        requestId: `scheduler:${window.runId}`,
+        correlationId: window.runId,
+      })
+      : createAgronautasScheduledWindowJob({
+        window,
+        requestId: `scheduler:${window.runId}`,
+        correlationId: window.runId,
+      })
+    const parsed = runtimeV2Enabled ? runtimeJobEnvelopeSchema.parse(job) : agronautasScheduledWindowSchema.parse(job)
     const idempotencyKey = `agronautas:scheduler:idempotency:${window.runId}`
     const acquired = await redis.set(idempotencyKey, parsed.jobId, 'EX', 55 * 60, 'NX')
     if (acquired !== 'OK') {
-      telemetry.onQueueTransition({ jobId: parsed.jobId, runId: parsed.runId, from: 'waiting', to: 'waiting', reason: 'duplicate_run_id' })
+      telemetry.onQueueTransition({ contractVersion: parsed.contractVersion, jobId: parsed.jobId, runId: parsed.runId, from: 'waiting', to: 'waiting', attempt: parsed.lease.attempt, workerId: 'scheduler', leaseExpiresAt: parsed.lease.leaseExpiresAt ?? null, resultStatus: 'waiting', providerMode: 'unavailable', latencyMs: 0, reason: 'duplicate_run_id' })
       return
     }
 
     try {
       await redis.lpush(RUNTIME_QUEUE_NAME, JSON.stringify(parsed))
-      telemetry.onQueueTransition({ jobId: parsed.jobId, runId: parsed.runId, from: 'scheduler', to: 'waiting' })
+      telemetry.onQueueTransition({ contractVersion: parsed.contractVersion, jobId: parsed.jobId, runId: parsed.runId, from: 'scheduler', to: 'waiting', attempt: parsed.lease.attempt, workerId: 'scheduler', leaseExpiresAt: parsed.lease.leaseExpiresAt ?? null, resultStatus: 'waiting', providerMode: 'unavailable', latencyMs: 0 })
     } catch (error) {
       await redis.del?.(idempotencyKey)
       throw error

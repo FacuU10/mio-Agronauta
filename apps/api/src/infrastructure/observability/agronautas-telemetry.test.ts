@@ -50,3 +50,32 @@ test('telemetry drops non-finite metrics and preserves explicit unavailable reas
     status: 'unavailable',
   })
 })
+
+test('transition telemetry retains the bounded metadata needed to explain a durable transition', () => {
+  const attributes = sanitizeTelemetryAttributes({
+    contractVersion: '2.0.0',
+    jobId: 'job-3',
+    runId: 'run-3',
+    from: 'running',
+    to: 'succeeded',
+    attempt: 1,
+    workerId: 'worker-3',
+    leaseExpiresAt: null,
+    resultStatus: 'available',
+    providerMode: 'live',
+    latencyMs: 42,
+  })
+
+  assert.deepEqual(attributes, {
+    contractVersion: '2.0.0',
+    jobId: 'job-3',
+    runId: 'run-3',
+    from: 'running',
+    to: 'succeeded',
+    attempt: 1,
+    workerId: 'worker-3',
+    resultStatus: 'available',
+    providerMode: 'live',
+    latencyMs: 42,
+  })
+})

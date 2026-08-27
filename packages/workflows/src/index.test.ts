@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAgronautasRuntimeJob } from './index.js'
+import { createAgronautasRuntimeJob, createAgronautasScheduledWindowRuntimeJob } from './index.js'
 
 test('createAgronautasRuntimeJob owns v2 identity, trace, lease, and queue defaults', () => {
   const job = createAgronautasRuntimeJob({
@@ -49,4 +49,27 @@ test('createAgronautasRuntimeJob preserves supplied request identity while defau
     causationId: 'run-supplied',
   })
   assert.deepEqual(job.lease, { attempt: 2, maxAttempts: 3, leaseExpiresAt: null })
+})
+
+test('createAgronautasScheduledWindowRuntimeJob emits the shared v2 envelope with source-window lineage', () => {
+  const job = createAgronautasScheduledWindowRuntimeJob({
+    provider: 'open-meteo',
+    signalType: 'climate',
+    windowStart: new Date('2026-08-27T00:00:00.000Z'),
+    windowEnd: new Date('2026-08-27T01:00:00.000Z'),
+    runId: 'window-run-1',
+    requestId: 'window-request-1',
+    idGenerator: () => 'unused',
+  })
+
+  assert.equal(job.contractVersion, '2.0.0')
+  assert.equal(job.operation, 'scheduled-window')
+  assert.equal(job.fieldId, null)
+  assert.deepEqual(job.sourceWindow, {
+    provider: 'open-meteo',
+    signalType: 'climate',
+    windowStart: '2026-08-27T00:00:00.000Z',
+    windowEnd: '2026-08-27T01:00:00.000Z',
+    runId: 'window-run-1',
+  })
 })

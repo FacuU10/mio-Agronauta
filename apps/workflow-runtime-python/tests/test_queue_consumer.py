@@ -12,7 +12,7 @@ import pytest
 
 import worker.queue.consumer as consumer_module
 import worker.main as worker_main
-from worker.queue.consumer import WorkflowQueueConsumer
+from worker.queue.consumer import WorkflowQueueConsumer, adapt_v2_runtime_job
 from worker.core.platform import configure_worker_event_loop, run_worker, worker_event_loop_factory
 
 
@@ -118,6 +118,34 @@ def _scheduled_window_job(*, attempt: int = 1, max_attempts: int = 3) -> dict:
     }
 
 
+def _v2_risk_job() -> dict:
+    return {
+        "contractVersion": "2.0.0",
+        "jobId": "v2-job-123",
+        "runId": "v2-run-123",
+        "operation": "risk-recompute",
+        "fieldId": "field-v2",
+        "requestedAt": "2026-06-05T00:00:00Z",
+        "trace": {"traceId": "trace-v2", "correlationId": "corr-v2", "causationId": "cause-v2"},
+        "runtime": {"mode": "real"},
+        "state": "queued",
+        "lease": {"attempt": 1, "maxAttempts": 3, "leaseExpiresAt": None},
+    }
+
+
+def _v2_scheduled_window_job() -> dict:
+    job = _v2_risk_job()
+    job.update({"jobId": "v2-window-job", "runId": "v2-window-run", "operation": "scheduled-window", "fieldId": None})
+    job["sourceWindow"] = {
+        "provider": "open-meteo",
+        "signalType": "climate",
+        "windowStart": "2026-06-05T00:00:00Z",
+        "windowEnd": "2026-06-05T01:00:00Z",
+        "runId": "v2-window-run",
+    }
+    return job
+
+
 def _job_with_asset_metadata() -> dict:
     job = _job()
     job["payload"]["assetMetadata"] = {
@@ -152,6 +180,67 @@ def test_default_consumer_owns_the_agronautas_bull_queue(monkeypatch: pytest.Mon
 
 def test_consumer_validator_resolves_relative_schema_refs(consumer: WorkflowQueueConsumer) -> None:
     consumer.validator.validate(_job_with_asset_metadata())
+
+
+def test_v2_runtime_job_adapter_emits_the_legacy_worker_shape() -> None:
+    adapted = adapt_v2_runtime_job(_v2_risk_job())
+
+    assert adapted["contractVersion"] == "1.0.0"
+    assert adapted["workflowId"] == "agronautas-risk-recompute"
+    assert adapted["payload"] == {
+        "fieldId": "field-v2",
+        "triggeredBy": "api",
+        "requestedAt": "2026-06-05T00:00:00Z",
+        "runtime": {"mode": "real"},
+    }
+    assert "leaseExpiresAt" not in adapted["lease"]
+
+
+def test_v2_runtime_job_adapter_output_is_accepted_by_the_legacy_validator(consumer: WorkflowQueueConsumer) -> None:
+    job = _v2_risk_job()
+    job["trace"] = {"traceId": "trace-v2-123456789", "correlationId": "corr-v2-123", "causationId": "cause-v2-123"}
+
+    consumer.validator.validate(adapt_v2_runtime_job(job))
+
+
+def test_v2_scheduled_runtime_job_adapter_preserves_window_payload() -> None:
+    adapted = adapt_v2_runtime_job(_v2_scheduled_window_job())
+
+    assert adapted["workflowId"] == "agronautas-scheduled-window"
+    assert adapted["payload"]["sourceWindow"]["runId"] == "v2-window-run"
+    assert adapted["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_consumer_validates_and_routes_v2_risk_envelope_while_preserving_v1_path(consumer: WorkflowQueueConsumer, monkeypatch: pytest.MonkeyPatch) -> None:
+    received: list[dict] = []
+
+    async def fake_run(job):
+        received.append(job)
+        return {"accepted": True, "status": "succeeded", "jobId": job["jobId"], "runId": job["runId"]}
+
+    monkeypatch.setattr(consumer, "_run_agronautas_job", fake_run)
+    result = await consumer.handle_job(_v2_risk_job())
+
+    assert result["status"] == "succeeded"
+    assert received[0]["contractVersion"] == "1.0.0"
+    assert received[0]["payload"]["fieldId"] == "field-v2"
+
+
+@pytest.mark.asyncio
+async def test_consumer_validates_and_routes_v2_scheduled_window_envelope(consumer: WorkflowQueueConsumer, monkeypatch: pytest.MonkeyPatch) -> None:
+    received: list[dict] = []
+
+    async def fake_run(job):
+        received.append(job)
+        return {"accepted": False, "status": "unavailable", "jobId": job["jobId"], "runId": job["runId"]}
+
+    monkeypatch.setattr(consumer, "_run_scheduled_window_job", fake_run)
+    result = await consumer.handle_job(_v2_scheduled_window_job())
+
+    assert result["status"] == "unavailable"
+    assert received[0]["workflowId"] == "agronautas-scheduled-window"
+    assert received[0]["payload"]["sourceWindow"]["provider"] == "open-meteo"
 
 
 def test_worker_entrypoint_starts_the_queue_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,6 +417,25 @@ async def test_scheduled_window_unavailable_is_not_reported_as_success(consumer:
 
 
 @pytest.mark.asyncio
+async def test_scheduled_window_unavailable_has_typed_lineage_metadata(consumer: WorkflowQueueConsumer) -> None:
+    result = await consumer.handle_job(_scheduled_window_job())
+
+    assert result["degradationReasons"] == ["processor_not_configured"]
+    assert result["lineage"]["providerMode"] == "unavailable"
+    assert result["lineage"]["schemaStatus"] == "unavailable"
+    assert "retrievedAt" in result["lineage"]
+
+
+@pytest.mark.asyncio
+async def test_v2_scheduled_window_unavailable_result_is_valid_in_the_v2_envelope(consumer: WorkflowQueueConsumer) -> None:
+    job = _v2_scheduled_window_job()
+    result = await consumer.handle_job(job)
+    job["result"] = result["result"]
+
+    consumer.v2_validator.validate(job)
+
+
+@pytest.mark.asyncio
 async def test_scheduled_window_success_records_result_and_completed_transition(consumer: WorkflowQueueConsumer, monkeypatch: pytest.MonkeyPatch) -> None:
     job = _scheduled_window_job()
     consumer.redis.blmove_payload = json.dumps(job)
@@ -361,6 +469,32 @@ def test_scheduled_window_schema_rejects_duplicate_identity() -> None:
 
 def test_v2_consumer_exposes_one_persistence_before_ack_coordinator() -> None:
     assert hasattr(WorkflowQueueConsumer, "persist_outcome_before_ack")
+
+
+@pytest.mark.asyncio
+async def test_failure_fallback_uses_the_coordinator_once_and_does_not_call_store_directly(consumer: WorkflowQueueConsumer) -> None:
+    payload = json.dumps(_job(attempt=1, max_attempts=2))
+    consumer.redis.lists[consumer.processing_queue_name] = [payload]
+    coordinator_calls: list[str] = []
+
+    class Coordinator:
+        async def persist_outcome_before_ack(self, job, result):
+            coordinator_calls.append(result["status"])
+            return result
+
+    class ForbiddenStore:
+        async def schedule_retry(self, *args, **kwargs):
+            raise AssertionError("consumer must not schedule retries directly")
+
+        async def dead_letter(self, *args, **kwargs):
+            raise AssertionError("consumer must not dead-letter directly")
+
+    consumer.outcome_coordinator = Coordinator()
+    consumer.job_store = ForbiddenStore()
+    await consumer._handle_failure(payload, TimeoutError("upstream timed out"))
+
+    assert coordinator_calls == ["retryable_failure"]
+    assert json.loads(consumer.redis.lists[consumer.queue_name][0])["lease"]["attempt"] == 2
 
 
 @pytest.mark.asyncio

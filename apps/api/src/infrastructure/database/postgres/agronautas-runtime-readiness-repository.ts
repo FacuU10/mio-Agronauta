@@ -3,7 +3,7 @@ import { getPostgresPool } from './pool'
 
 export interface AgronautasWorkerReadiness {
   workerHealthy: boolean
-  durableCapability?: 'available' | 'unavailable'
+  durableCapability?: 'available' | 'unavailable' | 'not_configured'
   latestHeartbeatAt: string | null
   latestLeaseExpiresAt: string | null
   latestJobId: string | null

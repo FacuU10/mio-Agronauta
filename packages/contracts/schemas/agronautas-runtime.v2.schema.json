@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.agronautas.local/agronautas-runtime.v2.schema.json",
   "title": "Agronautas Runtime Contract v2",
+  "$ref": "#/$defs/RuntimeJobEnvelope",
   "type": "object",
   "$defs": {
     "RuntimeState": {
@@ -194,7 +195,38 @@
         },
         "state": { "$ref": "#/$defs/RuntimeState" },
         "lease": { "$ref": "#/$defs/LeaseMetadata" },
+        "sourceWindow": { "$ref": "#/$defs/SourceWindow" },
         "result": { "$ref": "#/$defs/RiskRuntimeResult" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "scheduled-window" } } },
+          "then": {
+            "properties": { "sourceWindow": {} },
+            "required": ["sourceWindow"]
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "risk-recompute" } } },
+          "then": {
+            "not": {
+              "properties": { "sourceWindow": {} },
+              "required": ["sourceWindow"]
+            }
+          }
+        }
+      ]
+    },
+    "SourceWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "signalType", "windowStart", "windowEnd", "runId"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "signalType": { "enum": ["climate", "satellite", "weather_alert", "fire", "soil"] },
+        "windowStart": { "type": "string", "format": "date-time" },
+        "windowEnd": { "type": "string", "format": "date-time" },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 160 }
       }
     },
     "TransitionCase": {

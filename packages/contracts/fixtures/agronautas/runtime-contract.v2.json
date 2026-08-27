@@ -80,6 +80,13 @@
         "runtime": { "mode": "real" },
         "state": "succeeded",
         "lease": { "attempt": 1, "maxAttempts": 1, "leaseExpiresAt": null },
+        "sourceWindow": {
+          "provider": "open-meteo",
+          "signalType": "climate",
+          "windowStart": "2026-08-27T11:00:00.000Z",
+          "windowEnd": "2026-08-27T12:00:00.000Z",
+          "runId": "run-window-001"
+        },
         "result": {
           "status": "unavailable",
           "freshness": "missing",

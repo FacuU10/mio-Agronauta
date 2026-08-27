@@ -132,8 +132,9 @@ class PostgresAgronautasJobStore:
 class RuntimeOutcomeCoordinator:
     """Owns the single durable outcome transition before Redis can be ACKed."""
 
-    def __init__(self, job_store: PostgresAgronautasJobStore | None) -> None:
+    def __init__(self, job_store: PostgresAgronautasJobStore | None, redis: Redis | None = None) -> None:
         self.job_store = job_store
+        self.redis = redis
 
     async def claim(self, job: dict[str, Any]) -> bool:
         if self.job_store is None:
@@ -156,6 +157,8 @@ class RuntimeOutcomeCoordinator:
 
     async def persist_outcome_before_ack(self, job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         if self.job_store is None:
+            if result.get("status") == "dlq" and self.redis is not None:
+                await self.redis.hset("agronautas:job-runs:dlq", str(job["jobId"]), json.dumps(result))
             return result
 
         job_id = str(job["jobId"])
@@ -205,7 +208,7 @@ async def handle_agronautas_job(
     worker_id: str | None = None,
     outcome_coordinator: RuntimeOutcomeCoordinator | None = None,
 ) -> dict[str, Any]:
-    coordinator = outcome_coordinator or RuntimeOutcomeCoordinator(job_store)
+    coordinator = outcome_coordinator or RuntimeOutcomeCoordinator(job_store, redis)
     payload = job["payload"]
     job_id = job["jobId"]
     run_id = job["runId"]
@@ -280,6 +283,18 @@ async def handle_agronautas_job(
             snapshot=snapshot,
         )
 
+        lineage = {
+            "sourceRunIds": [run_id],
+            "providerRunIds": [str(weather.get("source_run_id") or run_id)],
+            "retrievedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "observedAt": str(weather["observed_at"]),
+            "forecastAt": None,
+            "providerMode": "live" if mode == "real" else "mock",
+            "units": {"rainfall": "mm", "temperature": "celsius"},
+            "httpStatus": 200,
+            "schemaStatus": "valid",
+            "lastSuccessfulObservedAt": str(weather["observed_at"]),
+        }
         result = {
             "accepted": True,
             "status": "succeeded",
@@ -288,6 +303,12 @@ async def handle_agronautas_job(
             "runId": run_id,
             "jobId": job_id,
             "snapshot": snapshot,
+            "engine": {
+                "id": snapshot["engineId"],
+                "version": snapshot["engineVersion"],
+                "selectionStatus": snapshot["selectionStatus"],
+                "calibrationStatus": snapshot["calibrationStatus"],
+            },
             "lineage": {
                 "sourceRunIds": [run_id],
                 "providerRunIds": [str(weather.get("source_run_id") or run_id)],
@@ -298,6 +319,21 @@ async def handle_agronautas_job(
                 "engineVersion": snapshot["engineVersion"],
                 "riskSnapshotId": snapshot["snapshotId"],
                 "alertSnapshotIds": [],
+            },
+            "result": {
+                "status": "available",
+                "freshness": snapshot["freshness"],
+                "confidence": snapshot["confidence"],
+                "uncertainty": "not_calibrated",
+                "degradationReasons": snapshot["degradationReasons"],
+                "lineage": lineage,
+                "engine": {
+                    "id": snapshot["engineId"],
+                    "version": snapshot["engineVersion"],
+                    "selectionStatus": snapshot["selectionStatus"],
+                    "calibrationStatus": snapshot["calibrationStatus"],
+                },
+                "risk": {"score": snapshot["score"], "level": snapshot["level"], "drivers": snapshot["drivers"]},
             },
         }
         await coordinator.persist_outcome_before_ack(job, result)
@@ -330,11 +366,8 @@ async def handle_agronautas_job(
             "jobId": job_id,
             "error": str(error),
         }
-        if exhausted:
-            await redis.hset("agronautas:job-runs:dlq", job_id, json.dumps(result))
-        else:
+        if not exhausted:
             result["nextAttempt"] = attempt + 1
-
         await coordinator.persist_outcome_before_ack(job, result)
 
     await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
@@ -378,7 +411,7 @@ async def handle_scheduled_window_job(
     if end <= start:
         raise ValueError("scheduled_window_end_must_follow_start")
 
-    coordinator = outcome_coordinator or RuntimeOutcomeCoordinator(job_store)
+    coordinator = outcome_coordinator or RuntimeOutcomeCoordinator(job_store, redis)
     if job_store is not None:
         claimed = await coordinator.claim(job)
         if not claimed:
@@ -391,12 +424,29 @@ async def handle_scheduled_window_job(
             await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
             return result
 
+    lineage = {
+        "sourceRunIds": [job["runId"]],
+        "providerRunIds": [f"{source_window['provider']}:{job['runId']}"],
+        "retrievedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "observedAt": None,
+        "forecastAt": None,
+        "providerMode": "unavailable",
+        "units": {"status": "not_available"},
+        "httpStatus": None,
+        "schemaStatus": "unavailable",
+        "lastSuccessfulObservedAt": None,
+    }
     result = {
         "accepted": False,
         "status": "unavailable",
         "reason": "scheduled_window_processor_not_configured",
         "runId": job["runId"],
         "jobId": job["jobId"],
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["processor_not_configured"],
+        "lineage": lineage,
+        "result": {"status": "unavailable", "freshness": "missing", "uncertainty": "not_calibrated", "degradationReasons": ["processor_not_configured"], "lineage": lineage},
     }
     await coordinator.persist_outcome_before_ack(job, result)
     await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
@@ -500,6 +550,8 @@ def compute_risk_snapshot(
         "ruleVersion": OPEN_METEO_RULE_VERSION,
         "engineId": OPEN_METEO_RULE_VERSION,
         "engineVersion": OPEN_METEO_RULE_VERSION,
+        "selectionStatus": "undecided",
+        "calibrationStatus": "not_established",
         "staleCause": None,
         "degradationReasons": [],
         "drivers": [
@@ -516,8 +568,10 @@ def compute_risk_snapshot(
             "observedAt": observed_at,
             "sourceRunId": source_run_id or run_id,
             "acquiredAt": acquired_at or observed_at,
-            "engineId": OPEN_METEO_RULE_VERSION,
-            "engineVersion": OPEN_METEO_RULE_VERSION,
+                         "engineId": OPEN_METEO_RULE_VERSION,
+                         "engineVersion": OPEN_METEO_RULE_VERSION,
+                         "selectionStatus": "undecided",
+                         "calibrationStatus": "not_established",
             "sourceRunIds": [run_id],
             "acquisitionTimes": [acquired_at or observed_at],
             "rainfallMm7d": rainfall_mm_7d,
@@ -546,23 +600,7 @@ async def persist_successful_snapshot(
                     "fieldId", "signalType", "runId", "staleCause", "startedAt", "finishedAt", "observedAt", "evidencePayload", "degradationReason"
                 ) VALUES (gen_random_uuid()::text, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
                           %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
-                ON CONFLICT (run_id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    stale_cause = EXCLUDED.stale_cause,
-                    finished_at = EXCLUDED.finished_at,
-                    observed_at = EXCLUDED.observed_at,
-                    evidence_payload = EXCLUDED.evidence_payload,
-                    degradation_reason = EXCLUDED.degradation_reason,
-                    "fieldId" = EXCLUDED."fieldId",
-                    provider = EXCLUDED.provider,
-                    "signalType" = EXCLUDED."signalType",
-                    "runId" = EXCLUDED."runId",
-                    "staleCause" = EXCLUDED."staleCause",
-                    "startedAt" = EXCLUDED."startedAt",
-                    "finishedAt" = EXCLUDED."finishedAt",
-                    "observedAt" = EXCLUDED."observedAt",
-                    "evidencePayload" = EXCLUDED."evidencePayload",
-                    "degradationReason" = EXCLUDED."degradationReason"
+                ON CONFLICT (run_id) DO NOTHING
                 """,
                 (
                     field_id,
@@ -611,28 +649,7 @@ async def persist_successful_snapshot(
                     "degradationReasons", "evidenceRefs", "summaryPayload"
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
                           %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)
-                ON CONFLICT (id) DO UPDATE SET
-                    score = EXCLUDED.score,
-                    confidence = EXCLUDED.confidence,
-                    level = EXCLUDED.level,
-                    freshness = EXCLUDED.freshness,
-                    computed_at = EXCLUDED.computed_at,
-                    valid_until = EXCLUDED.valid_until,
-                    rule_version = EXCLUDED.rule_version,
-                    stale_cause = EXCLUDED.stale_cause,
-                    degradation_reasons = EXCLUDED.degradation_reasons,
-                    drivers = EXCLUDED.drivers,
-                    evidence_refs = EXCLUDED.evidence_refs,
-                    summary_payload = EXCLUDED.summary_payload,
-                    "fieldId" = EXCLUDED."fieldId",
-                    "runId" = EXCLUDED."runId",
-                    "computedAt" = EXCLUDED."computedAt",
-                    "validUntil" = EXCLUDED."validUntil",
-                    "ruleVersion" = EXCLUDED."ruleVersion",
-                    "staleCause" = EXCLUDED."staleCause",
-                    "degradationReasons" = EXCLUDED."degradationReasons",
-                    "evidenceRefs" = EXCLUDED."evidenceRefs",
-                    "summaryPayload" = EXCLUDED."summaryPayload"
+                ON CONFLICT (id) DO NOTHING
                 """,
                 (
                     snapshot["snapshotId"],

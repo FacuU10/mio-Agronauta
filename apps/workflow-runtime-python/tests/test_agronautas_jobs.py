@@ -204,6 +204,12 @@ async def test_handle_agronautas_job_persists_success_without_mock_snapshot(monk
     assert result["snapshot"]["ruleVersion"] == "open-meteo-basic-v1"
     assert result["snapshot"]["engineId"] == "open-meteo-basic-v1"
     assert result["snapshot"]["engineVersion"] == "open-meteo-basic-v1"
+    assert result["engine"] == {
+        "id": "open-meteo-basic-v1",
+        "version": "open-meteo-basic-v1",
+        "selectionStatus": "undecided",
+        "calibrationStatus": "not_established",
+    }
     assert result["snapshot"]["evidenceRefs"] == ["signal_ingestion_runs:open-meteo:climate:run-1"]
     assert result["lineage"] == {
         "sourceRunIds": ["run-1"],
@@ -337,7 +343,14 @@ async def test_handle_scheduled_window_keeps_unconfigured_provider_explicitly_un
 
     result = await handle_scheduled_window_job(job, redis, logger)
 
-    assert result == {"accepted": False, "status": "unavailable", "reason": "scheduled_window_processor_not_configured", "runId": job["runId"], "jobId": job["jobId"]}
+    assert result["accepted"] is False
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "scheduled_window_processor_not_configured"
+    assert result["degradationReasons"] == ["processor_not_configured"]
+    assert result["freshness"] == "missing"
+    assert result["uncertainty"] == "not_calibrated"
+    assert result["lineage"]["providerMode"] == "unavailable"
+    assert "risk" not in result
 
 
 @pytest.mark.asyncio
@@ -373,6 +386,8 @@ def test_compute_risk_snapshot_uses_weather_inputs() -> None:
     assert snapshot["score"] >= 70
     assert snapshot["level"] == "high"
     assert snapshot["ruleVersion"] == "open-meteo-basic-v1"
+    assert snapshot["selectionStatus"] == "undecided"
+    assert snapshot["calibrationStatus"] == "not_established"
 
 
 @pytest.mark.asyncio
@@ -486,6 +501,42 @@ async def test_persist_successful_snapshot_dual_writes_prisma_and_legacy_lineage
     assert risk_params[0] == snapshot["snapshotId"]
     assert risk_params[1] == "field-1"
     assert risk_params[2] == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_persistence_never_rewrites_historical_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[str] = []
+
+    class Cursor:
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return None
+        async def execute(self, sql, _params): queries.append(sql)
+
+    class Connection:
+        def cursor(self): return Cursor()
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return None
+        async def commit(self): return None
+
+    async def fake_connect(_dsn: str): return Connection()
+    monkeypatch.setattr("worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect", fake_connect)
+    from worker.runtime.agronautas_jobs import persist_successful_snapshot
+
+    snapshot = compute_risk_snapshot(field_id="field-1", run_id="run-immutable", observed_at="2026-06-05T00:00:00Z", rainfall_mm_7d=1, temperature_max_c=28, temperature_min_c=18)
+    await persist_successful_snapshot(
+        postgres_dsn="postgres://test",
+        field_id="field-1",
+        run_id="run-immutable",
+        requested_at="2026-06-05T00:00:00Z",
+        weather={"observed_at": "2026-06-05T00:00:00Z", "source_url": "https://api.open-meteo.com/test", "raw": {}},
+        snapshot=snapshot,
+    )
+
+    assert len(queries) == 2
+    assert "ON CONFLICT (run_id) DO NOTHING" in queries[0]
+    assert "ON CONFLICT (id) DO NOTHING" in queries[1]
+    assert "DO UPDATE" not in queries[0]
+    assert "DO UPDATE" not in queries[1]
 
 
 def test_v2_job_runtime_exposes_a_single_outcome_transition_coordinator() -> None:

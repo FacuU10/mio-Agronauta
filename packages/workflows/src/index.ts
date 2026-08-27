@@ -46,6 +46,15 @@ export interface AgronautasRuntimeJob {
     maxAttempts: number
     leaseExpiresAt: string | null
   }
+  sourceWindow?: AgronautasRuntimeSourceWindow
+}
+
+export interface AgronautasRuntimeSourceWindow {
+  provider: string
+  signalType: AgronautasScheduledWindowSignalType
+  windowStart: string
+  windowEnd: string
+  runId: string
 }
 
 export interface AgronautasRuntimeJobFactoryInput {
@@ -63,6 +72,7 @@ export interface AgronautasRuntimeJobFactoryInput {
     maxAttempts?: number
     leaseExpiresAt?: string | null
   }
+  sourceWindow?: AgronautasRuntimeSourceWindow
 }
 
 export const JOB_STATUS = {
@@ -252,7 +262,50 @@ export function createAgronautasRuntimeJob(input: AgronautasRuntimeJobFactoryInp
       maxAttempts: input.lease?.maxAttempts ?? AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS,
       leaseExpiresAt: input.lease?.leaseExpiresAt ?? null,
     },
+    ...(input.sourceWindow ? { sourceWindow: input.sourceWindow } : {}),
   }
+}
+
+export function createAgronautasScheduledWindowRuntimeJob(input: {
+  provider: string
+  signalType: AgronautasScheduledWindowSignalType
+  windowStart: Date
+  windowEnd: Date
+  runId: string
+  jobId?: string
+  requestId?: string
+  correlationId?: string
+  createdAt?: Date
+  lease?: Pick<JobLease, 'attempt' | 'maxAttempts'>
+  idGenerator?: () => string
+}): AgronautasRuntimeJob {
+  const createdAt = input.createdAt ?? new Date()
+  if (input.windowEnd.getTime() <= input.windowStart.getTime()) {
+    throw new Error('scheduled_window_end_must_follow_start')
+  }
+  if (input.runId.trim().length === 0) {
+    throw new Error('scheduled_window_run_id_required')
+  }
+
+  return createAgronautasRuntimeJob({
+    fieldId: null,
+    operation: 'scheduled-window',
+    runtimeMode: 'real',
+    requestedAt: createdAt,
+    jobId: input.jobId ?? `agronautas-window:${input.runId}`,
+    runId: input.runId,
+    requestId: input.requestId ?? `scheduler:${input.runId}`,
+    correlationId: input.correlationId ?? input.runId,
+    lease: input.lease,
+    idGenerator: input.idGenerator,
+    sourceWindow: {
+      provider: input.provider,
+      signalType: input.signalType,
+      windowStart: input.windowStart.toISOString(),
+      windowEnd: input.windowEnd.toISOString(),
+      runId: input.runId,
+    },
+  })
 }
 
 export function createAgronautasScheduledWindowJob(input: {

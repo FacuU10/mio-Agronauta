@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PostgresAgronautasJobRunRepository } from './agronautas-job-run-repository'
+import { adaptLegacyJobRunRow, PostgresAgronautasJobRunRepository } from './agronautas-job-run-repository'
 
 interface LeaseClaim {
   claimed: boolean
@@ -177,4 +177,61 @@ test('exhausted retry transitions to a durable dead-letter record', async () => 
   assert.match(capturedSql, /dlq|dead.?letter/i)
   assert.match(capturedSql, /WHERE\s+"jobId"\s*=.*"runId"\s*=/i)
   assert.deepEqual(capturedParams.slice(0, 2), ['job-1', 'run-1'])
+})
+
+test('legacy terminal methods require the lease owner and write contract succeeded instead of completed', async () => {
+  const queries: Array<{ sql: string; params: unknown[] }> = []
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string, params?: unknown[]) {
+      queries.push({ sql, params: params ?? [] })
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  await repository.markCompleted('job-1', new Date('2026-08-04T00:03:00.000Z'), { status: 'succeeded' }, 'worker-1')
+  await repository.markHeartbeat('job-1', new Date('2026-08-04T00:03:00.000Z'), 'worker-1')
+
+  assert.match(queries[0]?.sql ?? '', /status\s*=\s*'succeeded'/i)
+  assert.doesNotMatch(queries[0]?.sql ?? '', /status\s*=\s*'completed'/i)
+  assert.match(queries[0]?.sql ?? '', /lease_owner\s*=\s*\$[0-9]+/i)
+  assert.equal(queries[0]?.params.at(-1), 'worker-1')
+  assert.match(queries[1]?.sql ?? '', /lease_owner\s*=\s*\$[0-9]+/i)
+})
+
+test('all legacy mutating methods reject the null-owner bypass', async () => {
+  const queries: Array<{ sql: string; params: unknown[] }> = []
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string, params?: unknown[]) {
+      queries.push({ sql, params: params ?? [] })
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  await repository.markRunning('job-1', new Date('2026-08-04T00:01:00.000Z'), 'worker-1')
+  await repository.markHeartbeat('job-1', new Date('2026-08-04T00:02:00.000Z'), 'worker-1')
+  await repository.markFailed('job-1', new Date('2026-08-04T00:03:00.000Z'), 'provider_timeout', 'timed out', 'worker-1')
+
+  assert.equal(queries.length, 3)
+  for (const query of queries) {
+    assert.match(query.sql, /lease_owner\s*=\s*\$[0-9]+/i)
+    assert.doesNotMatch(query.sql, /lease_owner\s+IS\s+NULL|\$[0-9]+::text\s+IS\s+NULL/i)
+    assert.equal(query.params.at(-1), 'worker-1')
+  }
+})
+
+test('legacy completed rows remain readable as succeeded without changing the stored status', () => {
+  const adapted = adaptLegacyJobRunRow({
+    jobId: 'job-legacy',
+    runId: 'run-legacy',
+    status: 'completed',
+    resultPayload: { status: 'succeeded' },
+  })
+
+  assert.deepEqual(adapted, {
+    jobId: 'job-legacy',
+    runId: 'run-legacy',
+    status: 'succeeded',
+    legacyStatus: 'completed',
+    resultPayload: { status: 'succeeded' },
+  })
 })

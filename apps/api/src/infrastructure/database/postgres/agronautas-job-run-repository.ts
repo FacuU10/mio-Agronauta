@@ -21,6 +21,18 @@ export interface RuntimeTransitionInput {
   errorMessage?: string
 }
 
+export interface LegacyJobRunDbRow {
+  jobId: string
+  runId: string
+  status: string
+  resultPayload: Record<string, unknown>
+}
+
+export interface LegacyJobRunRead extends Omit<LegacyJobRunDbRow, 'status'> {
+  status: RuntimeTransitionState
+  legacyStatus?: 'completed'
+}
+
 const LEGAL_TRANSITIONS: Readonly<Record<RuntimeTransitionState, readonly RuntimeTransitionState[]>> = {
   queued: ['leased'],
   leased: ['running'],
@@ -63,23 +75,39 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
     telemetry.onJobRunPersisted({ fieldId: record.fieldId, runId: record.runId, jobId: record.jobId, status: record.status })
   }
 
-  async markRunning(jobId: string, startedAt: Date): Promise<void> {
-    await this.pool.query("UPDATE agronautas_job_runs SET status = 'running', \"startedAt\" = $2 WHERE \"jobId\" = $1 AND status IN ('queued', 'leased', 'waiting')", [jobId, startedAt])
+  async markRunning(jobId: string, startedAt: Date, workerId: string): Promise<void> {
+    await this.pool.query("UPDATE agronautas_job_runs SET status = 'running', \"startedAt\" = $2 WHERE \"jobId\" = $1 AND status IN ('queued', 'leased', 'waiting') AND lease_owner = $3", [jobId, startedAt, workerId])
   }
 
-  async markHeartbeat(jobId: string, heartbeatAt: Date): Promise<void> {
-    await this.pool.query("UPDATE agronautas_job_runs SET \"heartbeatAt\" = $2 WHERE \"jobId\" = $1 AND status IN ('leased', 'running') AND (lease_expires_at IS NULL OR lease_expires_at >= $2)", [jobId, heartbeatAt])
+  async markHeartbeat(jobId: string, heartbeatAt: Date, workerId: string): Promise<void> {
+    await this.pool.query("UPDATE agronautas_job_runs SET \"heartbeatAt\" = $2 WHERE \"jobId\" = $1 AND status IN ('leased', 'running') AND lease_owner = $3 AND (lease_expires_at IS NULL OR lease_expires_at >= $2)", [jobId, heartbeatAt, workerId])
   }
 
-  async markCompleted(jobId: string, completedAt: Date, resultPayload: Record<string, unknown>): Promise<void> {
-    await this.pool.query("UPDATE agronautas_job_runs SET status = 'completed', \"completedAt\" = $2, \"resultPayload\" = $3, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status IN ('leased', 'running')", [jobId, completedAt, resultPayload])
+  async markCompleted(jobId: string, completedAt: Date, resultPayload: Record<string, unknown>, workerId: string): Promise<void> {
+    await this.pool.query("UPDATE agronautas_job_runs SET status = 'succeeded', \"completedAt\" = $2, \"resultPayload\" = $3, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status IN ('leased', 'running') AND lease_owner = $4", [jobId, completedAt, resultPayload, workerId])
   }
 
-  async markFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void> {
+  async markFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string, workerId: string): Promise<void> {
     await this.pool.query(
-      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status NOT IN ('completed', 'dlq')",
+      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status NOT IN ('succeeded', 'dlq') AND lease_owner = $5",
+      [jobId, failedAt, errorCode, errorMessage, workerId],
+    )
+  }
+
+  async markDispatchFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4 WHERE \"jobId\" = $1 AND status = 'queued' AND lease_owner IS NULL",
       [jobId, failedAt, errorCode, errorMessage],
     )
+  }
+
+  async getByJobId(jobId: string): Promise<LegacyJobRunRead | null> {
+    const result = await this.pool.query(
+      'SELECT "jobId", "runId", status, "resultPayload" FROM agronautas_job_runs WHERE "jobId" = $1 LIMIT 1',
+      [jobId],
+    )
+    const row = result.rows[0] as LegacyJobRunDbRow | undefined
+    return row ? adaptLegacyJobRunRow(row) : null
   }
 
   async claim(jobId: string, workerId: string, now: Date, leaseSeconds: number): Promise<AgronautasJobClaim> {
@@ -160,4 +188,16 @@ function toDate(value: unknown): Date | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null
   const date = new Date(value)
   return Number.isFinite(date.getTime()) ? date : null
+}
+
+export function adaptLegacyJobRunRow(row: LegacyJobRunDbRow): LegacyJobRunRead {
+  if (row.status === 'completed') {
+    return { ...row, status: 'succeeded', legacyStatus: 'completed' }
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(LEGAL_TRANSITIONS, row.status)) {
+    throw new Error(`Unsupported Agronautas job status: ${row.status}`)
+  }
+
+  return { ...row, status: row.status as RuntimeTransitionState }
 }

@@ -37,6 +37,35 @@ test('PostgresRiskSnapshotRepository persists auditable fields in save payload',
   assert.equal(typeof calls[0]?.params[14], 'string')
 })
 
+test('risk snapshot persistence never overwrites a historical snapshot id', async () => {
+  let capturedSql = ''
+  const repository = new PostgresRiskSnapshotRepository({
+    async query(sql: string) {
+      capturedSql = sql
+      return { rows: [] }
+    },
+  } as never)
+
+  await repository.save(
+    new RiskSnapshotFoundation({
+      snapshotId: 'snapshot-history',
+      fieldId: 'field-1',
+      runId: 'run-history',
+      score: 20,
+      confidence: 0.5,
+      computedAt: new Date('2026-06-03T06:00:00.000Z'),
+      validUntil: new Date('2026-06-03T12:00:00.000Z'),
+      ruleVersion: 'risk-v0',
+      degradationReasons: [],
+      drivers: [],
+      evidenceRefs: ['history:run-history'],
+    }),
+  )
+
+  assert.match(capturedSql, /ON CONFLICT\s*\(id\)\s+DO NOTHING/i)
+  assert.doesNotMatch(capturedSql, /DO UPDATE/i)
+})
+
 test('legacy snapshot adapter preserves the historical foundation and keeps engine selection undecided', () => {
   const adapted = adaptLegacyRiskSnapshotRow({
     id: 'snapshot-1',
