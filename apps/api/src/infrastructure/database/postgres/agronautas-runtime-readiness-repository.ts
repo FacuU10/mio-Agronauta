@@ -3,6 +3,7 @@ import { getPostgresPool } from './pool'
 
 export interface AgronautasWorkerReadiness {
   workerHealthy: boolean
+  durableCapability?: 'available' | 'unavailable'
   latestHeartbeatAt: string | null
   latestLeaseExpiresAt: string | null
   latestJobId: string | null
@@ -27,6 +28,7 @@ export class PostgresAgronautasRuntimeReadinessRepository {
     if (!latest) {
       return {
         workerHealthy: false,
+        durableCapability: 'unavailable',
         latestHeartbeatAt: null,
         latestLeaseExpiresAt: null,
         latestJobId: null,
@@ -47,6 +49,7 @@ export class PostgresAgronautasRuntimeReadinessRepository {
 
     return {
       workerHealthy,
+      durableCapability: workerHealthy ? 'available' : 'unavailable',
       latestHeartbeatAt: heartbeatAt.toISOString(),
       latestLeaseExpiresAt: leaseExpiresAt?.toISOString() ?? null,
       latestJobId: latest['jobId'] == null ? null : String(latest['jobId']),

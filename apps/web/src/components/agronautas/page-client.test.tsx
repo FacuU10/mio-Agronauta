@@ -14,7 +14,14 @@ test('apiClient usa BFF versionado por defecto', async () => {
   const previousFetch = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     capturedUrls.push(String(input))
-    return new Response(JSON.stringify({ mode: 'demo', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0' }), {
+    return new Response(JSON.stringify({
+      mode: 'demo',
+      routePrefix: '/agronautas',
+      compatibilityPrefix: '/agronautas/v1',
+      contractVersion: '1.0.0',
+      scheduler: { enabled: false, status: 'disabled' },
+      worker: { status: 'unavailable', reason: 'worker_not_configured' },
+    }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })

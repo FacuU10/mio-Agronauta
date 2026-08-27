@@ -40,9 +40,9 @@ Chain strategy: size-exception
 
 ## Phase 3: Integration, Refactor, and Acceptance
 
-- [ ] 3.1 Modify `apps/api/src/infrastructure/database/postgres/agronautas-runtime-readiness-repository.ts`, `apps/api/src/presentation/routes/health.ts`, and `apps/api/src/infrastructure/observability/agronautas-telemetry.ts`; expose durable worker capability, disabled/unavailable states, bounded transition metrics, and no secrets/raw payloads.
-- [ ] 3.2 Refactor after GREEN: align formula-envelope fixtures for `risk-v0` and `open-meteo-basic-v1` without parity claims; run `pnpm --dir packages/contracts validate:schemas; pnpm test; pnpm build; pytest apps/workflow-runtime-python`.
+- [x] 3.1 Modify `apps/api/src/infrastructure/database/postgres/agronautas-runtime-readiness-repository.ts`, `apps/api/src/presentation/routes/health.ts`, and `apps/api/src/infrastructure/observability/agronautas-telemetry.ts`; expose durable worker capability, disabled/unavailable states, bounded transition metrics, and no secrets/raw payloads.
+- [x] 3.2 Refactor after GREEN: align formula-envelope fixtures for `risk-v0` and `open-meteo-basic-v1` without parity claims; run `pnpm --dir packages/contracts validate:schemas; pnpm test; pnpm build; pytest apps/workflow-runtime-python`.
 - [ ] 3.3 Extend `apps/api/src/scripts/verify-agronautas-runtime-real.ts` with an authorized API→Redis→worker→Postgres restart harness; run `pnpm --dir apps/api verify:agronautas:runtime` and record local/live/seam/mock/unavailable evidence. Keep production worker/queue/cron proof separate; never infer locally.
-- [ ] 3.4 Rollback: disable the capability flag and scheduler, confirm legacy reads/historical rows remain intact, and document no management/identity, marketplace, provider/economics, Iberá, engine-selection, or model-accuracy changes.
+- [x] 3.4 Rollback: disable the capability flag and scheduler, confirm legacy reads/historical rows remain intact, and document no management/identity, marketplace, provider/economics, Iberá, engine-selection, or model-accuracy changes.
 
 Threat-matrix rows in design are all `N/A`; no additional threat RED tasks apply.

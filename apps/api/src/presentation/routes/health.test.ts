@@ -195,6 +195,7 @@ test('GET /ready reports an unavailable worker without claiming it is healthy wh
     required: false,
     healthy: null,
     status: 'unavailable',
+    durableCapability: 'not_configured',
     reason: 'worker_not_configured',
     latestHeartbeatAt: null,
     latestLeaseExpiresAt: null,

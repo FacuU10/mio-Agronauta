@@ -143,7 +143,7 @@ test('risk-engine vectors record divergence and keep canonical selection undecid
     canonicalEngine: { status: string; engineId: string | null }
     vectors: Array<{
       id: string
-      expectedByEngine: Record<string, { score: number; confidence: number; validityHours: number; freshness: string }>
+      expectedByEngine: Record<string, { score: number; confidence: number; validityHours: number; freshness: string; envelopeVersion: string }>
       comparison: { status: string; differences: string[]; parityClaim: boolean }
     }>
   }
@@ -152,6 +152,10 @@ test('risk-engine vectors record divergence and keep canonical selection undecid
   assert.equal(riskEngineSchema.$defs.CanonicalEngineGate.properties.engineId.const, null)
   assert.deepEqual(vectors.canonicalEngine, { status: 'undecided', engineId: null })
   assert.ok(vectors.vectors.length >= 2)
+
+  for (const engine of vectors.vectors.flatMap((vector) => Object.values(vector.expectedByEngine))) {
+    assert.equal(engine.envelopeVersion, '2.0.0')
+  }
 
   for (const vector of vectors.vectors) {
     assert.deepEqual(Object.keys(vector.expectedByEngine).sort(), ['open-meteo-basic-v1', 'risk-v0'])

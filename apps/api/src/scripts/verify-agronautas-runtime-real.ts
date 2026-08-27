@@ -57,12 +57,14 @@ export interface RuntimeVerificationConfig {
 
 export interface RuntimeVerificationManifest {
   verifier: 'agronautas-real-runtime-evidence-v1'
+  contractVersion: '2.0.0'
   runId: string
   startedAt: string
   finishedAt: string
   status: 'complete' | 'blocked' | 'incomplete'
   productionProven: false
   providerLiveEvidence: boolean
+  durableOutcomeBeforeAck: true
   blockedCapabilities: RuntimeCheckName[]
   notRunCapabilities: RuntimeCheckName[]
   unavailableCapabilities: RuntimeCheckName[]
@@ -184,12 +186,15 @@ export function buildRuntimeManifest(input: ManifestInput): RuntimeVerificationM
 
   return {
     verifier: 'agronautas-real-runtime-evidence-v1',
+    contractVersion: '2.0.0',
     runId: input.runId,
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
     status,
     productionProven: false,
     providerLiveEvidence: input.providerLiveEvidence ?? false,
+    // This records the local contract boundary; it is not production proof.
+    durableOutcomeBeforeAck: true,
     blockedCapabilities,
     notRunCapabilities,
     unavailableCapabilities,

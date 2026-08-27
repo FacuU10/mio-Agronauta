@@ -123,6 +123,9 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         required: config.runtimeRequired,
         healthy: config.runtimeRequired ? worker?.workerHealthy ?? false : null,
         status: workerStatus,
+        durableCapability: config.runtimeRequired
+          ? worker?.durableCapability ?? (worker?.workerHealthy ? 'available' : 'unavailable')
+          : 'not_configured',
         reason: worker?.workerHealthy
           ? undefined
           : config.runtimeRequired ? 'worker_heartbeat_not_available' : 'worker_not_configured',

@@ -50,13 +50,15 @@
           "score": 79.5,
           "confidence": 0.8,
           "validityHours": 6,
-          "freshness": "fresh"
+          "freshness": "fresh",
+          "envelopeVersion": "2.0.0"
         },
         "open-meteo-basic-v1": {
           "score": 80,
           "confidence": 0.74,
           "validityHours": 24,
-          "freshness": "fresh"
+          "freshness": "fresh",
+          "envelopeVersion": "2.0.0"
         }
       },
       "comparison": {
@@ -96,13 +98,15 @@
           "score": 6.5,
           "confidence": 0.8,
           "validityHours": 6,
-          "freshness": "fresh"
+          "freshness": "fresh",
+          "envelopeVersion": "2.0.0"
         },
         "open-meteo-basic-v1": {
           "score": 0,
           "confidence": 0.74,
           "validityHours": 24,
-          "freshness": "fresh"
+          "freshness": "fresh",
+          "envelopeVersion": "2.0.0"
         }
       },
       "comparison": {

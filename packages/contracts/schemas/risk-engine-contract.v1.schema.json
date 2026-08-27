@@ -64,7 +64,7 @@
     },
     "ExpectedOutput": {
       "type": "object",
-      "required": ["score", "confidence", "validityHours", "freshness"],
+      "required": ["score", "confidence", "validityHours", "freshness", "envelopeVersion"],
       "properties": {
         "score": {
           "type": "number",
@@ -82,6 +82,9 @@
         },
         "freshness": {
           "enum": ["fresh", "degraded", "stale"]
+        },
+        "envelopeVersion": {
+          "const": "2.0.0"
         }
       },
       "additionalProperties": false
