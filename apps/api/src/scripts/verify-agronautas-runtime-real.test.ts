@@ -184,3 +184,15 @@ test('auth evidence is available only after real field and explicit 401/200 obse
   assert.equal(result.claims.authenticatedStatus200, true)
   assert.equal(result.claims.authenticatedChat200, true)
 })
+
+test('runtime verification records the v2 contract and durable outcome boundary', () => {
+  const manifest = buildRuntimeManifest({
+    runId: 'runtime-v2-contract',
+    startedAt: '2026-08-27T00:00:00.000Z',
+    finishedAt: '2026-08-27T00:01:00.000Z',
+    checks: { worker_tests: { status: 'pass', detail: 'AJV/Zod/Python contract validation' } },
+  }) as { contractVersion?: string; durableOutcomeBeforeAck?: boolean }
+
+  assert.equal(manifest.contractVersion, '2.0.0')
+  assert.equal(manifest.durableOutcomeBeforeAck, true)
+})

@@ -357,3 +357,7 @@ def test_scheduled_window_schema_rejects_duplicate_identity() -> None:
 
     with pytest.raises(Exception):
         consumer_module.validate_scheduled_window_job(job)
+
+
+def test_v2_consumer_exposes_one_persistence_before_ack_coordinator() -> None:
+    assert hasattr(WorkflowQueueConsumer, "persist_outcome_before_ack")

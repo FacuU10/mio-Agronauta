@@ -291,6 +291,28 @@ test('GET /ready stays a dependency-readiness boundary, not on-demand acquisitio
   assert.equal('persistence' in body, false)
 })
 
+test('GET /ready exposes the v2 durable worker capability separately from process liveness', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => true,
+    checkRedis: async () => true,
+    getConfig: () => ({ ...baseConfig, runtimeRequired: true }),
+    getWorkerReadiness: async () => ({
+      workerHealthy: true,
+      latestHeartbeatAt: '2026-08-27T00:00:00.000Z',
+      latestLeaseExpiresAt: '2026-08-27T00:05:00.000Z',
+      latestJobId: 'job-1',
+      latestRunId: 'run-1',
+      durableCapability: 'available',
+    }),
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as { worker?: { durableCapability?: string } }
+  assert.equal(body.worker?.durableCapability, 'available')
+})
+
 async function request(app: express.Express, path: string) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))

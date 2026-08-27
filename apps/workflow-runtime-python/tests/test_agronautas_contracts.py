@@ -11,6 +11,8 @@ SCHEMA_PATH = ROOT / "packages" / "contracts" / "schemas" / "agronautas-contract
 MATRIX_PATH = ROOT / "packages" / "contracts" / "fixtures" / "agronautas" / "validation-matrix.v1.json"
 RISK_ENGINE_SCHEMA_PATH = ROOT / "packages" / "contracts" / "schemas" / "risk-engine-contract.v1.schema.json"
 RISK_ENGINE_VECTORS_PATH = ROOT / "packages" / "contracts" / "risk-engine" / "golden-vectors.json"
+RUNTIME_SCHEMA_PATH = ROOT / "packages" / "contracts" / "schemas" / "agronautas-runtime.v2.schema.json"
+RUNTIME_FIXTURE_PATH = ROOT / "packages" / "contracts" / "fixtures" / "agronautas" / "runtime-contract.v2.json"
 
 
 def _validate(schema: dict, payload):
@@ -79,6 +81,56 @@ MATRIX = json.loads(MATRIX_PATH.read_text(encoding="utf-8"))
 
 
 class AgronautasContractTests(unittest.TestCase):
+    def test_python_validates_the_shared_v2_runtime_fixture(self):
+        schema = json.loads(RUNTIME_SCHEMA_PATH.read_text(encoding="utf-8"))
+        fixture = json.loads(RUNTIME_FIXTURE_PATH.read_text(encoding="utf-8"))
+        for case in fixture["cases"]:
+            validator = Draft202012Validator({"$defs": schema["$defs"], "$ref": f"#/$defs/{case['contract']}"})
+            errors = list(validator.iter_errors(case["payload"]))
+            self.assertEqual(not errors, case["valid"], case["name"])
+
+        self.assertEqual(fixture["cases"][0]["payload"]["contractVersion"], "2.0.0")
+        self.assertEqual(fixture["cases"][0]["payload"]["result"]["engine"]["selectionStatus"], "undecided")
+
+        legal_transitions = {
+            ("queued", "leased"),
+            ("leased", "running"),
+            ("running", "succeeded"),
+            ("running", "failed"),
+            ("running", "waiting"),
+            ("running", "dlq"),
+            ("running", "cancelled"),
+            ("waiting", "leased"),
+        }
+        for transition in fixture["transitions"]:
+            self.assertEqual((transition["from"], transition["to"]) in legal_transitions, transition["legal"], transition["name"])
+
+        for duplicate in fixture["duplicates"]:
+            self.assertEqual(duplicate["existing"] == duplicate["incoming"], duplicate["idempotent"], duplicate["name"])
+
+        for lease in fixture["leaseReclaims"]:
+            reclaimable = lease["state"] == "leased" and lease["leaseExpiresAt"] <= lease["now"]
+            self.assertEqual(reclaimable, lease["reclaimable"], lease["name"])
+
+        for lineage in fixture["lineageCases"]:
+            both_dates_are_observations = lineage["observedAt"] is not None and lineage["forecastAt"] is not None
+            self.assertEqual(not both_dates_are_observations, lineage["valid"], lineage["name"])
+
+        for reason in fixture["reasonCases"]:
+            is_typed = reason["value"] in schema["$defs"]["DegradationReason"]["enum"]
+            self.assertEqual(is_typed, reason["valid"], reason["name"])
+
+        for outcome in fixture["availabilityCases"]:
+            payload = outcome["payload"]
+            if payload.get("status") == "unavailable":
+                reasons = payload.get("degradationReasons")
+                truthful = "risk" not in payload and isinstance(reasons, list) and 0 < len(reasons) <= 8 and all(
+                    reason in schema["$defs"]["DegradationReason"]["enum"] for reason in reasons
+                )
+            else:
+                truthful = payload.get("status") in {"available", "degraded"} and "risk" in payload and "engine" in payload
+            self.assertEqual(truthful, outcome["valid"], outcome["name"])
+
     def test_boundary_placeholder_is_present(self):
         boundary = ROOT_SCHEMA["$defs"]["CorrientesRiceZoneBoundaryMetadata"]
         self.assertIn("placeholder-pending-ingest", boundary["properties"]["normalizationStatus"]["enum"])

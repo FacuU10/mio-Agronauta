@@ -145,3 +145,97 @@ test('RedisAgronautasRuntimeDispatcher publishes the Agronautas Bull queue envel
   assert.equal((payload as Record<string, unknown> | null)?.['runId'], 'run-queue')
   assert.deepEqual((payload as Record<string, unknown> | null)?.['lease'], { attempt: 1, maxAttempts: 3 })
 })
+
+test('RequestRiskRecomputeUseCase admits v2 through the capability flag without changing the BFF result shape', async () => {
+  const previousFlag = process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+  process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = 'true'
+
+  try {
+    let queued: Record<string, unknown> | null = null
+    let dispatched: Record<string, unknown> | null = null
+    const useCase = new RequestRiskRecomputeUseCase(
+      {
+        async acquire(_fieldId, _ttl, metadata) { return { acquired: true, metadata } },
+        async release() {},
+      },
+      {
+        async dispatchRiskRecompute(command) { dispatched = command as unknown as Record<string, unknown> },
+      },
+      {
+        async saveQueuedRun(record) { queued = record as unknown as Record<string, unknown> },
+        async markRunning() {},
+        async markHeartbeat() {},
+        async markCompleted() {},
+        async markFailed() {},
+      },
+      {
+        idGenerator: (() => {
+          const ids = ['run-v2', 'job-v2', 'trace-v2']
+          return () => ids.shift() ?? 'overflow'
+        })(),
+      },
+    )
+
+    const result = await useCase.execute('field-v2', 'api', { requestId: 'request-v2' })
+    const dispatchedRecord = dispatched as unknown as Record<string, unknown>
+    const queuedRecord = queued as unknown as Record<string, unknown>
+    const runtimeJob = dispatchedRecord['runtimeJob'] as Record<string, unknown>
+
+    assert.deepEqual(result, {
+      status: 'enqueued',
+      runId: 'run-v2',
+      jobId: 'agro-job-job-v2',
+      requestId: 'request-v2',
+      contractVersion: '2.0.0',
+    })
+    assert.equal(queuedRecord['contractVersion'], '2.0.0')
+    assert.deepEqual(queuedRecord['lease'], { attempt: 1, maxAttempts: 3 })
+    assert.equal(runtimeJob['contractVersion'], '2.0.0')
+    assert.equal(runtimeJob['jobId'], result.jobId)
+    assert.equal(runtimeJob['runId'], result.runId)
+    assert.deepEqual(runtimeJob['trace'], { traceId: 'request-v2', correlationId: 'request-v2', causationId: 'run-v2' })
+    assert.deepEqual(runtimeJob['lease'], { attempt: 1, maxAttempts: 3, leaseExpiresAt: null })
+  } finally {
+    if (previousFlag === undefined) delete process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+    else process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = previousFlag
+  }
+})
+
+test('RedisAgronautasRuntimeDispatcher emits the v2 envelope only when enabled', async () => {
+  const previousFlag = process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+  process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = 'true'
+
+  try {
+    let queueName = ''
+    let payload: Record<string, unknown> | null = null
+    const dispatcher = new RedisAgronautasRuntimeDispatcher({
+      async lpush(key, value) {
+        queueName = key
+        payload = JSON.parse(value) as Record<string, unknown>
+        return 1
+      },
+    })
+
+    await dispatcher.dispatchRiskRecompute({
+      contractVersion: '2.0.0',
+      jobId: 'job-v2-dispatch',
+      runId: 'run-v2-dispatch',
+      fieldId: 'field-v2-dispatch',
+      triggeredBy: 'api',
+      requestId: 'request-v2-dispatch',
+      correlationId: 'correlation-v2-dispatch',
+      requestedAt: new Date('2026-08-27T00:00:00.000Z'),
+      runtimeMode: 'real',
+    })
+
+    const payloadRecord = payload as unknown as Record<string, unknown>
+    assert.equal(queueName, 'bull:agronautas-runtime:wait')
+    assert.equal(payloadRecord['contractVersion'], '2.0.0')
+    assert.equal(payloadRecord['operation'], 'risk-recompute')
+    assert.equal(payloadRecord['state'], 'queued')
+    assert.deepEqual(payloadRecord['lease'], { attempt: 1, maxAttempts: 3, leaseExpiresAt: null })
+  } finally {
+    if (previousFlag === undefined) delete process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+    else process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = previousFlag
+  }
+})

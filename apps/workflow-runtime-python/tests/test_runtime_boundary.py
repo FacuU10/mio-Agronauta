@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from jsonschema import Draft202012Validator, FormatChecker
 from worker.contracts import PACKAGED_SCHEMA_DIRECTORY, build_contract_validator, resolve_contracts_root
 
 
 ROOT = Path(__file__).resolve().parents[3]
 CONTRACTS_ROOT = ROOT / "packages" / "contracts" / "schemas"
+FIXTURE_PATH = ROOT / "packages" / "contracts" / "fixtures" / "agronautas" / "runtime-contract.v2.json"
 
 
 def test_contract_validator_resolves_relative_refs_from_installed_contract_root() -> None:
@@ -77,3 +80,19 @@ def test_packaged_contract_root_resolves_external_refs_without_repo_cwd() -> Non
             "lease": {"attempt": 1, "maxAttempts": 3},
         }
     )
+
+
+def test_python_consumes_the_same_v2_fixture_and_schema_as_the_typescript_contract_suite() -> None:
+    schema = json.loads((CONTRACTS_ROOT / "agronautas-runtime.v2.schema.json").read_text(encoding="utf-8"))
+    fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    validators = {
+        name: Draft202012Validator({**schema, "$ref": f"#/$defs/{name}"}, format_checker=FormatChecker())
+        for name in {case["contract"] for case in fixture["cases"]}
+    }
+
+    for case in fixture["cases"]:
+        errors = list(validators[case["contract"]].iter_errors(case["payload"]))
+        assert (not errors) is case["valid"], case["name"]
+
+    assert fixture["cases"][0]["payload"]["contractVersion"] == "2.0.0"
+    assert fixture["cases"][0]["payload"]["result"]["engine"]["selectionStatus"] == "undecided"

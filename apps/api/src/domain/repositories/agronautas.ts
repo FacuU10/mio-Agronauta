@@ -1,4 +1,5 @@
 import type { DemoContactSubmission } from '@repo/zod-schemas'
+import type { AgronautasRuntimeJob } from '@golden/workflows'
 import type {
   ClimateSummary,
   Field,
@@ -182,6 +183,7 @@ export interface AgronautasRuntimeDispatchCommand {
   requestedAt: Date
   runtimeMode: 'real' | 'demo'
   lease?: AgronautasJobLease
+  runtimeJob?: AgronautasRuntimeJob
 }
 
 export interface AgronautasRuntimeDispatcher {

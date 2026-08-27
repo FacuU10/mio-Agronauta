@@ -486,3 +486,9 @@ async def test_persist_successful_snapshot_dual_writes_prisma_and_legacy_lineage
     assert risk_params[0] == snapshot["snapshotId"]
     assert risk_params[1] == "field-1"
     assert risk_params[2] == "run-1"
+
+
+def test_v2_job_runtime_exposes_a_single_outcome_transition_coordinator() -> None:
+    import worker.runtime.agronautas_jobs as agronautas_jobs
+
+    assert hasattr(agronautas_jobs, "RuntimeOutcomeCoordinator")

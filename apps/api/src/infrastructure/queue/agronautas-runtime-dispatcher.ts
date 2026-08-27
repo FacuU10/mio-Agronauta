@@ -1,8 +1,9 @@
 import type { AgronautasRuntimeDispatchCommand, AgronautasRuntimeDispatcher } from '../../domain/repositories/agronautas'
 import { getRedisClient } from '../database/redis/client'
+import { getAgronautasRuntimeConfig } from '../config/agronautas-runtime'
 import { createAgronautasTelemetry } from '../observability/agronautas-telemetry'
-import { agronautasScheduledWindowSchema } from '@repo/zod-schemas'
-import { AGRONAUTAS_RUNTIME_QUEUE_KEY, createAgronautasRiskRecomputeJob, createAgronautasScheduledWindowJob } from '@golden/workflows'
+import { agronautasScheduledWindowSchema, runtimeJobEnvelopeSchema } from '@repo/zod-schemas'
+import { AGRONAUTAS_RUNTIME_QUEUE_KEY, createAgronautasRiskRecomputeJob, createAgronautasRuntimeJob, createAgronautasScheduledWindowJob } from '@golden/workflows'
 import type { ScheduledWindowDispatcher, SourceWindow } from '../jobs/agronautas-scheduler'
 
 const telemetry = createAgronautasTelemetry()
@@ -35,8 +36,26 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
     })
 
     try {
-      const job = createAgronautasRiskRecomputeJob(command)
-      await this.getRedis().lpush(RUNTIME_QUEUE_NAME, JSON.stringify(job))
+      const runtimeV2Enabled = getAgronautasRuntimeConfig().runtimeV2Enabled
+      const job = runtimeV2Enabled
+        ? command.runtimeJob ?? createAgronautasRuntimeJob({
+          fieldId: command.fieldId,
+          operation: 'risk-recompute',
+          runtimeMode: command.runtimeMode,
+          requestedAt: command.requestedAt,
+          jobId: command.jobId,
+          runId: command.runId,
+          requestId: command.requestId,
+          correlationId: command.correlationId,
+          lease: command.lease ? {
+            attempt: command.lease.attempt,
+            maxAttempts: command.lease.maxAttempts,
+            leaseExpiresAt: command.lease.leaseExpiresAt?.toISOString() ?? null,
+          } : undefined,
+        })
+        : createAgronautasRiskRecomputeJob(command)
+      const serializedJob = runtimeV2Enabled ? runtimeJobEnvelopeSchema.parse(job) : job
+      await this.getRedis().lpush(RUNTIME_QUEUE_NAME, JSON.stringify(serializedJob))
       telemetry.onDispatchPublished({
         fieldId: command.fieldId,
         runId: command.runId,

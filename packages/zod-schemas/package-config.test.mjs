@@ -166,7 +166,7 @@ test('built ESM re-export targets exist and dist entrypoint imports in Node', as
 
   assert.deepEqual(
     reExportSpecifiers,
-    ['./example.js', './agronautas.js'],
+    ['./example.js', './agronautas.js', './agronautas-runtime.js'],
     'dist/index.js should re-export exactly the built schema modules with explicit .js specifiers',
   )
 
@@ -177,4 +177,5 @@ test('built ESM re-export targets exist and dist entrypoint imports in Node', as
   const schemaModule = await import(pathToFileURL(distIndexPath).href)
   assert.equal(typeof schemaModule.exampleSchema?.parse, 'function')
   assert.equal(typeof schemaModule.fieldIntakeSchema?.parse, 'function')
+  assert.equal(typeof schemaModule.runtimeJobEnvelopeSchema?.parse, 'function')
 })

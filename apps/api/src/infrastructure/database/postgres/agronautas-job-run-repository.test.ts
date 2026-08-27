@@ -97,6 +97,16 @@ test('retry persists the next attempt without losing the run identity', async ()
   assert.deepEqual(capturedParams.slice(0, 2), ['job-1', 'run-1'])
 })
 
+test('v2 transition coordinator owns the durable outcome before any ACK boundary', () => {
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query() {
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  assert.equal(typeof (repository as unknown as { transition?: unknown }).transition, 'function')
+})
+
 test('exhausted retry transitions to a durable dead-letter record', async () => {
   let capturedSql = ''
   let capturedParams: unknown[] = []

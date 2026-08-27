@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   AGRONAUTAS_CONTRACT_VERSION,
   dashboardSnapshotSchema,
@@ -44,6 +46,9 @@ import {
   hydrologyIberaSourceProvenanceSchema,
   hydrologyIberaCoverageSummarySchema,
 } from './agronautas.js'
+import { runtimeJobEnvelopeSchema } from './agronautas-runtime.js'
+
+const runtimeContractFixture = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'fixtures', 'agronautas', 'runtime-contract.v2.json'), 'utf8'))
 
 const planningRequestFixture = {
   contractVersion: 'agronautas-campaign-planning-context-v1' as const,
@@ -876,4 +881,15 @@ test('provider evidence envelopes reject provider-specific unit drift and stale 
   assert.equal(evidenceEnvelopeSchema.safeParse({ ...base, units: { temperature: 'F', precipitation: 'mm/day' } }).success, false)
   assert.equal(evidenceEnvelopeSchema.safeParse({ ...base, freshness: 'stale', lastSuccessfulObservedAt: null }).success, false)
   assert.equal(evidenceEnvelopeSchema.safeParse({ ...base, freshness: 'stale', lastSuccessfulObservedAt: '2026-08-20T00:00:00.000Z' }).success, true)
+})
+
+test('v2 runtime fixture preserves durable identity and undecided engine selection', () => {
+  const contractCase = runtimeContractFixture.cases.find((item: { name: string }) => item.name === 'valid-risk-recompute')
+  assert.ok(contractCase)
+  const parsed = runtimeJobEnvelopeSchema.parse(contractCase.payload)
+
+  assert.equal(parsed.contractVersion, '2.0.0')
+  assert.equal(parsed.jobId, 'job-risk-001')
+  assert.equal(parsed.runId, 'run-risk-001')
+  assert.equal(parsed.result?.engine?.selectionStatus, 'undecided')
 })

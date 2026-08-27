@@ -1,0 +1,318 @@
+{
+  "contractVersion": "2.0.0",
+  "cases": [
+    {
+      "name": "valid-risk-recompute",
+      "contract": "RuntimeJobEnvelope",
+      "valid": true,
+      "payload": {
+        "contractVersion": "2.0.0",
+        "jobId": "job-risk-001",
+        "runId": "run-risk-001",
+        "operation": "risk-recompute",
+        "fieldId": "field-001",
+        "requestedAt": "2026-08-27T11:55:00.000Z",
+        "trace": { "traceId": "trace-risk-001", "correlationId": "corr-risk-001", "causationId": "cause-risk-001" },
+        "runtime": { "mode": "real" },
+        "state": "succeeded",
+        "lease": { "attempt": 1, "maxAttempts": 3, "leaseExpiresAt": "2026-08-27T12:05:00.000Z" },
+        "result": {
+          "status": "available",
+          "freshness": "fresh",
+          "confidence": 0.72,
+          "uncertainty": "not_calibrated",
+          "degradationReasons": [],
+          "lineage": {
+            "sourceRunIds": ["run-risk-001"],
+            "providerRunIds": ["provider-open-meteo-001"],
+            "retrievedAt": "2026-08-27T11:59:00.000Z",
+            "observedAt": null,
+            "forecastAt": "2026-08-27T12:00:00.000Z",
+            "providerMode": "live",
+            "units": { "temperature": "C", "rainfall": "mm" },
+            "httpStatus": 200,
+            "schemaStatus": "valid",
+            "lastSuccessfulObservedAt": null
+          },
+          "engine": { "id": "risk-v0", "version": "1.0.0", "selectionStatus": "undecided", "calibrationStatus": "not_established" },
+          "risk": { "score": 44, "level": "medium", "drivers": [{ "key": "rainfall_load", "value": 0.4 }] }
+        }
+      }
+    },
+    {
+      "name": "invalid-missing-job-id",
+      "contract": "RuntimeJobEnvelope",
+      "valid": false,
+      "payload": {
+        "contractVersion": "2.0.0",
+        "runId": "run-missing-job",
+        "operation": "risk-recompute",
+        "fieldId": "field-001",
+        "requestedAt": "2026-08-27T11:55:00.000Z",
+        "trace": { "traceId": "trace-1", "correlationId": "corr-1", "causationId": "cause-1" },
+        "runtime": { "mode": "real" },
+        "state": "queued",
+        "lease": { "attempt": 1, "maxAttempts": 3, "leaseExpiresAt": null }
+      }
+    },
+    {
+      "name": "invalid-lease-attempt-exceeds-budget",
+      "contract": "LeaseMetadata",
+      "valid": false,
+      "payload": {
+        "attempt": 4,
+        "maxAttempts": 3,
+        "leaseExpiresAt": "2026-08-27T12:05:00.000Z"
+      }
+    },
+    {
+      "name": "valid-scheduled-window-unavailable",
+      "contract": "RuntimeJobEnvelope",
+      "valid": true,
+      "payload": {
+        "contractVersion": "2.0.0",
+        "jobId": "job-window-001",
+        "runId": "run-window-001",
+        "operation": "scheduled-window",
+        "fieldId": null,
+        "requestedAt": "2026-08-27T12:00:00.000Z",
+        "trace": { "traceId": "trace-window-001", "correlationId": "corr-window-001", "causationId": "cause-window-001" },
+        "runtime": { "mode": "real" },
+        "state": "succeeded",
+        "lease": { "attempt": 1, "maxAttempts": 1, "leaseExpiresAt": null },
+        "result": {
+          "status": "unavailable",
+          "freshness": "missing",
+          "uncertainty": "not_calibrated",
+          "degradationReasons": ["processor_not_configured"],
+          "lineage": {
+            "sourceRunIds": ["run-window-001"],
+            "providerRunIds": ["provider-window-001"],
+            "retrievedAt": "2026-08-27T12:00:00.000Z",
+            "observedAt": null,
+            "forecastAt": null,
+            "providerMode": "unavailable",
+            "units": { "status": "not_available" },
+            "httpStatus": null,
+            "schemaStatus": "unavailable",
+            "lastSuccessfulObservedAt": null
+          }
+        }
+      }
+    },
+    {
+      "name": "invalid-unavailable-result-has-risk",
+      "contract": "RiskRuntimeResult",
+      "valid": false,
+      "payload": {
+        "status": "unavailable",
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["provider_unavailable"],
+        "lineage": {
+          "sourceRunIds": ["run-invalid"],
+          "providerRunIds": ["provider-invalid"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": null,
+          "forecastAt": null,
+          "providerMode": "unavailable",
+          "units": { "status": "not_available" },
+          "httpStatus": null,
+          "schemaStatus": "unavailable",
+          "lastSuccessfulObservedAt": null
+        },
+        "risk": { "score": 0, "level": "low", "drivers": [] }
+      }
+    },
+    {
+      "name": "valid-unavailable-result",
+      "contract": "RiskRuntimeResult",
+      "valid": true,
+      "unavailableWithoutRisk": true,
+      "payload": {
+        "status": "unavailable",
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["worker_unavailable"],
+        "lineage": {
+          "sourceRunIds": ["run-unavailable"],
+          "providerRunIds": ["provider-unavailable"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": null,
+          "forecastAt": null,
+          "providerMode": "unavailable",
+          "units": { "status": "not_available" },
+          "httpStatus": null,
+          "schemaStatus": "unavailable",
+          "lastSuccessfulObservedAt": null
+        }
+      }
+    },
+    {
+      "name": "invalid-unavailable-result-without-reason",
+      "contract": "RiskRuntimeResult",
+      "valid": false,
+      "payload": {
+        "status": "unavailable",
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": [],
+        "lineage": {
+          "sourceRunIds": ["run-unavailable-no-reason"],
+          "providerRunIds": ["provider-unavailable-no-reason"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": null,
+          "forecastAt": null,
+          "providerMode": "unavailable",
+          "units": { "status": "not_available" },
+          "httpStatus": null,
+          "schemaStatus": "unavailable",
+          "lastSuccessfulObservedAt": null
+        }
+      }
+    },
+    {
+      "name": "invalid-confidence-above-bound",
+      "contract": "RiskRuntimeResult",
+      "valid": false,
+      "payload": {
+        "status": "available",
+        "freshness": "fresh",
+        "confidence": 1.1,
+        "uncertainty": "not_calibrated",
+        "degradationReasons": [],
+        "lineage": {
+          "sourceRunIds": ["run-confidence"],
+          "providerRunIds": ["provider-confidence"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": "2026-08-27T11:00:00.000Z",
+          "forecastAt": null,
+          "providerMode": "live",
+          "units": { "temperature": "C" },
+          "httpStatus": 200,
+          "schemaStatus": "valid",
+          "lastSuccessfulObservedAt": "2026-08-27T11:00:00.000Z"
+        },
+        "engine": { "id": "risk-v0", "version": "1.0.0", "selectionStatus": "undecided", "calibrationStatus": "not_established" },
+        "risk": { "score": 20, "level": "low", "drivers": [] }
+      }
+    },
+    {
+      "name": "invalid-stale-without-latest-good-lineage",
+      "contract": "RiskRuntimeResult",
+      "valid": false,
+      "payload": {
+        "status": "degraded",
+        "freshness": "stale",
+        "confidence": 0.2,
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["stale_provider_data"],
+        "lineage": {
+          "sourceRunIds": ["run-stale"],
+          "providerRunIds": ["provider-stale"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": "2026-08-27T08:00:00.000Z",
+          "forecastAt": null,
+          "providerMode": "live",
+          "units": { "temperature": "C" },
+          "httpStatus": 200,
+          "schemaStatus": "valid",
+          "lastSuccessfulObservedAt": null
+        },
+        "engine": { "id": "risk-v0", "version": "1.0.0", "selectionStatus": "undecided", "calibrationStatus": "not_established" },
+        "risk": { "score": 20, "level": "low", "drivers": [] }
+      }
+    },
+    {
+      "name": "invalid-forecast-is-observation",
+      "contract": "RiskRuntimeResult",
+      "valid": false,
+      "payload": {
+        "status": "available",
+        "freshness": "fresh",
+        "confidence": 0.5,
+        "uncertainty": "not_calibrated",
+        "degradationReasons": [],
+        "lineage": {
+          "sourceRunIds": ["run-forecast"],
+          "providerRunIds": ["provider-forecast"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": "2026-08-27T11:00:00.000Z",
+          "forecastAt": "2026-08-27T13:00:00.000Z",
+          "providerMode": "live",
+          "units": { "temperature": "C" },
+          "httpStatus": 200,
+          "schemaStatus": "valid",
+          "lastSuccessfulObservedAt": "2026-08-27T11:00:00.000Z"
+        },
+        "engine": { "id": "risk-v0", "version": "1.0.0", "selectionStatus": "undecided", "calibrationStatus": "not_established" },
+        "risk": { "score": 20, "level": "low", "drivers": [] }
+      }
+    },
+    {
+      "name": "invalid-untyped-reason",
+      "contract": "RiskRuntimeResult",
+      "valid": false,
+      "payload": {
+        "status": "unavailable",
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["made_up_reason"],
+        "lineage": {
+          "sourceRunIds": ["run-reason"],
+          "providerRunIds": ["provider-reason"],
+          "retrievedAt": "2026-08-27T12:00:00.000Z",
+          "observedAt": null,
+          "forecastAt": null,
+          "providerMode": "unavailable",
+          "units": { "status": "not_available" },
+          "httpStatus": null,
+          "schemaStatus": "unavailable",
+          "lastSuccessfulObservedAt": null
+        }
+      }
+    }
+  ],
+  "transitions": [
+    { "name": "queued-to-leased", "from": "queued", "to": "leased", "legal": true },
+    { "name": "leased-to-running", "from": "leased", "to": "running", "legal": true },
+    { "name": "running-to-succeeded", "from": "running", "to": "succeeded", "legal": true },
+    { "name": "running-to-failed", "from": "running", "to": "failed", "legal": true },
+    { "name": "running-to-waiting", "from": "running", "to": "waiting", "legal": true },
+    { "name": "running-to-dlq", "from": "running", "to": "dlq", "legal": true },
+    { "name": "running-to-cancelled", "from": "running", "to": "cancelled", "legal": true },
+    { "name": "waiting-to-leased", "from": "waiting", "to": "leased", "legal": true },
+    { "name": "queued-to-running", "from": "queued", "to": "running", "legal": false },
+    { "name": "waiting-to-succeeded", "from": "waiting", "to": "succeeded", "legal": false },
+    { "name": "succeeded-to-leased", "from": "succeeded", "to": "leased", "legal": false }
+  ],
+  "duplicates": [
+    { "name": "same-job-and-run-is-idempotent", "existing": { "jobId": "job-1", "runId": "run-1" }, "incoming": { "jobId": "job-1", "runId": "run-1" }, "idempotent": true },
+    { "name": "same-job-new-run-is-not-a-duplicate", "existing": { "jobId": "job-1", "runId": "run-1" }, "incoming": { "jobId": "job-1", "runId": "run-2" }, "idempotent": false }
+  ],
+  "leaseReclaims": [
+    { "name": "expired-lease-is-reclaimable", "state": "leased", "leaseExpiresAt": "2026-08-27T11:00:00.000Z", "now": "2026-08-27T12:00:00.000Z", "reclaimable": true },
+    { "name": "active-lease-is-not-reclaimable", "state": "leased", "leaseExpiresAt": "2026-08-27T13:00:00.000Z", "now": "2026-08-27T12:00:00.000Z", "reclaimable": false }
+  ],
+  "lineageCases": [
+    { "name": "forecast-never-becomes-observed", "observedAt": null, "forecastAt": "2026-08-27T13:00:00.000Z", "valid": true },
+    { "name": "observed-value-has-no-forecast-date", "observedAt": "2026-08-27T11:00:00.000Z", "forecastAt": null, "valid": true },
+    { "name": "both-observation-and-forecast-are-invalid", "observedAt": "2026-08-27T11:00:00.000Z", "forecastAt": "2026-08-27T13:00:00.000Z", "valid": false }
+  ],
+  "reasonCases": [
+    { "name": "provider-timeout-is-typed", "value": "provider_timeout", "valid": true },
+    { "name": "processor-unavailable-is-typed", "value": "processor_not_configured", "valid": true },
+    { "name": "scheduler-disabled-is-typed", "value": "scheduler-disabled", "valid": true },
+    { "name": "credential-license-blocked-is-typed", "value": "credential/license-blocked", "valid": true },
+    { "name": "retryable-transport-is-typed", "value": "retryable-transport", "valid": true },
+    { "name": "exhausted-failure-is-typed", "value": "exhausted-failure", "valid": true },
+    { "name": "engine-undecided-is-typed", "value": "engine-undecided", "valid": true },
+    { "name": "unknown-reason-is-rejected", "value": "unknown_reason", "valid": false }
+  ],
+  "availabilityCases": [
+    { "name": "available-result-requires-risk", "payload": { "status": "available", "confidence": 0.5, "engine": {}, "risk": {} }, "valid": true },
+    { "name": "unavailable-result-has-no-risk", "payload": { "status": "unavailable", "degradationReasons": ["worker_unavailable"] }, "valid": true },
+    { "name": "unavailable-result-requires-reason", "payload": { "status": "unavailable", "degradationReasons": [] }, "valid": false },
+    { "name": "unavailable-result-with-risk-is-invalid", "payload": { "status": "unavailable", "risk": { "score": 0 } }, "valid": false }
+  ]
+}

@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto'
+
 export const WORKFLOW_CONTRACT_VERSION = '1.0.0' as const
+export const AGRONAUTAS_RUNTIME_CONTRACT_V2 = '2.0.0' as const
 export const AGRONAUTAS_RUNTIME_WORKFLOW_ID = 'agronautas-risk-recompute' as const
 export const AGRONAUTAS_RUNTIME_KIND = 'agronautas-risk-recompute' as const
 export const AGRONAUTAS_SCHEDULED_WINDOW_WORKFLOW_ID = 'agronautas-scheduled-window' as const
@@ -14,6 +17,53 @@ export type AgronautasScheduledWindowSignalType = (typeof AGRONAUTAS_SCHEDULED_W
 export const AGRONAUTAS_RUNTIME_QUEUE_NAME = 'agronautas-runtime' as const
 export const AGRONAUTAS_RUNTIME_QUEUE_KEY = `bull:${AGRONAUTAS_RUNTIME_QUEUE_NAME}:wait` as const
 export const AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS = 3 as const
+
+export const AGRONAUTAS_RUNTIME_OPERATIONS = {
+  RISK_RECOMPUTE: 'risk-recompute',
+  SCHEDULED_WINDOW: 'scheduled-window',
+} as const
+
+export type AgronautasRuntimeOperation = (typeof AGRONAUTAS_RUNTIME_OPERATIONS)[keyof typeof AGRONAUTAS_RUNTIME_OPERATIONS]
+
+export interface AgronautasRuntimeJob {
+  contractVersion: typeof AGRONAUTAS_RUNTIME_CONTRACT_V2
+  jobId: string
+  runId: string
+  operation: AgronautasRuntimeOperation
+  fieldId: string | null
+  requestedAt: string
+  trace: {
+    traceId: string
+    correlationId: string
+    causationId: string
+  }
+  runtime: {
+    mode: 'real' | 'demo'
+  }
+  state: 'queued' | 'leased' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'dlq' | 'cancelled'
+  lease: {
+    attempt: number
+    maxAttempts: number
+    leaseExpiresAt: string | null
+  }
+}
+
+export interface AgronautasRuntimeJobFactoryInput {
+  fieldId: string | null
+  operation: AgronautasRuntimeOperation
+  runtimeMode: 'real' | 'demo'
+  requestedAt?: Date
+  jobId?: string
+  runId?: string
+  requestId?: string
+  correlationId?: string
+  idGenerator?: () => string
+  lease?: {
+    attempt?: number
+    maxAttempts?: number
+    leaseExpiresAt?: string | null
+  }
+}
 
 export const JOB_STATUS = {
   PENDING: 'pending',
@@ -177,6 +227,32 @@ export function createAgronautasRiskRecomputeJob(input: {
       operation: 'risk-recompute',
     },
   };
+}
+
+export function createAgronautasRuntimeJob(input: AgronautasRuntimeJobFactoryInput): AgronautasRuntimeJob {
+  const generateId = input.idGenerator ?? randomUUID
+  const runId = input.runId ?? generateId()
+  const jobId = input.jobId ?? `agro-job-${generateId()}`
+  const traceId = input.requestId ?? generateId()
+  const correlationId = input.correlationId ?? traceId
+  const requestedAt = input.requestedAt ?? new Date()
+
+  return {
+    contractVersion: AGRONAUTAS_RUNTIME_CONTRACT_V2,
+    jobId,
+    runId,
+    operation: input.operation,
+    fieldId: input.fieldId,
+    requestedAt: requestedAt.toISOString(),
+    trace: { traceId, correlationId, causationId: runId },
+    runtime: { mode: input.runtimeMode },
+    state: 'queued',
+    lease: {
+      attempt: input.lease?.attempt ?? 1,
+      maxAttempts: input.lease?.maxAttempts ?? AGRONAUTAS_RUNTIME_DEFAULT_MAX_ATTEMPTS,
+      leaseExpiresAt: input.lease?.leaseExpiresAt ?? null,
+    },
+  }
 }
 
 export function createAgronautasScheduledWindowJob(input: {

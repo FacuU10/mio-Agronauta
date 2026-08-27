@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.agronautas.local/agronautas-runtime.v2.schema.json",
+  "title": "Agronautas Runtime Contract v2",
+  "type": "object",
+  "$defs": {
+    "RuntimeState": {
+      "type": "string",
+      "enum": ["queued", "leased", "running", "waiting", "succeeded", "failed", "dlq", "cancelled"]
+    },
+    "RuntimeOperation": {
+      "type": "string",
+      "enum": ["risk-recompute", "scheduled-window"]
+    },
+    "Availability": {
+      "type": "string",
+      "enum": ["available", "degraded", "unavailable"]
+    },
+    "Freshness": {
+      "type": "string",
+      "enum": ["fresh", "degraded", "stale", "missing"]
+    },
+    "RuntimeMode": {
+      "type": "string",
+      "enum": ["real", "demo"]
+    },
+    "ProviderMode": {
+      "type": "string",
+      "enum": ["live", "seam", "mock", "unavailable"]
+    },
+    "SchemaStatus": {
+      "type": "string",
+      "enum": ["valid", "invalid", "unavailable"]
+    },
+    "DegradationReason": {
+      "type": "string",
+      "enum": [
+        "provider_unavailable",
+        "provider_timeout",
+        "worker_unavailable",
+        "coordinates_unavailable",
+        "processor_not_configured",
+        "stale_provider_data",
+        "invalid_provider_payload",
+        "duplicate_run",
+        "lease_expired",
+        "scheduler-disabled",
+        "credential/license-blocked",
+        "retryable-transport",
+        "exhausted-failure",
+        "engine-undecided"
+      ]
+    },
+    "TraceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceId", "correlationId", "causationId"],
+      "properties": {
+        "traceId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "correlationId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "causationId": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "LeaseMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt", "maxAttempts", "leaseExpiresAt"],
+      "properties": {
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "leaseExpiresAt": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "oneOf": [
+        {
+          "properties": { "attempt": { "const": 1 }, "maxAttempts": { "const": 1 } }
+        },
+        {
+          "properties": { "attempt": { "enum": [1, 2] }, "maxAttempts": { "const": 2 } }
+        },
+        {
+          "properties": { "attempt": { "enum": [1, 2, 3] }, "maxAttempts": { "const": 3 } }
+        }
+      ]
+    },
+    "ProviderLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRunIds", "providerRunIds", "retrievedAt", "observedAt", "forecastAt", "providerMode", "units", "httpStatus", "schemaStatus", "lastSuccessfulObservedAt"],
+      "properties": {
+        "sourceRunIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+        "providerRunIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+        "retrievedAt": { "type": "string", "format": "date-time" },
+        "observedAt": { "type": ["string", "null"], "format": "date-time" },
+        "forecastAt": { "type": ["string", "null"], "format": "date-time" },
+        "providerMode": { "$ref": "#/$defs/ProviderMode" },
+        "units": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 80 } },
+        "httpStatus": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
+        "schemaStatus": { "$ref": "#/$defs/SchemaStatus" },
+        "lastSuccessfulObservedAt": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "oneOf": [
+        {
+          "properties": { "observedAt": { "type": "string" }, "forecastAt": { "type": "null" } }
+        },
+        {
+          "properties": { "observedAt": { "type": "null" }, "forecastAt": { "type": "string" } }
+        },
+        {
+          "properties": { "observedAt": { "type": "null" }, "forecastAt": { "type": "null" } }
+        }
+      ]
+    },
+    "EngineDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "selectionStatus", "calibrationStatus"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "selectionStatus": { "const": "undecided" },
+        "calibrationStatus": { "const": "not_established" }
+      }
+    },
+    "RiskPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "level", "drivers"],
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "level": { "type": "string", "enum": ["low", "medium", "high"] },
+        "drivers": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "RiskRuntimeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "freshness", "uncertainty", "degradationReasons", "lineage"],
+      "properties": {
+        "status": { "$ref": "#/$defs/Availability" },
+        "freshness": { "$ref": "#/$defs/Freshness" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "uncertainty": { "const": "not_calibrated" },
+        "degradationReasons": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/DegradationReason" } },
+        "lineage": { "$ref": "#/$defs/ProviderLineage" },
+        "engine": { "$ref": "#/$defs/EngineDescriptor" },
+        "risk": { "$ref": "#/$defs/RiskPayload" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "enum": ["available", "degraded"] } } },
+          "then": { "required": ["confidence", "engine", "risk"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unavailable" } } },
+          "then": {
+            "required": ["degradationReasons"],
+            "properties": {
+              "degradationReasons": { "minItems": 1 }
+            },
+            "not": { "required": ["risk"] }
+          }
+        },
+        {
+          "if": { "properties": { "freshness": { "const": "stale" } } },
+          "then": {
+            "required": ["lineage"],
+            "properties": {
+              "lineage": {
+                "required": ["lastSuccessfulObservedAt"],
+                "properties": { "lastSuccessfulObservedAt": { "type": "string" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RuntimeJobEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "jobId", "runId", "operation", "fieldId", "requestedAt", "trace", "runtime", "state", "lease"],
+      "properties": {
+        "contractVersion": { "const": "2.0.0" },
+        "jobId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "operation": { "$ref": "#/$defs/RuntimeOperation" },
+        "fieldId": { "type": ["string", "null"], "minLength": 1, "maxLength": 160 },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "trace": { "$ref": "#/$defs/TraceContext" },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "$ref": "#/$defs/RuntimeMode" } }
+        },
+        "state": { "$ref": "#/$defs/RuntimeState" },
+        "lease": { "$ref": "#/$defs/LeaseMetadata" },
+        "result": { "$ref": "#/$defs/RiskRuntimeResult" }
+      }
+    },
+    "TransitionCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "from", "to", "legal"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "from": { "$ref": "#/$defs/RuntimeState" },
+        "to": { "$ref": "#/$defs/RuntimeState" },
+        "legal": { "type": "boolean" }
+      }
+    },
+    "DuplicateCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "existing", "incoming", "idempotent"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "existing": { "$ref": "#/$defs/Identity" },
+        "incoming": { "$ref": "#/$defs/Identity" },
+        "idempotent": { "type": "boolean" }
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "runId"],
+      "properties": {
+        "jobId": { "type": "string", "minLength": 1 },
+        "runId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "LeaseReclaimCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "state", "leaseExpiresAt", "now", "reclaimable"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "state": { "const": "leased" },
+        "leaseExpiresAt": { "type": "string", "format": "date-time" },
+        "now": { "type": "string", "format": "date-time" },
+        "reclaimable": { "type": "boolean" }
+      }
+    }
+  }
+}
