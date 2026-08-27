@@ -28,6 +28,10 @@ OPEN_METEO_TIMEOUT_SECONDS = 10
 DEFAULT_LEASE_SECONDS = 300
 
 
+class DurableOutcomeError(RuntimeError):
+    """A durable outcome could not be recorded; the transport must not be ACKed."""
+
+
 class PostgresAgronautasJobStore:
     """Small async adapter for durable Agronautas job transitions."""
 
@@ -61,7 +65,7 @@ class PostgresAgronautasJobStore:
             await connection.commit()
         return claimed
 
-    async def heartbeat(self, job_id: str, run_id: str, heartbeat_at: datetime) -> None:
+    async def heartbeat(self, job_id: str, run_id: str, heartbeat_at: datetime) -> bool:
         async with await psycopg.AsyncConnection.connect(self._require_dsn()) as connection:
             async with connection.cursor() as cursor:
                 await cursor.execute(
@@ -75,13 +79,15 @@ class PostgresAgronautasJobStore:
                     """,
                     (heartbeat_at, heartbeat_at, self.lease_seconds, job_id, run_id, self.worker_id, heartbeat_at),
                 )
+                rowcount = getattr(cursor, "rowcount", None)
             await connection.commit()
+        return rowcount is None or rowcount > 0
 
-    async def complete(self, job_id: str, run_id: str, completed_at: datetime, result: dict[str, Any]) -> None:
-        await self._transition(
+    async def complete(self, job_id: str, run_id: str, completed_at: datetime, result: dict[str, Any]) -> bool:
+        return await self._transition(
             """
             UPDATE agronautas_job_runs
-               SET status = 'completed', "completedAt" = %s, "resultPayload" = %s::jsonb,
+               SET status = 'succeeded', "completedAt" = %s, "resultPayload" = %s::jsonb,
                    lease_owner = NULL, lease_expires_at = NULL
              WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
                AND status IN ('leased', 'running')
@@ -89,35 +95,106 @@ class PostgresAgronautasJobStore:
             (completed_at, json.dumps(result), job_id, run_id, self.worker_id),
         )
 
-    async def schedule_retry(self, job_id: str, run_id: str, next_retry_at: datetime, error_code: str, error_message: str) -> None:
-        await self._transition(
+    async def schedule_retry(self, job_id: str, run_id: str, next_retry_at: datetime, error_code: str, error_message: str) -> bool:
+        return await self._transition(
             """
             UPDATE agronautas_job_runs
                SET status = 'waiting', attempt = attempt + 1, retry_at = %s,
                    "errorCode" = %s, "errorMessage" = %s, lease_owner = NULL, lease_expires_at = NULL
-             WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
-               AND status IN ('leased', 'running') AND attempt < max_attempts
+               WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
+                AND status IN ('leased', 'running') AND attempt < max_attempts
             """,
             (next_retry_at, error_code, error_message, job_id, run_id, self.worker_id),
         )
 
-    async def dead_letter(self, job_id: str, run_id: str, failed_at: datetime, error_code: str, error_message: str) -> None:
-        await self._transition(
+    async def dead_letter(self, job_id: str, run_id: str, failed_at: datetime, error_code: str, error_message: str) -> bool:
+        return await self._transition(
             """
             UPDATE agronautas_job_runs
                SET status = 'dlq', "completedAt" = %s, dead_lettered_at = %s,
                    dlq_reason = %s, terminal_error_code = %s, terminal_error_message = %s,
                    "errorCode" = %s, "errorMessage" = %s, lease_owner = NULL, lease_expires_at = NULL
-             WHERE "jobId" = %s AND "runId" = %s AND status NOT IN ('completed', 'dlq')
+             WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
+               AND status NOT IN ('completed', 'succeeded', 'dlq')
             """,
-            (failed_at, failed_at, error_message, error_code, error_message, error_code, error_message, job_id, run_id),
+            (failed_at, failed_at, error_message, error_code, error_message, error_code, error_message, job_id, run_id, self.worker_id),
         )
 
-    async def _transition(self, sql: str, params: tuple[Any, ...]) -> None:
+    async def _transition(self, sql: str, params: tuple[Any, ...]) -> bool:
         async with await psycopg.AsyncConnection.connect(self._require_dsn()) as connection:
             async with connection.cursor() as cursor:
                 await cursor.execute(sql, params)
+                rowcount = getattr(cursor, "rowcount", None)
             await connection.commit()
+        return rowcount is None or rowcount > 0
+
+
+class RuntimeOutcomeCoordinator:
+    """Owns the single durable outcome transition before Redis can be ACKed."""
+
+    def __init__(self, job_store: PostgresAgronautasJobStore | None) -> None:
+        self.job_store = job_store
+
+    async def claim(self, job: dict[str, Any]) -> bool:
+        if self.job_store is None:
+            return True
+        try:
+            claimed = await self.job_store.claim(str(job["jobId"]), datetime.now(UTC))
+            if claimed:
+                heartbeat_ok = await self.heartbeat(job)
+                if heartbeat_ok is False:
+                    raise DurableOutcomeError("durable heartbeat ownership was lost")
+            return claimed
+        except Exception as error:
+            raise DurableOutcomeError("failed to claim durable job") from error
+
+    async def heartbeat(self, job: dict[str, Any]) -> None:
+        if self.job_store is not None:
+            heartbeat_ok = await self.job_store.heartbeat(str(job["jobId"]), str(job["runId"]), datetime.now(UTC))
+            if heartbeat_ok is False:
+                raise DurableOutcomeError("durable heartbeat ownership was lost")
+
+    async def persist_outcome_before_ack(self, job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        if self.job_store is None:
+            return result
+
+        job_id = str(job["jobId"])
+        run_id = str(job["runId"])
+        attempt = _job_attempt(job)
+        max_attempts = _job_max_attempts(job)
+        status = result.get("status")
+        persisted = True
+
+        if status == "retryable_failure" and attempt < max_attempts:
+            retry_at = datetime.now(UTC) + timedelta(seconds=2**attempt)
+            persisted = await self.job_store.schedule_retry(job_id, run_id, retry_at, "provider_retryable", str(result.get("error", status)))
+            result["nextAttempt"] = attempt + 1
+        elif status == "retryable_failure":
+            result["status"] = "dlq"
+            persisted = await self.job_store.dead_letter(job_id, run_id, datetime.now(UTC), "provider_exhausted", str(result.get("error", status)))
+        elif status in {"dlq", "stale_schema", "failed"}:
+            persisted = await self.job_store.dead_letter(job_id, run_id, datetime.now(UTC), "non_retryable_failure", str(result.get("error", status)))
+        elif status in {"succeeded", "unavailable"}:
+            persisted = await self.job_store.complete(job_id, run_id, datetime.now(UTC), result)
+        else:
+            result["status"] = "dlq"
+            persisted = await self.job_store.dead_letter(job_id, run_id, datetime.now(UTC), "non_retryable_failure", "missing or unknown outcome status")
+
+        if persisted is False:
+            raise DurableOutcomeError("durable outcome transition was not owned by this worker")
+        return result
+
+
+def _job_attempt(job: dict[str, Any]) -> int:
+    lease = job.get("lease") or {}
+    value = job.get("attempt") or lease.get("attempt") or (job.get("payload") or {}).get("attempt") or 1
+    return int(value)
+
+
+def _job_max_attempts(job: dict[str, Any]) -> int:
+    lease = job.get("lease") or {}
+    value = job.get("maxAttempts") or lease.get("maxAttempts") or (job.get("payload") or {}).get("maxAttempts") or 1
+    return int(value)
 
 
 async def handle_agronautas_job(
@@ -126,10 +203,23 @@ async def handle_agronautas_job(
     logger: Any,
     job_store: PostgresAgronautasJobStore | None = None,
     worker_id: str | None = None,
+    outcome_coordinator: RuntimeOutcomeCoordinator | None = None,
 ) -> dict[str, Any]:
+    coordinator = outcome_coordinator or RuntimeOutcomeCoordinator(job_store)
     payload = job["payload"]
     job_id = job["jobId"]
     run_id = job["runId"]
+    if job_store is not None:
+        claimed = await coordinator.claim(job)
+        if not claimed:
+            result = {
+                "accepted": False,
+                "status": "skipped_duplicate",
+                "runId": run_id,
+                "jobId": job_id,
+            }
+            await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
+            return result
     try:
         AGRONAUTAS_RECOMPUTE_VALIDATOR.validate(payload)
     except ValidationError as error:
@@ -140,13 +230,14 @@ async def handle_agronautas_job(
             "jobId": job_id,
             "error": error.message,
         }
+        await coordinator.persist_outcome_before_ack(job, result)
         await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
         return result
 
     field_id = payload["fieldId"]
     mode = payload["runtime"]["mode"]
 
-    claimed = await job_store.claim(job_id, datetime.now(UTC)) if job_store is not None else await claim_run_once(redis, run_id, job_id)
+    claimed = await claim_run_once(redis, run_id, job_id) if job_store is None else True
     if not claimed:
         result = {
             "accepted": False,
@@ -162,8 +253,6 @@ async def handle_agronautas_job(
     await redis.hset("agronautas:job-runs:status", job_id, json.dumps({"status": "running", "runId": run_id}))
     heartbeat_at = datetime.now(UTC)
     await redis.hset("agronautas:job-runs:heartbeat", job_id, heartbeat_at.isoformat().replace("+00:00", "Z"))
-    if job_store is not None:
-        await job_store.heartbeat(job_id, run_id, heartbeat_at)
 
     try:
         field = await fetch_field_coordinates(_settings.postgres_dsn, field_id)
@@ -211,16 +300,22 @@ async def handle_agronautas_job(
                 "alertSnapshotIds": [],
             },
         }
-        if job_store is not None:
-            await job_store.complete(job_id, run_id, datetime.now(UTC), result)
-    except Exception as error:
-        await persist_failed_ingestion(
-            postgres_dsn=_settings.postgres_dsn,
-            field_id=field_id,
-            run_id=run_id,
-            requested_at=payload["requestedAt"],
-            error_message=str(error),
-        )
+        await coordinator.persist_outcome_before_ack(job, result)
+    except DurableOutcomeError:
+        raise
+    except Exception as error:  # noqa: BLE001 - preserve the recoverable processing payload on DB failures
+        try:
+            await persist_failed_ingestion(
+                postgres_dsn=_settings.postgres_dsn,
+                field_id=field_id,
+                run_id=run_id,
+                requested_at=payload["requestedAt"],
+                error_message=str(error),
+            )
+        except Exception as persistence_error:
+            if job_store is not None:
+                raise DurableOutcomeError("failed to persist failed ingestion") from persistence_error
+            raise
         lease = job.get("lease") or {}
         attempt = int(job.get("attempt") or lease.get("attempt") or payload.get("attempt") or 1)
         max_attempts = int(job.get("maxAttempts") or lease.get("maxAttempts") or payload.get("maxAttempts") or 1)
@@ -237,12 +332,10 @@ async def handle_agronautas_job(
         }
         if exhausted:
             await redis.hset("agronautas:job-runs:dlq", job_id, json.dumps(result))
-            if job_store is not None:
-                await job_store.dead_letter(job_id, run_id, datetime.now(UTC), "provider_exhausted", str(error))
         else:
             result["nextAttempt"] = attempt + 1
-            if job_store is not None:
-                await job_store.schedule_retry(job_id, run_id, datetime.now(UTC) + timedelta(seconds=2**attempt), "provider_retryable", str(error))
+
+        await coordinator.persist_outcome_before_ack(job, result)
 
     await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
     logger.info(
@@ -264,6 +357,7 @@ async def handle_scheduled_window_job(
     logger: Any,
     job_store: PostgresAgronautasJobStore | None = None,
     worker_id: str | None = None,
+    outcome_coordinator: RuntimeOutcomeCoordinator | None = None,
 ) -> dict[str, Any]:
     """Validate a scheduled source window without pretending a provider ran.
 
@@ -284,6 +378,19 @@ async def handle_scheduled_window_job(
     if end <= start:
         raise ValueError("scheduled_window_end_must_follow_start")
 
+    coordinator = outcome_coordinator or RuntimeOutcomeCoordinator(job_store)
+    if job_store is not None:
+        claimed = await coordinator.claim(job)
+        if not claimed:
+            result = {
+                "accepted": False,
+                "status": "skipped_duplicate",
+                "runId": job["runId"],
+                "jobId": job["jobId"],
+            }
+            await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
+            return result
+
     result = {
         "accepted": False,
         "status": "unavailable",
@@ -291,6 +398,7 @@ async def handle_scheduled_window_job(
         "runId": job["runId"],
         "jobId": job["jobId"],
     }
+    await coordinator.persist_outcome_before_ack(job, result)
     await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
     logger.info(
         "agronautas.scheduled-window.unavailable",

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { riskSnapshotSchema, type RiskSnapshot } from './agronautas.js'
 
 export const RUNTIME_STATE = {
   QUEUED: 'queued',
@@ -166,6 +167,67 @@ export const runtimeJobEnvelopeSchema = z.object({
 }).strict()
 
 export type RuntimeJobEnvelope = z.infer<typeof runtimeJobEnvelopeSchema>
+
+export const LEGACY_READ_SOURCE = {
+  WORKFLOW_JOB_V1: 'workflow-job.v1',
+  RISK_SNAPSHOT_V1: 'risk-snapshot.v1',
+} as const
+
+export type LegacyReadSource = (typeof LEGACY_READ_SOURCE)[keyof typeof LEGACY_READ_SOURCE]
+export const ENGINE_SELECTION_STATUS = { UNDECIDED: 'undecided' } as const
+type EngineSelectionStatus = (typeof ENGINE_SELECTION_STATUS)[keyof typeof ENGINE_SELECTION_STATUS]
+
+const legacyWorkflowJobV1Schema = z.object({
+  contractVersion: z.literal('1.0.0'),
+  jobId: z.string().min(1),
+  workflowId: z.string().min(1),
+  runId: z.string().min(1),
+  kind: z.string().min(1),
+  status: z.string().min(1),
+  priority: z.number().int(),
+  createdAt: z.string().datetime(),
+  trace: z.record(z.unknown()),
+  payload: z.unknown(),
+  lease: z.record(z.unknown()),
+}).passthrough()
+
+export type LegacyWorkflowJobV1 = z.infer<typeof legacyWorkflowJobV1Schema>
+
+export interface LegacyWorkflowJobRead {
+  source: LegacyReadSource
+  job: LegacyWorkflowJobV1
+  selectionStatus: EngineSelectionStatus
+}
+
+export interface LegacyRiskSnapshotRead {
+  source: LegacyReadSource
+  snapshot: RiskSnapshot
+  engine: EngineDescriptor
+}
+
+export function adaptLegacyWorkflowJob(value: unknown): LegacyWorkflowJobRead {
+  return {
+    source: LEGACY_READ_SOURCE.WORKFLOW_JOB_V1,
+    job: legacyWorkflowJobV1Schema.parse(value),
+    selectionStatus: 'undecided',
+  }
+}
+
+export function adaptLegacyRiskSnapshot(value: unknown): LegacyRiskSnapshotRead {
+  const snapshot = riskSnapshotSchema.parse(value)
+  const id = snapshot.engineId ?? snapshot.ruleVersion
+  const version = snapshot.engineVersion ?? snapshot.ruleVersion
+  return {
+    source: LEGACY_READ_SOURCE.RISK_SNAPSHOT_V1,
+    snapshot,
+    engine: {
+      id,
+      version,
+      selectionStatus: 'undecided',
+      calibrationStatus: 'not_established',
+    },
+  }
+}
 
 const LEGAL_TRANSITIONS: Readonly<Record<RuntimeState, readonly RuntimeState[]>> = {
   queued: ['leased'],

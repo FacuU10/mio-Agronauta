@@ -34,9 +34,9 @@ Chain strategy: size-exception
 
 - [x] 2.1 Create `packages/contracts/schemas/agronautas-runtime.v2.schema.json`, `packages/contracts/fixtures/agronautas/runtime-contract.v2.json`, and `packages/zod-schemas/src/agronautas-runtime.ts` with const-backed enums, types, validators, guards, and unavailable invariants; load the same JSON in Python.
 - [x] 2.2 Modify `packages/workflows/src/index.ts`, `apps/api/src/application/usecases/request-risk-recompute-usecase.ts`, and `apps/api/src/infrastructure/queue/agronautas-runtime-dispatcher.ts` for flag-gated v2 admission and one source of IDs, trace, lease, and queue defaults.
-- [ ] 2.3 Modify `apps/api/src/infrastructure/database/postgres/agronautas-job-run-repository.ts`, `apps/api/prisma/schema.prisma`, and migration SQL only when required; make claim/reclaim, heartbeat, transitions, and result persistence atomic and ownership-checked.
-- [ ] 2.4 Modify `apps/workflow-runtime-python/src/worker/queue/consumer.py` and `apps/workflow-runtime-python/src/worker/runtime/agronautas_jobs.py` so one coordinator owns outcomes, retries only transient errors once, persists before ACK, and records scheduled-window unavailable durably.
-- [ ] 2.5 Add legacy read adapters in `apps/api/src/infrastructure/database/postgres/agronautas-risk-snapshot-repository.ts` and `packages/zod-schemas/src/agronautas-runtime.ts`; preserve BFF shapes/history and label both engines undecided.
+- [x] 2.3 Modify `apps/api/src/infrastructure/database/postgres/agronautas-job-run-repository.ts`, `apps/api/prisma/schema.prisma`, and migration SQL only when required; make claim/reclaim, heartbeat, transitions, and result persistence atomic and ownership-checked.
+- [x] 2.4 Modify `apps/workflow-runtime-python/src/worker/queue/consumer.py` and `apps/workflow-runtime-python/src/worker/runtime/agronautas_jobs.py` so one coordinator owns outcomes, retries only transient errors once, persists before ACK, and records scheduled-window unavailable durably.
+- [x] 2.5 Add legacy read adapters in `apps/api/src/infrastructure/database/postgres/agronautas-risk-snapshot-repository.ts` and `packages/zod-schemas/src/agronautas-runtime.ts`; preserve BFF shapes/history and label both engines undecided.
 
 ## Phase 3: Integration, Refactor, and Acceptance
 

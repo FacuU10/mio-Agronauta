@@ -13,13 +13,23 @@ from worker.core.config import get_settings
 from worker.core.platform import run_worker
 from worker.core.telemetry import build_logger, traced_operation
 from worker.graph.base import build_graph
-from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, handle_agronautas_job, handle_scheduled_window_job
+from worker.runtime.agronautas_jobs import (
+    DurableOutcomeError,
+    PostgresAgronautasJobStore,
+    RuntimeOutcomeCoordinator,
+    handle_agronautas_job,
+    handle_scheduled_window_job,
+)
 
 
 class RetryableAgronautasJobError(ConnectionError):
     """Signals that the durable retry transition completed but Redis must requeue."""
 
     durable_transition = True
+
+
+class DurableOutcomePersistenceError(RuntimeError):
+    """Persistence failed; leave the processing payload recoverable for restart."""
 
 
 class WorkflowQueueConsumer:
@@ -38,6 +48,7 @@ class WorkflowQueueConsumer:
         self.max_recovery_attempts = 3
         postgres_dsn = getattr(self.settings, "postgres_dsn", None)
         self.job_store = PostgresAgronautasJobStore(postgres_dsn, worker_id=f"worker-{uuid4()}") if postgres_dsn else None
+        self.outcome_coordinator = RuntimeOutcomeCoordinator(self.job_store)
 
     @staticmethod
     def _processing_queue_name(queue_name: str) -> str:
@@ -55,20 +66,27 @@ class WorkflowQueueConsumer:
 
             try:
                 job = json.loads(payload)
-                await self.handle_job(job)
-                if job.get("workflowId") == "agronautas-scheduled-window":
-                    result = json.loads((await self.redis.hget(self.results_key, job["jobId"])) or "{}")
-                    if result.get("status") == "unavailable":
-                        await self._dead_letter(payload, str(result.get("reason", "scheduled_window_unavailable")))
-                    elif result.get("status") == "succeeded":
-                        await self._ack(payload)
-                    else:
-                        await self._ack(payload)
+                result = await self.handle_job(job)
+                if result.get("status") == "retryable_failure":
+                    await self._requeue(payload, str(result.get("error", "retryable_failure")))
+                elif result.get("status") == "dlq":
+                    await self._dead_letter(payload, str(result.get("error", "non_retryable_failure")))
                 else:
                     await self._ack(payload)
             except Exception as exc:
                 self.logger.exception("job.failed", extra={"queue": self.queue_name, "error": str(exc)})
+                if isinstance(exc, (DurableOutcomePersistenceError, DurableOutcomeError)):
+                    raise
                 await self._handle_failure(payload, exc)
+
+    async def persist_outcome_before_ack(self, job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        try:
+            persisted = await self.outcome_coordinator.persist_outcome_before_ack(job, result)
+        except Exception as error:
+            raise DurableOutcomePersistenceError(str(error)) from error
+        if persisted.get("status") in {"succeeded", "unavailable", "dlq"}:
+            await self.redis.hset(self.results_key, job["jobId"], json.dumps(persisted))
+        return persisted
 
     async def handle_job(self, job: dict[str, Any]) -> dict[str, Any]:
         self.validator.validate(job)
@@ -192,20 +210,18 @@ class WorkflowQueueConsumer:
         return await _runner()
 
     async def _run_agronautas_job(self, job: dict[str, Any]) -> dict[str, Any]:
-        result = await self._execute_with_retry(
-            handle_agronautas_job,
+        result = await handle_agronautas_job(
             job,
             self.redis,
             self.logger,
             self.job_store,
             self.job_store.worker_id if self.job_store is not None else None,
+            self.outcome_coordinator,
         )
-        if result.get("status") == "retryable_failure":
-            raise RetryableAgronautasJobError(str(result.get("error", "retryable_failure")))
         return result
 
     async def _run_scheduled_window_job(self, job: dict[str, Any]) -> dict[str, Any]:
-        return await handle_scheduled_window_job(job, self.redis, self.logger, self.job_store, self.job_store.worker_id if self.job_store is not None else None)
+        return await handle_scheduled_window_job(job, self.redis, self.logger, self.job_store, self.job_store.worker_id if self.job_store is not None else None, self.outcome_coordinator)
 
     async def _run_graph_job(self, state: dict[str, Any], run_id: str) -> dict[str, Any]:
         graph = await build_graph()

@@ -204,6 +204,7 @@ model AgronautasJobRun {
   @@index([fieldId, queuedAt(sort: Desc)])
   @@index([fieldId, status, queuedAt(sort: Desc)])
   @@index([status, queuedAt(sort: Desc)])
+  @@index([status, retryAt, leaseExpiresAt], map: "agronautas_job_runs_claim_state_idx")
   @@index([runId])
   @@map("agronautas_job_runs")
 }

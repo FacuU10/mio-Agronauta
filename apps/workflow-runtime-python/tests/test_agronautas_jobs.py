@@ -492,3 +492,95 @@ def test_v2_job_runtime_exposes_a_single_outcome_transition_coordinator() -> Non
     import worker.runtime.agronautas_jobs as agronautas_jobs
 
     assert hasattr(agronautas_jobs, "RuntimeOutcomeCoordinator")
+
+
+@pytest.mark.asyncio
+async def test_outcome_coordinator_persists_before_redis_result_and_ack_boundary() -> None:
+    import worker.runtime.agronautas_jobs as agronautas_jobs
+
+    events: list[str] = []
+
+    class FakeStore:
+        worker_id = "worker-1"
+
+        async def complete(self, *args, **kwargs):
+            events.append("durable")
+            return True
+
+        async def schedule_retry(self, *args, **kwargs):
+            events.append("retry")
+            return True
+
+        async def dead_letter(self, *args, **kwargs):
+            events.append("dlq")
+            return True
+
+    coordinator = agronautas_jobs.RuntimeOutcomeCoordinator(FakeStore())
+    result = await coordinator.persist_outcome_before_ack(
+        {"jobId": "job-1", "runId": "run-1", "lease": {"attempt": 1, "maxAttempts": 3}},
+        {"status": "succeeded", "jobId": "job-1", "runId": "run-1"},
+    )
+
+    assert result["status"] == "succeeded"
+    assert events == ["durable"]
+
+
+@pytest.mark.asyncio
+async def test_outcome_coordinator_owns_one_retry_and_exhaustion_transition() -> None:
+    import worker.runtime.agronautas_jobs as agronautas_jobs
+
+    events: list[str] = []
+
+    class FakeStore:
+        worker_id = "worker-1"
+
+        async def schedule_retry(self, *args, **kwargs):
+            events.append("retry")
+            return True
+
+        async def dead_letter(self, *args, **kwargs):
+            events.append("dlq")
+            return True
+
+    coordinator = agronautas_jobs.RuntimeOutcomeCoordinator(FakeStore())
+    await coordinator.persist_outcome_before_ack(
+        {"jobId": "job-1", "runId": "run-1", "lease": {"attempt": 1, "maxAttempts": 2}},
+        {"status": "retryable_failure", "error": "timeout"},
+    )
+    await coordinator.persist_outcome_before_ack(
+        {"jobId": "job-1", "runId": "run-1", "lease": {"attempt": 2, "maxAttempts": 2}},
+        {"status": "retryable_failure", "error": "timeout"},
+    )
+
+    assert events == ["retry", "dlq"]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_window_unavailable_is_persisted_before_transport_result() -> None:
+    import worker.runtime.agronautas_jobs as agronautas_jobs
+
+    events: list[str] = []
+
+    class FakeStore:
+        async def claim(self, *args, **kwargs):
+            events.append("claim")
+            return True
+
+        async def heartbeat(self, *args, **kwargs):
+            events.append("heartbeat")
+
+        async def complete(self, *args, **kwargs):
+            events.append("durable-unavailable")
+            return True
+
+    job = {
+        "jobId": "window-job-2",
+        "runId": "open-meteo:climate:2026-06-05T00:00:00Z",
+        "payload": {"sourceWindow": {"provider": "open-meteo", "signalType": "climate", "windowStart": "2026-06-05T00:00:00Z", "windowEnd": "2026-06-05T01:00:00Z", "runId": "open-meteo:climate:2026-06-05T00:00:00Z"}},
+        "trace": {"traceId": "trace-window-2"},
+    }
+
+    result = await agronautas_jobs.handle_scheduled_window_job(job, FakeRedis(), FakeLogger(), FakeStore())
+
+    assert result["status"] == "unavailable"
+    assert events == ["claim", "heartbeat", "durable-unavailable"]

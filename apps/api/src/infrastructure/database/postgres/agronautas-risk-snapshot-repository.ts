@@ -3,6 +3,37 @@ import { RiskSnapshotFoundation } from '../../../domain/entities/agronautas'
 import type { RiskSnapshotRepository } from '../../../domain/repositories/agronautas'
 import { getPostgresPool } from './pool'
 
+const LEGACY_RISK_SNAPSHOT_SOURCE = 'risk-snapshot.v1' as const
+const ENGINE_SELECTION_STATUS = 'undecided' as const
+const ENGINE_CALIBRATION_STATUS = 'not_established' as const
+
+interface LegacyRiskSnapshotDbRow {
+  id: string
+  field_id: string
+  run_id: string
+  score: string | number
+  confidence: string | number
+  computed_at: string | number | Date
+  valid_until: string | number | Date
+  rule_version: string
+  stale_cause?: string | null
+  degradation_reasons?: unknown
+  drivers?: unknown
+  evidence_refs?: unknown
+  summary_payload?: unknown
+}
+
+export interface LegacyRiskSnapshotRowRead {
+  source: typeof LEGACY_RISK_SNAPSHOT_SOURCE
+  snapshot: RiskSnapshotFoundation
+  engine: {
+    id: string
+    version: string
+    selectionStatus: typeof ENGINE_SELECTION_STATUS
+    calibrationStatus: typeof ENGINE_CALIBRATION_STATUS
+  }
+}
+
 export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
   constructor(private readonly pool: Pick<Pool, 'query'> = getPostgresPool()) {}
 
@@ -57,21 +88,7 @@ export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
     const row = result.rows[0]
     if (!row) return null
 
-    return new RiskSnapshotFoundation({
-      snapshotId: row.id,
-      fieldId: row.field_id,
-      runId: row.run_id,
-      score: Number(row.score),
-      confidence: Number(row.confidence),
-      computedAt: new Date(row.computed_at),
-      validUntil: new Date(row.valid_until),
-      ruleVersion: row.rule_version,
-      staleCause: row.stale_cause ?? undefined,
-      degradationReasons: (row.degradation_reasons as RiskSnapshotFoundation['props']['degradationReasons']) ?? [],
-      drivers: (row.drivers as RiskSnapshotFoundation['props']['drivers']) ?? [],
-      evidenceRefs: (row.evidence_refs as string[]) ?? [],
-      ...readLineage(row.summary_payload),
-    })
+    return adaptLegacyRiskSnapshotRow(row).snapshot
   }
 
   async listTimeline(fieldId: string, limit: number): Promise<RiskSnapshotFoundation[]> {
@@ -82,24 +99,32 @@ export class PostgresRiskSnapshotRepository implements RiskSnapshotRepository {
       [fieldId, limit],
     )
 
-    return result.rows.map(
-      (row) =>
-        new RiskSnapshotFoundation({
-          snapshotId: row.id,
-          fieldId: row.field_id,
-          runId: row.run_id,
-          score: Number(row.score),
-          confidence: Number(row.confidence),
-          computedAt: new Date(row.computed_at),
-          validUntil: new Date(row.valid_until),
-          ruleVersion: row.rule_version,
-          staleCause: row.stale_cause ?? undefined,
-          degradationReasons: (row.degradation_reasons as RiskSnapshotFoundation['props']['degradationReasons']) ?? [],
-          drivers: (row.drivers as RiskSnapshotFoundation['props']['drivers']) ?? [],
-          evidenceRefs: (row.evidence_refs as string[]) ?? [],
-          ...readLineage(row.summary_payload),
-        }),
-    )
+    return result.rows.map((row) => adaptLegacyRiskSnapshotRow(row).snapshot)
+  }
+}
+
+export function adaptLegacyRiskSnapshotRow(row: LegacyRiskSnapshotDbRow): LegacyRiskSnapshotRowRead {
+  const lineage = readLineage(row.summary_payload)
+  const id = lineage.engineId ?? String(row.rule_version)
+  const version = lineage.engineVersion ?? String(row.rule_version)
+  return {
+    source: LEGACY_RISK_SNAPSHOT_SOURCE,
+    snapshot: new RiskSnapshotFoundation({
+      snapshotId: String(row.id),
+      fieldId: String(row.field_id),
+      runId: String(row.run_id),
+      score: Number(row.score),
+      confidence: Number(row.confidence),
+      computedAt: new Date(row.computed_at),
+      validUntil: new Date(row.valid_until),
+      ruleVersion: String(row.rule_version),
+      staleCause: row.stale_cause ?? undefined,
+      degradationReasons: Array.isArray(row.degradation_reasons) ? row.degradation_reasons as RiskSnapshotFoundation['props']['degradationReasons'] : [],
+      drivers: Array.isArray(row.drivers) ? row.drivers as RiskSnapshotFoundation['props']['drivers'] : [],
+      evidenceRefs: Array.isArray(row.evidence_refs) ? row.evidence_refs.filter((item): item is string => typeof item === 'string') : [],
+      ...lineage,
+    }),
+    engine: { id, version, selectionStatus: ENGINE_SELECTION_STATUS, calibrationStatus: ENGINE_CALIBRATION_STATUS },
   }
 }
 

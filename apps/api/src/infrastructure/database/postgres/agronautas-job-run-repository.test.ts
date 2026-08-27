@@ -30,6 +30,21 @@ test('claim guards the queued transition and reclaims an expired lease atomicall
   assert.deepEqual(result, { claimed: true, leaseExpiresAt: new Date('2026-08-04T00:05:00.000Z') })
 })
 
+test('claim only takes waiting jobs whose durable retry window is due', async () => {
+  let capturedSql = ''
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string) {
+      capturedSql = sql
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  await guarded(repository).claim('job-1', 'worker-1', new Date('2026-08-04T00:00:00.000Z'), 300)
+
+  assert.match(capturedSql, /retry_at\s+IS\s+NULL|retry_at\s*<=/i)
+  assert.match(capturedSql, /lease_expires_at\s*<\s*\$3/i)
+})
+
 test('heartbeat requires the current lease owner', async () => {
   let capturedSql = ''
   let capturedParams: unknown[] = []
@@ -95,6 +110,8 @@ test('retry persists the next attempt without losing the run identity', async ()
   assert.match(capturedSql, /status\s*=.*waiting|retry_at/i)
   assert.match(capturedSql, /WHERE\s+"jobId"\s*=.*"runId"\s*=/i)
   assert.deepEqual(capturedParams.slice(0, 2), ['job-1', 'run-1'])
+  assert.match(capturedSql, /lease_owner\s+IS\s+NOT\s+NULL|lease_owner\s*=\s*\$[0-9]+/i)
+  assert.match(capturedSql, /attempt\s*<\s*max_attempts/i)
 })
 
 test('v2 transition coordinator owns the durable outcome before any ACK boundary', () => {
@@ -105,6 +122,44 @@ test('v2 transition coordinator owns the durable outcome before any ACK boundary
   } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
 
   assert.equal(typeof (repository as unknown as { transition?: unknown }).transition, 'function')
+  assert.equal(typeof (repository as unknown as { persistOutcome?: unknown }).persistOutcome, 'function')
+})
+
+test('persistOutcome atomically stores the result and checks transition ownership', async () => {
+  let capturedSql = ''
+  let capturedParams: unknown[] = []
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string, params?: unknown[]) {
+      capturedSql = sql
+      capturedParams = params ?? []
+      return { rows: [{ jobId: 'job-1', status: 'succeeded' }] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  const persisted = await (repository as unknown as {
+    persistOutcome(input: {
+      jobId: string
+      runId: string
+      workerId: string
+      from: 'running'
+      to: 'succeeded'
+      occurredAt: Date
+      resultPayload: Record<string, unknown>
+    }): Promise<boolean>
+  }).persistOutcome({
+    jobId: 'job-1',
+    runId: 'run-1',
+    workerId: 'worker-1',
+    from: 'running',
+    to: 'succeeded',
+    occurredAt: new Date('2026-08-04T00:03:00.000Z'),
+    resultPayload: { status: 'succeeded' },
+  })
+
+  assert.equal(persisted, true)
+  assert.match(capturedSql, /SET[\s\S]*status\s*=\s*\$[0-9]+[\s\S]*resultPayload/i)
+  assert.match(capturedSql, /WHERE[\s\S]*"jobId"[\s\S]*"runId"[\s\S]*lease_owner[\s\S]*status\s*=\s*\$[0-9]+/i)
+  assert.ok(capturedParams.includes('worker-1'))
 })
 
 test('exhausted retry transitions to a durable dead-letter record', async () => {

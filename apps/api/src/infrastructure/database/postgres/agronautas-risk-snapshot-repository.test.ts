@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { RiskSnapshotFoundation } from '../../../domain/entities/agronautas'
-import { PostgresRiskSnapshotRepository } from './agronautas-risk-snapshot-repository'
+import { adaptLegacyRiskSnapshotRow, PostgresRiskSnapshotRepository } from './agronautas-risk-snapshot-repository'
 
 test('PostgresRiskSnapshotRepository persists auditable fields in save payload', async () => {
   const calls: { sql: string; params: unknown[] }[] = []
@@ -35,4 +35,31 @@ test('PostgresRiskSnapshotRepository persists auditable fields in save payload',
   assert.equal(calls[0]?.params[9], 'risk-v0')
   assert.equal(calls[0]?.params[10], 'satellite_data_stale')
   assert.equal(typeof calls[0]?.params[14], 'string')
+})
+
+test('legacy snapshot adapter preserves the historical foundation and keeps engine selection undecided', () => {
+  const adapted = adaptLegacyRiskSnapshotRow({
+    id: 'snapshot-1',
+    field_id: 'field-1',
+    run_id: 'run-1',
+    score: '42',
+    confidence: '0.7',
+    computed_at: '2026-06-05T00:00:00.000Z',
+    valid_until: '2026-06-06T00:00:00.000Z',
+    rule_version: 'risk-v0',
+    stale_cause: null,
+    degradation_reasons: [],
+    drivers: [{ key: 'rain', label: 'Rain', weight: 1, value: 42 }],
+    evidence_refs: ['legacy:run-1'],
+    summary_payload: { engineId: 'risk-v0', engineVersion: 'risk-v0' },
+  })
+
+  assert.equal(adapted.source, 'risk-snapshot.v1')
+  assert.equal(adapted.snapshot.props.score, 42)
+  assert.deepEqual(adapted.engine, {
+    id: 'risk-v0',
+    version: 'risk-v0',
+    selectionStatus: 'undecided',
+    calibrationStatus: 'not_established',
+  })
 })

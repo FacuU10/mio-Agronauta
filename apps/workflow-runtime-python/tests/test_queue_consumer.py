@@ -361,3 +361,19 @@ def test_scheduled_window_schema_rejects_duplicate_identity() -> None:
 
 def test_v2_consumer_exposes_one_persistence_before_ack_coordinator() -> None:
     assert hasattr(WorkflowQueueConsumer, "persist_outcome_before_ack")
+
+
+@pytest.mark.asyncio
+async def test_consumer_persistence_failure_does_not_ack_processing_payload(consumer: WorkflowQueueConsumer) -> None:
+    payload = json.dumps(_job())
+    consumer.redis.lists[consumer.processing_queue_name] = [payload]
+
+    class FailingCoordinator:
+        async def persist_outcome_before_ack(self, job, result):
+            raise RuntimeError("database unavailable")
+
+    consumer.outcome_coordinator = FailingCoordinator()
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await consumer.persist_outcome_before_ack(_job(), {"status": "succeeded"})
+
+    assert consumer.redis.lists[consumer.processing_queue_name] == [payload]
