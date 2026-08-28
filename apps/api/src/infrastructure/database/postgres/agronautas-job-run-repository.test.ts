@@ -45,6 +45,21 @@ test('claim only takes waiting jobs whose durable retry window is due', async ()
   assert.match(capturedSql, /lease_expires_at\s*<\s*\$3/i)
 })
 
+test('claim never treats a waiting job without retryAt as due', async () => {
+  let capturedSql = ''
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string) {
+      capturedSql = sql
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  await guarded(repository).claim('job-1', 'worker-1', new Date('2026-08-04T00:00:00.000Z'), 300)
+
+  assert.doesNotMatch(capturedSql, /status\s*=\s*'waiting'[^)]*retry_at\s+IS\s+NULL/i)
+  assert.match(capturedSql, /status\s*=\s*'waiting'\s+AND\s+retry_at\s+IS\s+NOT\s+NULL\s+AND\s+retry_at\s*<=\s*\$3/i)
+})
+
 test('heartbeat requires the current lease owner', async () => {
   let capturedSql = ''
   let capturedParams: unknown[] = []
@@ -217,6 +232,96 @@ test('all legacy mutating methods reject the null-owner bypass', async () => {
     assert.doesNotMatch(query.sql, /lease_owner\s+IS\s+NULL|\$[0-9]+::text\s+IS\s+NULL/i)
     assert.equal(query.params.at(-1), 'worker-1')
   }
+  assert.match(queries[0]?.sql ?? '', /status\s*=\s*'leased'/i)
+})
+
+test('legacy failure transition cannot rewrite a completed terminal row', async () => {
+  let capturedSql = ''
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string) {
+      capturedSql = sql
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+
+  await repository.markFailed('job-1', new Date('2026-08-04T00:03:00.000Z'), 'provider_timeout', 'timed out', 'worker-1')
+
+  assert.match(capturedSql, /lease_owner\s*=\s*\$[0-9]+/i)
+  assert.match(capturedSql, /status\s*=\s*'running'/i)
+})
+
+test('worker-owned mutators only advance from their legal running state', async () => {
+  const queries: string[] = []
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query(sql: string) {
+      queries.push(sql)
+      return { rows: [] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+  const timestamp = new Date('2026-08-04T00:03:00.000Z')
+
+  await repository.markRunning('job-1', timestamp, 'worker-1')
+  await repository.markCompleted('job-1', timestamp, { status: 'succeeded' }, 'worker-1')
+  await repository.markFailed('job-1', timestamp, 'provider_timeout', 'timed out', 'worker-1')
+  await guarded(repository).scheduleRetry('job-1', 'run-1', timestamp, 'provider_timeout')
+  await guarded(repository).deadLetter('job-1', 'run-1', timestamp, 'provider_timeout', 'timed out')
+
+  assert.match(queries[0] ?? '', /status\s*=\s*'leased'/i)
+  for (const query of queries.slice(1)) {
+    assert.match(query, /status\s*=\s*'running'/i)
+    assert.doesNotMatch(query, /status\s+IN\s*\('leased',\s*'running'\)/i)
+    assert.match(query, /lease_owner\s*=\s*\$[0-9]+/i)
+  }
+})
+
+test('durable transition emits complete bounded telemetry from persisted metadata', async () => {
+  const transitions: Array<Record<string, unknown>> = []
+  const repository = new PostgresAgronautasJobRunRepository(
+    {
+      async query() {
+        return {
+          rows: [{
+            jobId: 'job-telemetry',
+            runId: 'run-telemetry',
+            contractVersion: '2.0.0',
+            attempt: 2,
+            lease_expires_at: new Date('2026-08-04T00:08:00.000Z'),
+            providerMode: 'live',
+          }],
+        }
+      },
+    } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0],
+    {
+      onQueueTransition(input: Record<string, unknown>) {
+        transitions.push(input)
+      },
+    } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[1],
+  )
+
+  const persisted = await repository.transition({
+    jobId: 'job-telemetry',
+    runId: 'run-telemetry',
+    workerId: 'worker-telemetry',
+    from: 'running',
+    to: 'succeeded',
+    occurredAt: new Date('2026-08-04T00:03:00.000Z'),
+    resultPayload: { status: 'succeeded', result: { status: 'available' } },
+  })
+
+  assert.equal(persisted, true)
+  assert.deepEqual(transitions[0], {
+    contractVersion: '2.0.0',
+    jobId: 'job-telemetry',
+    runId: 'run-telemetry',
+    from: 'running',
+    to: 'succeeded',
+    attempt: 2,
+    workerId: 'worker-telemetry',
+    leaseExpiresAt: '2026-08-04T00:08:00.000Z',
+    resultStatus: 'available',
+    providerMode: 'live',
+    latencyMs: 0,
+  })
 })
 
 test('legacy completed rows remain readable as succeeded without changing the stored status', () => {

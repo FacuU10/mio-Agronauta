@@ -2,9 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
 import type { AgronautasJobClaim, AgronautasJobRunRecord, AgronautasJobRunRepository } from '../../../domain/repositories/agronautas'
 import { getPostgresPool } from './pool'
-import { createAgronautasTelemetry } from '../../observability/agronautas-telemetry'
-
-const telemetry = createAgronautasTelemetry()
+import { createAgronautasTelemetry, type AgronautasTelemetry } from '../../observability/agronautas-telemetry'
 const DEFAULT_LEASE_SECONDS = 300
 
 export type RuntimeTransitionState = 'queued' | 'leased' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'dlq' | 'cancelled'
@@ -19,6 +17,10 @@ export interface RuntimeTransitionInput {
   resultPayload?: Record<string, unknown>
   errorCode?: string
   errorMessage?: string
+  resultStatus?: string
+  providerMode?: string
+  reason?: string
+  leaseExpiresAt?: Date | null
 }
 
 export interface LegacyJobRunDbRow {
@@ -45,7 +47,10 @@ const LEGAL_TRANSITIONS: Readonly<Record<RuntimeTransitionState, readonly Runtim
 }
 
 export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepository {
-  constructor(private readonly pool: Pick<Pool, 'query'> = getPostgresPool()) {}
+  constructor(
+    private readonly pool: Pick<Pool, 'query'> = getPostgresPool(),
+    private readonly telemetry: AgronautasTelemetry = createAgronautasTelemetry(),
+  ) {}
 
   async saveQueuedRun(record: AgronautasJobRunRecord): Promise<void> {
     const id = randomUUID()
@@ -72,11 +77,12 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
         record.resultPayload ?? {},
       ],
     )
-    telemetry.onJobRunPersisted({ fieldId: record.fieldId, runId: record.runId, jobId: record.jobId, status: record.status })
+    this.telemetry.onJobRunPersisted({ fieldId: record.fieldId, runId: record.runId, jobId: record.jobId, status: record.status })
   }
 
   async markRunning(jobId: string, startedAt: Date, workerId: string): Promise<void> {
-    await this.pool.query("UPDATE agronautas_job_runs SET status = 'running', \"startedAt\" = $2 WHERE \"jobId\" = $1 AND status IN ('queued', 'leased', 'waiting') AND lease_owner = $3", [jobId, startedAt, workerId])
+    const result = await this.pool.query("UPDATE agronautas_job_runs SET status = 'running', \"startedAt\" = $2 WHERE \"jobId\" = $1 AND status = 'leased' AND lease_owner = $3 AND (lease_expires_at IS NULL OR lease_expires_at >= $2) RETURNING \"jobId\", \"runId\", \"contractVersion\", attempt, lease_expires_at, \"runtimeMode\", \"startedAt\"", [jobId, startedAt, workerId])
+    this.emitLegacyTransition(result.rows[0], { jobId, workerId, from: 'leased', to: 'running', occurredAt: startedAt, resultStatus: 'running' })
   }
 
   async markHeartbeat(jobId: string, heartbeatAt: Date, workerId: string): Promise<void> {
@@ -84,21 +90,24 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
   }
 
   async markCompleted(jobId: string, completedAt: Date, resultPayload: Record<string, unknown>, workerId: string): Promise<void> {
-    await this.pool.query("UPDATE agronautas_job_runs SET status = 'succeeded', \"completedAt\" = $2, \"resultPayload\" = $3, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status IN ('leased', 'running') AND lease_owner = $4", [jobId, completedAt, resultPayload, workerId])
+    const result = await this.pool.query("UPDATE agronautas_job_runs SET status = 'succeeded', \"completedAt\" = $2, \"resultPayload\" = $3, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status = 'running' AND lease_owner = $4 AND (lease_expires_at IS NULL OR lease_expires_at >= $2) RETURNING \"jobId\", \"runId\", \"contractVersion\", attempt, lease_expires_at, \"runtimeMode\", \"startedAt\"", [jobId, completedAt, resultPayload, workerId])
+    this.emitLegacyTransition(result.rows[0], { jobId, workerId, from: 'running', to: 'succeeded', occurredAt: completedAt, resultStatus: readResultStatus(resultPayload) })
   }
 
   async markFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string, workerId: string): Promise<void> {
-    await this.pool.query(
-      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status NOT IN ('succeeded', 'dlq') AND lease_owner = $5",
+    const result = await this.pool.query(
+      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND status = 'running' AND lease_owner = $5 AND (lease_expires_at IS NULL OR lease_expires_at >= $2) RETURNING \"jobId\", \"runId\", \"contractVersion\", attempt, lease_expires_at, \"runtimeMode\", \"startedAt\"",
       [jobId, failedAt, errorCode, errorMessage, workerId],
     )
+    this.emitLegacyTransition(result.rows[0], { jobId, workerId, from: 'running', to: 'failed', occurredAt: failedAt, resultStatus: 'failed', reason: `${errorCode}: ${errorMessage}` })
   }
 
   async markDispatchFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void> {
-    await this.pool.query(
-      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4 WHERE \"jobId\" = $1 AND status = 'queued' AND lease_owner IS NULL",
+    const result = await this.pool.query(
+      "UPDATE agronautas_job_runs SET status = 'failed', \"completedAt\" = $2, \"errorCode\" = $3, \"errorMessage\" = $4, terminal_error_code = $3, terminal_error_message = $4 WHERE \"jobId\" = $1 AND status = 'queued' AND lease_owner IS NULL RETURNING \"jobId\", \"runId\", \"contractVersion\", attempt, lease_expires_at, \"runtimeMode\", \"startedAt\"",
       [jobId, failedAt, errorCode, errorMessage],
     )
+    this.emitLegacyTransition(result.rows[0], { jobId, workerId: 'api-dispatcher', from: 'queued', to: 'failed', occurredAt: failedAt, resultStatus: 'failed', reason: `${errorCode}: ${errorMessage}` })
   }
 
   async getByJobId(jobId: string): Promise<LegacyJobRunRead | null> {
@@ -113,10 +122,13 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
   async claim(jobId: string, workerId: string, now: Date, leaseSeconds: number): Promise<AgronautasJobClaim> {
     const leaseExpiresAt = new Date(now.getTime() + leaseSeconds * 1000)
     const result = await this.pool.query(
-      "UPDATE agronautas_job_runs SET status = 'leased', lease_owner = $2, lease_expires_at = $4, \"heartbeatAt\" = $3, \"startedAt\" = COALESCE(\"startedAt\", $3) WHERE \"jobId\" = $1 AND ((status = 'queued') OR (status = 'waiting' AND (retry_at IS NULL OR retry_at <= $3)) OR (status IN ('leased', 'running') AND lease_expires_at IS NOT NULL AND lease_expires_at < $3)) RETURNING lease_expires_at",
+      "UPDATE agronautas_job_runs SET status = 'leased', lease_owner = $2, lease_expires_at = $4, \"heartbeatAt\" = $3, \"startedAt\" = COALESCE(\"startedAt\", $3) WHERE \"jobId\" = $1 AND ((status = 'queued') OR (status = 'waiting' AND retry_at IS NOT NULL AND retry_at <= $3) OR (status IN ('leased', 'running') AND lease_expires_at IS NOT NULL AND lease_expires_at < $3)) RETURNING lease_expires_at, \"runId\", \"contractVersion\", attempt, \"runtimeMode\"",
       [jobId, workerId, now, leaseExpiresAt],
     )
     const row = result.rows[0] as { lease_expires_at?: unknown } | undefined
+    if (row) {
+      this.emitLegacyTransition(row, { jobId, workerId, from: 'queued', to: 'leased', occurredAt: now, resultStatus: 'leased', leaseExpiresAt: toDate(row.lease_expires_at) })
+    }
     return { claimed: Boolean(row), leaseExpiresAt: row ? toDate(row.lease_expires_at) : null }
   }
 
@@ -127,18 +139,20 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
     )
   }
 
-  async scheduleRetry(jobId: string, runId: string, nextRetryAt: Date, errorCode: string, errorMessage = errorCode): Promise<void> {
-    await this.pool.query(
-      "UPDATE agronautas_job_runs SET status = 'waiting', attempt = attempt + 1, retry_at = $3, \"errorCode\" = $4, \"errorMessage\" = $5, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND \"runId\" = $2 AND status IN ('leased', 'running') AND attempt < max_attempts AND lease_owner IS NOT NULL",
-      [jobId, runId, nextRetryAt, errorCode, errorMessage],
+  async scheduleRetry(jobId: string, runId: string, nextRetryAt: Date, errorCode: string, errorMessage = errorCode, workerId = 'worker'): Promise<void> {
+    const result = await this.pool.query(
+      "UPDATE agronautas_job_runs SET status = 'waiting', attempt = attempt + 1, retry_at = $3, \"errorCode\" = $4, \"errorMessage\" = $5, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND \"runId\" = $2 AND status = 'running' AND attempt < max_attempts AND lease_owner = $6 RETURNING \"jobId\", \"runId\", \"contractVersion\", attempt, lease_expires_at, \"runtimeMode\", \"startedAt\"",
+      [jobId, runId, nextRetryAt, errorCode, errorMessage, workerId],
     )
+    this.emitLegacyTransition(result.rows[0], { jobId, runId, workerId, from: 'running', to: 'waiting', occurredAt: nextRetryAt, resultStatus: 'retryable_failure', leaseExpiresAt: null, reason: `${errorCode}: ${errorMessage}` })
   }
 
-  async deadLetter(jobId: string, runId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void> {
-    await this.pool.query(
-      "UPDATE agronautas_job_runs SET status = 'dlq', \"completedAt\" = $3, dead_lettered_at = $3, dlq_reason = $4, \"errorCode\" = $4, \"errorMessage\" = $5, terminal_error_code = $4, terminal_error_message = $5, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND \"runId\" = $2 AND status NOT IN ('completed', 'succeeded', 'dlq') AND lease_owner IS NOT NULL",
-      [jobId, runId, failedAt, errorCode, errorMessage],
+  async deadLetter(jobId: string, runId: string, failedAt: Date, errorCode: string, errorMessage: string, workerId = 'worker'): Promise<void> {
+    const result = await this.pool.query(
+      "UPDATE agronautas_job_runs SET status = 'dlq', \"completedAt\" = $3, dead_lettered_at = $3, dlq_reason = $4, \"errorCode\" = $4, \"errorMessage\" = $5, terminal_error_code = $4, terminal_error_message = $5, lease_owner = NULL, lease_expires_at = NULL WHERE \"jobId\" = $1 AND \"runId\" = $2 AND status = 'running' AND lease_owner = $6 RETURNING \"jobId\", \"runId\", \"contractVersion\", attempt, lease_expires_at, \"runtimeMode\", \"startedAt\"",
+      [jobId, runId, failedAt, errorCode, errorMessage, workerId],
     )
+    this.emitLegacyTransition(result.rows[0], { jobId, runId, workerId, from: 'running', to: 'dlq', occurredAt: failedAt, resultStatus: 'dlq', leaseExpiresAt: null, reason: `${errorCode}: ${errorMessage}` })
   }
 
   async transition(input: RuntimeTransitionInput): Promise<boolean> {
@@ -161,7 +175,7 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
         WHERE "jobId" = $1 AND "runId" = $2 AND lease_owner = $3
           AND status = $10
           AND (lease_expires_at IS NULL OR lease_expires_at >= $4)
-        RETURNING "jobId"`,
+       RETURNING "jobId", "runId", "contractVersion", attempt, lease_expires_at, "runtimeMode", "startedAt"`,
       [
         input.jobId,
         input.runId,
@@ -175,12 +189,54 @@ export class PostgresAgronautasJobRunRepository implements AgronautasJobRunRepos
         input.from,
       ],
     )
+    const row = result.rows[0]
+    if (row) this.emitLegacyTransition(row, input)
     return result.rows.length > 0
   }
 
   async persistOutcome(input: RuntimeTransitionInput): Promise<boolean> {
     return this.transition(input)
   }
+
+  private emitLegacyTransition(row: unknown, input: Omit<Pick<RuntimeTransitionInput, 'jobId' | 'runId' | 'workerId' | 'from' | 'to' | 'occurredAt' | 'resultStatus' | 'providerMode' | 'reason' | 'leaseExpiresAt' | 'resultPayload'>, 'runId'> & { runId?: string }): void {
+    if (!row || typeof row !== 'object') return
+    const metadata = row as Record<string, unknown>
+    this.telemetry.onQueueTransition({
+      contractVersion: asString(metadata['contractVersion'], '1.0.0'),
+      jobId: input.jobId,
+      runId: asString(input.runId ?? metadata['runId'], 'unknown'),
+      from: input.from,
+      to: input.to,
+      attempt: asNumber(metadata['attempt'], 1),
+      workerId: input.workerId,
+      leaseExpiresAt: input.leaseExpiresAt === undefined ? toDate(metadata['lease_expires_at'])?.toISOString() ?? null : input.leaseExpiresAt?.toISOString() ?? null,
+      resultStatus: input.resultStatus ?? readResultStatus(input.resultPayload ?? {}) ?? input.to,
+      providerMode: input.providerMode ?? runtimeModeToProviderMode(metadata['runtimeMode'] ?? metadata['providerMode']),
+      latencyMs: Math.max(0, input.occurredAt.getTime() - (toDate(metadata['startedAt'])?.getTime() ?? input.occurredAt.getTime())),
+      ...(input.reason ? { reason: input.reason } : {}),
+    })
+  }
+}
+
+function readResultStatus(payload: Record<string, unknown>): string {
+  const nested = payload['result']
+  if (nested && typeof nested === 'object' && typeof (nested as Record<string, unknown>)['status'] === 'string') return (nested as Record<string, unknown>)['status'] as string
+  return typeof payload['status'] === 'string' ? payload['status'] : 'succeeded'
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.length > 0 ? value : fallback
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function runtimeModeToProviderMode(value: unknown): string {
+  if (value === 'real') return 'live'
+  if (value === 'demo') return 'mock'
+  if (value === 'live' || value === 'mock' || value === 'unavailable') return value
+  return 'unknown'
 }
 
 function toDate(value: unknown): Date | null {

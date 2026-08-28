@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -32,6 +32,80 @@ class DurableOutcomeError(RuntimeError):
     """A durable outcome could not be recorded; the transport must not be ACKed."""
 
 
+class ScheduledWindowLineage(TypedDict):
+    sourceRunIds: list[str]
+    providerRunIds: list[str]
+    retrievedAt: str
+    observedAt: None
+    forecastAt: None
+    providerMode: Literal["unavailable"]
+    units: dict[str, str]
+    httpStatus: None
+    schemaStatus: Literal["unavailable"]
+    lastSuccessfulObservedAt: None
+
+
+class ScheduledWindowUnavailableRuntimeResult(TypedDict):
+    status: Literal["unavailable"]
+    freshness: Literal["missing"]
+    uncertainty: Literal["not_calibrated"]
+    degradationReasons: list[Literal["processor_not_configured"]]
+    lineage: ScheduledWindowLineage
+
+
+class ScheduledWindowUnavailableResult(TypedDict):
+    accepted: Literal[False]
+    status: Literal["unavailable"]
+    reason: Literal["scheduled_window_processor_not_configured"]
+    runId: str
+    jobId: str
+    freshness: Literal["missing"]
+    uncertainty: Literal["not_calibrated"]
+    degradationReasons: list[Literal["processor_not_configured"]]
+    lineage: ScheduledWindowLineage
+    result: ScheduledWindowUnavailableRuntimeResult
+
+
+def build_scheduled_window_unavailable_result(
+    *,
+    job_id: str,
+    run_id: str,
+    provider: str,
+    retrieved_at: str,
+) -> ScheduledWindowUnavailableResult:
+    lineage: ScheduledWindowLineage = {
+        "sourceRunIds": [run_id],
+        "providerRunIds": [f"{provider}:{run_id}"],
+        "retrievedAt": retrieved_at,
+        "observedAt": None,
+        "forecastAt": None,
+        "providerMode": "unavailable",
+        "units": {"status": "not_available"},
+        "httpStatus": None,
+        "schemaStatus": "unavailable",
+        "lastSuccessfulObservedAt": None,
+    }
+    runtime_result: ScheduledWindowUnavailableRuntimeResult = {
+        "status": "unavailable",
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["processor_not_configured"],
+        "lineage": lineage,
+    }
+    return {
+        "accepted": False,
+        "status": "unavailable",
+        "reason": "scheduled_window_processor_not_configured",
+        "runId": run_id,
+        "jobId": job_id,
+        "freshness": "missing",
+        "uncertainty": "not_calibrated",
+        "degradationReasons": ["processor_not_configured"],
+        "lineage": lineage,
+        "result": runtime_result,
+    }
+
+
 class PostgresAgronautasJobStore:
     """Small async adapter for durable Agronautas job transitions."""
 
@@ -55,11 +129,12 @@ class PostgresAgronautasJobStore:
                        SET status = 'leased', lease_owner = %s, lease_expires_at = %s,
                            "heartbeatAt" = %s, "startedAt" = COALESCE("startedAt", %s)
                      WHERE "jobId" = %s
-                       AND (status IN ('queued', 'waiting')
+                       AND (status = 'queued'
+                             OR (status = 'waiting' AND retry_at IS NOT NULL AND retry_at <= %s)
                              OR (status IN ('leased', 'running') AND lease_expires_at < %s))
                      RETURNING "jobId"
                     """,
-                    (self.worker_id, lease_expires_at, now, now, job_id, now),
+                     (self.worker_id, lease_expires_at, now, now, job_id, now, now),
                 )
                 claimed = await cursor.fetchone() is not None
             await connection.commit()
@@ -90,7 +165,7 @@ class PostgresAgronautasJobStore:
                SET status = 'succeeded', "completedAt" = %s, "resultPayload" = %s::jsonb,
                    lease_owner = NULL, lease_expires_at = NULL
              WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
-               AND status IN ('leased', 'running')
+               AND status = 'running'
             """,
             (completed_at, json.dumps(result), job_id, run_id, self.worker_id),
         )
@@ -102,7 +177,7 @@ class PostgresAgronautasJobStore:
                SET status = 'waiting', attempt = attempt + 1, retry_at = %s,
                    "errorCode" = %s, "errorMessage" = %s, lease_owner = NULL, lease_expires_at = NULL
                WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
-                AND status IN ('leased', 'running') AND attempt < max_attempts
+                 AND status = 'running' AND attempt < max_attempts
             """,
             (next_retry_at, error_code, error_message, job_id, run_id, self.worker_id),
         )
@@ -115,7 +190,7 @@ class PostgresAgronautasJobStore:
                    dlq_reason = %s, terminal_error_code = %s, terminal_error_message = %s,
                    "errorCode" = %s, "errorMessage" = %s, lease_owner = NULL, lease_expires_at = NULL
              WHERE "jobId" = %s AND "runId" = %s AND lease_owner = %s
-               AND status NOT IN ('completed', 'succeeded', 'dlq')
+               AND status = 'running'
             """,
             (failed_at, failed_at, error_message, error_code, error_message, error_code, error_message, job_id, run_id, self.worker_id),
         )
@@ -154,6 +229,37 @@ class RuntimeOutcomeCoordinator:
             heartbeat_ok = await self.job_store.heartbeat(str(job["jobId"]), str(job["runId"]), datetime.now(UTC))
             if heartbeat_ok is False:
                 raise DurableOutcomeError("durable heartbeat ownership was lost")
+
+    async def resolve_failure(
+        self,
+        job: dict[str, Any],
+        error: Exception,
+        max_attempts: int | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Classify and durably persist one fallback failure outcome."""
+        attempt = _job_attempt(job)
+        allowed_attempts = max_attempts if max_attempts is not None and max_attempts > 0 else _job_max_attempts(job)
+        failure_reason = reason if reason is not None else f"{type(error).__name__}: {error}"
+        retryable = isinstance(error, (RuntimeError, TimeoutError, ConnectionError))
+        exhausted = not retryable or attempt >= allowed_attempts
+        result: dict[str, Any] = {
+            "accepted": False,
+            "status": "dlq" if exhausted else "retryable_failure",
+            "jobId": str(job["jobId"]),
+            "runId": str(job["runId"]),
+            "error": failure_reason,
+        }
+        payload = job.get("payload")
+        if isinstance(payload, dict):
+            if isinstance(payload.get("fieldId"), str):
+                result["fieldId"] = payload["fieldId"]
+            runtime = payload.get("runtime")
+            if isinstance(runtime, dict) and isinstance(runtime.get("mode"), str):
+                result["mode"] = runtime["mode"]
+        if not exhausted:
+            result["nextAttempt"] = attempt + 1
+        return await self.persist_outcome_before_ack(job, result)
 
     async def persist_outcome_before_ack(self, job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         if self.job_store is None:
@@ -352,23 +458,7 @@ async def handle_agronautas_job(
             if job_store is not None:
                 raise DurableOutcomeError("failed to persist failed ingestion") from persistence_error
             raise
-        lease = job.get("lease") or {}
-        attempt = int(job.get("attempt") or lease.get("attempt") or payload.get("attempt") or 1)
-        max_attempts = int(job.get("maxAttempts") or lease.get("maxAttempts") or payload.get("maxAttempts") or 1)
-        retryable = isinstance(error, (RuntimeError, TimeoutError, ConnectionError))
-        exhausted = not retryable or attempt >= max_attempts
-        result = {
-            "accepted": False,
-            "status": "dlq" if exhausted else "retryable_failure",
-            "fieldId": field_id,
-            "mode": mode,
-            "runId": run_id,
-            "jobId": job_id,
-            "error": str(error),
-        }
-        if not exhausted:
-            result["nextAttempt"] = attempt + 1
-        await coordinator.persist_outcome_before_ack(job, result)
+        result = await coordinator.resolve_failure(job, error, reason=str(error))
 
     await redis.hset("agronautas:job-runs:result", job_id, json.dumps(result))
     logger.info(
@@ -424,30 +514,12 @@ async def handle_scheduled_window_job(
             await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
             return result
 
-    lineage = {
-        "sourceRunIds": [job["runId"]],
-        "providerRunIds": [f"{source_window['provider']}:{job['runId']}"],
-        "retrievedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "observedAt": None,
-        "forecastAt": None,
-        "providerMode": "unavailable",
-        "units": {"status": "not_available"},
-        "httpStatus": None,
-        "schemaStatus": "unavailable",
-        "lastSuccessfulObservedAt": None,
-    }
-    result = {
-        "accepted": False,
-        "status": "unavailable",
-        "reason": "scheduled_window_processor_not_configured",
-        "runId": job["runId"],
-        "jobId": job["jobId"],
-        "freshness": "missing",
-        "uncertainty": "not_calibrated",
-        "degradationReasons": ["processor_not_configured"],
-        "lineage": lineage,
-        "result": {"status": "unavailable", "freshness": "missing", "uncertainty": "not_calibrated", "degradationReasons": ["processor_not_configured"], "lineage": lineage},
-    }
+    result = build_scheduled_window_unavailable_result(
+        job_id=job["jobId"],
+        run_id=job["runId"],
+        provider=source_window["provider"],
+        retrieved_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
     await coordinator.persist_outcome_before_ack(job, result)
     await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
     logger.info(

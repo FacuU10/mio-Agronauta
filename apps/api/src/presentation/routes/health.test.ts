@@ -194,7 +194,7 @@ test('GET /ready reports an unavailable worker without claiming it is healthy wh
   assert.deepEqual(body.worker, {
     required: false,
     healthy: null,
-    status: 'unavailable',
+    status: 'not_configured',
     durableCapability: 'not_configured',
     reason: 'worker_not_configured',
     latestHeartbeatAt: null,

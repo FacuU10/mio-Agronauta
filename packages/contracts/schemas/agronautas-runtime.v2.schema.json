@@ -149,14 +149,21 @@
       "allOf": [
         {
           "if": { "properties": { "status": { "enum": ["available", "degraded"] } } },
-          "then": { "required": ["confidence", "engine", "risk"] }
+          "then": {
+            "required": ["confidence", "engine", "risk"],
+            "properties": {
+              "confidence": {},
+              "engine": {},
+              "risk": {}
+            }
+          }
         },
         {
           "if": { "properties": { "status": { "const": "unavailable" } } },
           "then": {
             "required": ["degradationReasons"],
             "properties": {
-              "degradationReasons": { "minItems": 1 }
+              "degradationReasons": { "type": "array", "minItems": 1 }
             },
             "not": { "required": ["risk"] }
           }
@@ -167,6 +174,7 @@
             "required": ["lineage"],
             "properties": {
               "lineage": {
+                "type": "object",
                 "required": ["lastSuccessfulObservedAt"],
                 "properties": { "lastSuccessfulObservedAt": { "type": "string" } }
               }

@@ -14,7 +14,7 @@ os.environ.setdefault(
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job, handle_scheduled_window_job
+from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, build_scheduled_window_unavailable_result, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job, handle_scheduled_window_job
 
 
 class FakeRedis:
@@ -113,6 +113,29 @@ async def test_durable_job_store_keeps_run_identity_for_terminal_transitions(mon
 
     assert all('"jobId"' in query and '"runId"' in query for query in queries)
     assert all("job_id" not in query and "run_id" not in query for query in queries)
+    assert "status = 'running'" in queries[0]
+    assert "status = 'running'" in queries[1]
+    assert "status = 'running'" in queries[2]
+    assert all("lease_owner = %s" in query for query in queries)
+
+
+@pytest.mark.asyncio
+async def test_durable_job_store_does_not_claim_waiting_without_a_due_retry_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[str] = []
+
+    async def fake_connect(_dsn: str):
+        return CapturingConnection(queries)
+
+    monkeypatch.setattr(
+        "worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect",
+        fake_connect,
+    )
+    store = PostgresAgronautasJobStore("postgres://test", "worker-1")
+
+    await store.claim("job-waiting", _parse_test_timestamp("2026-08-04T00:00:00Z"))
+
+    assert "status = 'waiting' AND retry_at IS NOT NULL AND retry_at <= %s" in queries[0]
+    assert "status IN ('queued', 'waiting')" not in queries[0]
 
 
 @pytest.mark.asyncio
@@ -545,6 +568,21 @@ def test_v2_job_runtime_exposes_a_single_outcome_transition_coordinator() -> Non
     assert hasattr(agronautas_jobs, "RuntimeOutcomeCoordinator")
 
 
+def test_scheduled_window_unavailable_result_is_typed_and_contains_no_risk_payload() -> None:
+    result = build_scheduled_window_unavailable_result(
+        job_id="window-job-typed",
+        run_id="window-run-typed",
+        provider="open-meteo",
+        retrieved_at="2026-08-27T00:00:00Z",
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "scheduled_window_processor_not_configured"
+    assert result["result"]["status"] == "unavailable"
+    assert "risk" not in result["result"]
+    assert result["result"]["degradationReasons"] == ["processor_not_configured"]
+
+
 @pytest.mark.asyncio
 async def test_outcome_coordinator_persists_before_redis_result_and_ack_boundary() -> None:
     import worker.runtime.agronautas_jobs as agronautas_jobs
@@ -603,6 +641,37 @@ async def test_outcome_coordinator_owns_one_retry_and_exhaustion_transition() ->
         {"status": "retryable_failure", "error": "timeout"},
     )
 
+    assert events == ["retry", "dlq"]
+
+
+@pytest.mark.asyncio
+async def test_outcome_coordinator_owns_fallback_failure_classification_and_persistence() -> None:
+    import worker.runtime.agronautas_jobs as agronautas_jobs
+
+    events: list[str] = []
+
+    class FakeStore:
+        async def schedule_retry(self, *args, **kwargs):
+            events.append("retry")
+            return True
+
+        async def dead_letter(self, *args, **kwargs):
+            events.append("dlq")
+            return True
+
+    coordinator = agronautas_jobs.RuntimeOutcomeCoordinator(FakeStore())
+    retry = await coordinator.resolve_failure(
+        {"jobId": "job-1", "runId": "run-1", "lease": {"attempt": 1, "maxAttempts": 2}},
+        TimeoutError("temporary"),
+    )
+    dead_letter = await coordinator.resolve_failure(
+        {"jobId": "job-2", "runId": "run-2", "lease": {"attempt": 1, "maxAttempts": 2}},
+        ValueError("invalid"),
+    )
+
+    assert retry["status"] == "retryable_failure"
+    assert retry["nextAttempt"] == 2
+    assert dead_letter["status"] == "dlq"
     assert events == ["retry", "dlq"]
 
 

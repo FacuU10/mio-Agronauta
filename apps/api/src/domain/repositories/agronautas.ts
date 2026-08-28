@@ -231,6 +231,6 @@ export interface AgronautasJobRunRepository {
   markDispatchFailed?(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void>
   claim?(jobId: string, workerId: string, now: Date, leaseSeconds: number): Promise<AgronautasJobClaim>
   heartbeat?(jobId: string, runId: string, workerId: string, heartbeatAt: Date, leaseSeconds?: number): Promise<void>
-  scheduleRetry?(jobId: string, runId: string, nextRetryAt: Date, errorCode: string, errorMessage?: string): Promise<void>
-  deadLetter?(jobId: string, runId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void>
+  scheduleRetry?(jobId: string, runId: string, nextRetryAt: Date, errorCode: string, errorMessage?: string, workerId?: string): Promise<void>
+  deadLetter?(jobId: string, runId: string, failedAt: Date, errorCode: string, errorMessage: string, workerId?: string): Promise<void>
 }

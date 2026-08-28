@@ -30,7 +30,7 @@ class RuntimeSettings(BaseSettings):
     langsmith_project: str = Field(default="golden-boilerplate")
 
     redis_url: str = Field(default="redis://localhost:6379/0", validation_alias=AliasChoices("WORKER_REDIS_URL", "REDIS_URL"))
-    postgres_dsn: str = Field(default="postgresql://postgres:postgres@localhost:5432/workflows")
+    postgres_dsn: str = Field(default="")
     vector_store_backend: str = Field(default="pgvector")
     vector_collection: str = Field(default="workflow_documents")
     checkpoint_backend: str = Field(default="postgres")

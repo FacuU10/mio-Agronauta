@@ -22,18 +22,12 @@ from worker.runtime.agronautas_jobs import (
 )
 
 
-class RetryableAgronautasJobError(ConnectionError):
-    """Signals that the durable retry transition completed but Redis must requeue."""
-
-    durable_transition = True
-
-
 class DurableOutcomePersistenceError(RuntimeError):
     """Persistence failed; leave the processing payload recoverable for restart."""
 
 
 def adapt_v2_runtime_job(job: dict[str, Any]) -> dict[str, Any]:
-    """Translate a validated v2 envelope to the legacy worker execution shape."""
+    """Add legacy execution aliases without downgrading a validated v2 envelope."""
     operation = job["operation"]
     is_scheduled = operation == "scheduled-window"
     state = job["state"]
@@ -49,12 +43,14 @@ def adapt_v2_runtime_job(job: dict[str, Any]) -> dict[str, Any]:
         }
 
     lease = dict(job["lease"])
-    if lease.get("leaseExpiresAt") is None:
-        lease.pop("leaseExpiresAt", None)
 
     return {
-        "contractVersion": "1.0.0",
+        **job,
+        "contractVersion": "2.0.0",
         "jobId": job["jobId"],
+        "state": state,
+        "operation": operation,
+        "fieldId": job["fieldId"],
         "workflowId": "agronautas-scheduled-window" if is_scheduled else "agronautas-risk-recompute",
         "runId": job["runId"],
         "kind": "agronautas-scheduled-window" if is_scheduled else "agronautas-risk-recompute",
@@ -62,7 +58,6 @@ def adapt_v2_runtime_job(job: dict[str, Any]) -> dict[str, Any]:
         "priority": 50,
         "createdAt": job["requestedAt"],
         "lease": lease,
-        "trace": job["trace"],
         "payload": payload,
         "labels": {"domain": "agronautas", "operation": operation},
     }
@@ -103,6 +98,7 @@ class WorkflowQueueConsumer:
 
             try:
                 job = json.loads(payload)
+                self._require_durable_runtime(job)
                 result = await self.handle_job(job)
                 if result.get("status") == "retryable_failure":
                     await self._requeue(payload, str(result.get("error", "retryable_failure")))
@@ -195,34 +191,23 @@ class WorkflowQueueConsumer:
 
     async def _handle_failure(self, payload: str, exc: Exception) -> None:
         job = json.loads(payload)
-        max_attempts = self._max_attempts(job)
-        attempt = self._current_attempt(job)
-        reason = f"{type(exc).__name__}: {exc}"
-        if self._is_retryable_exception(exc) and attempt < max_attempts:
-            result = {
-                "accepted": False,
-                "status": "retryable_failure",
-                "jobId": job["jobId"],
-                "runId": job["runId"],
-                "error": reason,
-            }
-            await self.persist_outcome_before_ack(job, result)
+        result = await self.outcome_coordinator.resolve_failure(job, exc, self._max_attempts(job))
+        reason = str(result.get("error", "runtime_failure"))
+        if result.get("status") == "retryable_failure":
             await self._requeue(payload, reason)
             return
-
-        result = {
-            "accepted": False,
-            "status": "dlq",
-            "jobId": job["jobId"],
-            "runId": job["runId"],
-            "error": reason,
-        }
-        await self.persist_outcome_before_ack(job, result)
         await self._dead_letter(payload, reason)
 
+    def _require_durable_runtime(self, job: dict[str, Any]) -> None:
+        if not self._is_agronautas_runtime_job(job) or self.job_store is not None:
+            return
+        raise DurableOutcomePersistenceError(
+            "Agronautas runtime cannot ACK without WORKER_POSTGRES_DSN durable storage"
+        )
+
     @staticmethod
-    def _is_retryable_exception(exc: Exception) -> bool:
-        return isinstance(exc, (TimeoutError, ConnectionError))
+    def _is_agronautas_runtime_job(job: dict[str, Any]) -> bool:
+        return job.get("workflowId") in {"agronautas-risk-recompute", "agronautas-scheduled-window"} or job.get("operation") in {"risk-recompute", "scheduled-window"}
 
     def _max_attempts(self, job: dict[str, Any]) -> int:
         lease = job.get("lease") or {}

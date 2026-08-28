@@ -182,10 +182,11 @@ def test_consumer_validator_resolves_relative_schema_refs(consumer: WorkflowQueu
     consumer.validator.validate(_job_with_asset_metadata())
 
 
-def test_v2_runtime_job_adapter_emits_the_legacy_worker_shape() -> None:
+def test_v2_runtime_job_adapter_emits_legacy_execution_aliases_without_downgrading_contract() -> None:
     adapted = adapt_v2_runtime_job(_v2_risk_job())
 
-    assert adapted["contractVersion"] == "1.0.0"
+    assert adapted["contractVersion"] == "2.0.0"
+    assert adapted["state"] == "queued"
     assert adapted["workflowId"] == "agronautas-risk-recompute"
     assert adapted["payload"] == {
         "fieldId": "field-v2",
@@ -193,14 +194,17 @@ def test_v2_runtime_job_adapter_emits_the_legacy_worker_shape() -> None:
         "requestedAt": "2026-06-05T00:00:00Z",
         "runtime": {"mode": "real"},
     }
-    assert "leaseExpiresAt" not in adapted["lease"]
+    assert adapted["lease"]["leaseExpiresAt"] is None
+    assert adapted["operation"] == "risk-recompute"
+    assert adapted["fieldId"] == "field-v2"
 
 
-def test_v2_runtime_job_adapter_output_is_accepted_by_the_legacy_validator(consumer: WorkflowQueueConsumer) -> None:
-    job = _v2_risk_job()
-    job["trace"] = {"traceId": "trace-v2-123456789", "correlationId": "corr-v2-123", "causationId": "cause-v2-123"}
+def test_v2_runtime_envelope_is_accepted_by_the_v2_validator(consumer: WorkflowQueueConsumer) -> None:
+    consumer.v2_validator.validate(_v2_risk_job())
 
-    consumer.validator.validate(adapt_v2_runtime_job(job))
+
+def test_v1_runtime_envelope_remains_accepted_by_the_legacy_validator(consumer: WorkflowQueueConsumer) -> None:
+    consumer.validator.validate(_job())
 
 
 def test_v2_scheduled_runtime_job_adapter_preserves_window_payload() -> None:
@@ -223,7 +227,7 @@ async def test_consumer_validates_and_routes_v2_risk_envelope_while_preserving_v
     result = await consumer.handle_job(_v2_risk_job())
 
     assert result["status"] == "succeeded"
-    assert received[0]["contractVersion"] == "1.0.0"
+    assert received[0]["contractVersion"] == "2.0.0"
     assert received[0]["payload"]["fieldId"] == "field-v2"
 
 
@@ -438,6 +442,7 @@ async def test_v2_scheduled_window_unavailable_result_is_valid_in_the_v2_envelop
 @pytest.mark.asyncio
 async def test_scheduled_window_success_records_result_and_completed_transition(consumer: WorkflowQueueConsumer, monkeypatch: pytest.MonkeyPatch) -> None:
     job = _scheduled_window_job()
+    consumer.job_store = object()
     consumer.redis.blmove_payload = json.dumps(job)
 
     async def fake_blmove(source: str, destination: str, timeout: int, src: str, dest: str) -> str | None:
@@ -478,6 +483,16 @@ async def test_failure_fallback_uses_the_coordinator_once_and_does_not_call_stor
     coordinator_calls: list[str] = []
 
     class Coordinator:
+        async def resolve_failure(self, job, error, max_attempts):
+            result = {
+                "accepted": False,
+                "status": "retryable_failure",
+                "jobId": job["jobId"],
+                "runId": job["runId"],
+                "error": f"{type(error).__name__}: {error}",
+            }
+            return await self.persist_outcome_before_ack(job, result)
+
         async def persist_outcome_before_ack(self, job, result):
             coordinator_calls.append(result["status"])
             return result
@@ -509,5 +524,23 @@ async def test_consumer_persistence_failure_does_not_ack_processing_payload(cons
     consumer.outcome_coordinator = FailingCoordinator()
     with pytest.raises(RuntimeError, match="database unavailable"):
         await consumer.persist_outcome_before_ack(_job(), {"status": "succeeded"})
+
+    assert consumer.redis.lists[consumer.processing_queue_name] == [payload]
+
+
+@pytest.mark.asyncio
+async def test_missing_worker_postgres_dsn_does_not_ack_an_agronautas_result(consumer: WorkflowQueueConsumer, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = json.dumps(_scheduled_window_job())
+    consumer.redis.blmove_payload = payload
+
+    async def fake_blmove(source: str, destination: str, timeout: int, src: str, dest: str) -> str | None:
+        if consumer.redis.blmove_payload is not None:
+            return await FakeRedis.blmove(consumer.redis, source, destination, timeout, src, dest)
+        raise CancelledError
+
+    monkeypatch.setattr(consumer.redis, "blmove", fake_blmove)
+
+    with pytest.raises(consumer_module.DurableOutcomePersistenceError, match="WORKER_POSTGRES_DSN"):
+        await consumer.consume_forever()
 
     assert consumer.redis.lists[consumer.processing_queue_name] == [payload]

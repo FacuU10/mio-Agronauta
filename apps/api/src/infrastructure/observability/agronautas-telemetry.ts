@@ -84,7 +84,7 @@ export interface AgronautasTelemetry {
   onDispatchPublished(input: { fieldId: string; runId: string; jobId: string; requestId: string }): void
   onDispatchFailed(input: { fieldId: string; runId: string; jobId: string; requestId: string; error: string }): void
   onJobRunPersisted(input: { fieldId: string; runId: string; jobId: string; status: string }): void
-  onQueueTransition(input: { contractVersion: string; jobId: string; runId: string; from: string; to: string; attempt: number; workerId: string; leaseExpiresAt?: string | null; resultStatus?: string; providerMode?: string; latencyMs?: number; reason?: string }): void
+  onQueueTransition(input: { contractVersion: string; jobId: string; runId: string; from: string; to: string; attempt: number; workerId: string; leaseExpiresAt: string | null; resultStatus: string; providerMode: string; latencyMs: number; reason?: string }): void
   onLeaseHeartbeat(input: { jobId: string; runId: string; leaseExpiresAt?: string | null }): void
   onQueueResult(input: { jobId: string; runId: string; status: string }): void
   onQueueDeadLetter(input: { jobId: string; runId: string; reason: string }): void

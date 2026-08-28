@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { AGRONAUTAS_SOURCE_CADENCES, AgronautasSignalScheduler, calculateRetryBackoff, createAgronautasSchedulerRuntime, dueSourceWindows, type SourceWindow } from './agronautas-scheduler'
 import { RedisAgronautasRuntimeDispatcher } from '../queue/agronautas-runtime-dispatcher'
-import { agronautasScheduledWindowSchema } from '@repo/zod-schemas'
+import { agronautasScheduledWindowSchema, runtimeJobEnvelopeSchema } from '@repo/zod-schemas'
 
 test('calculateRetryBackoff applies extended waits and desists after attempt four until the hourly run', () => {
   const now = new Date('2026-07-04T20:05:00.000Z')
@@ -134,6 +134,35 @@ test('scheduled-window dispatcher publishes one typed Bull envelope and suppress
   assert.equal(lists['bull:agronautas-runtime:wait']?.length, 1)
   assert.equal(parsed.payload.sourceWindow.runId, window.runId)
   assert.equal(parsed.status, 'pending')
+})
+
+test('scheduled-window dispatcher publishes the v2 envelope when runtime v2 is enabled', async () => {
+  const previous = process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+  process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = 'true'
+  try {
+    const lists: Record<string, string[]> = {}
+    const redis = {
+      async set() { return 'OK' as const },
+      async del() { return 1 },
+      async lpush(key: string, value: string) {
+        lists[key] ??= []
+        lists[key].unshift(value)
+        return lists[key].length
+      },
+    }
+    const dispatcher = new RedisAgronautasRuntimeDispatcher(redis)
+    const window: SourceWindow = { provider: 'open-meteo', signalType: 'climate', windowStart: new Date('2026-07-04T19:00:00.000Z'), windowEnd: new Date('2026-07-04T20:00:00.000Z'), runId: 'open-meteo:climate:2026-07-04T19:00:00.000Z' }
+
+    await dispatcher.enqueue(window)
+
+    const parsed = runtimeJobEnvelopeSchema.parse(JSON.parse(lists['bull:agronautas-runtime:wait']?.[0] ?? '{}'))
+    assert.equal(parsed.contractVersion, '2.0.0')
+    assert.equal(parsed.operation, 'scheduled-window')
+    assert.equal(parsed.sourceWindow?.runId, window.runId)
+  } finally {
+    if (previous === undefined) delete process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+    else process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = previous
+  }
 })
 
 test('scheduled-window schema rejects malformed windows and contract drift before queue publication', () => {
