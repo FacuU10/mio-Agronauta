@@ -109,12 +109,6 @@ export class RequestRiskRecomputeUseCase {
       }
       await this.runtimeDispatcher.dispatchRiskRecompute(dispatchCommand)
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'unknown_worker_error'
-      if (this.jobRunRepository.markDispatchFailed) {
-        await this.jobRunRepository.markDispatchFailed(jobId, new Date(), 'WORKER_UNAVAILABLE', errorMessage)
-      } else {
-        await this.jobRunRepository.markFailed(jobId, new Date(), 'WORKER_UNAVAILABLE', errorMessage, 'api-dispatcher')
-      }
       await this.recomputeLockRepository.release(fieldId)
       const message = error instanceof AgronautasRuntimeDispatcherError ? error.message : 'Failed to dispatch recompute job'
       throw new WorkerUnavailableError(message, { runId, jobId, requestId, contractVersion })

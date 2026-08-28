@@ -52,13 +52,20 @@ Threat-matrix rows in design are all `N/A`; no additional threat RED tasks apply
 - Waiting jobs now require a non-null, due `retry_at` in both TypeScript and Python claim SQL; missing retry windows remain unclaimable.
 - Worker-owned PostgreSQL mutators now require their legal source state, matching lease owner, and an active lease; legacy completed reads remain unchanged.
 - The worker configuration has no implicit local PostgreSQL fallback. An Agronautas queue message is left in processing and is not ACKed when `WORKER_POSTGRES_DSN` is missing.
-- Durable PostgreSQL transitions emit bounded telemetry containing contract/job/run identity, from/to, attempt, worker, lease, result status, provider mode, latency, and bounded reason data.
+- PostgreSQL claim telemetry captures the atomic candidate's actual prior state (`queued`, `waiting`, or the expired leased/running state) and labels lease reclaim explicitly.
+- The undocumented `queued → failed` dispatch bypass was removed. Dispatch failure releases the lock while leaving the durable queued run eligible for a later legal claim.
+- Durable PostgreSQL and scheduler transitions emit bounded telemetry containing `fieldId`, `requestId`, `correlationId`, contract/job/run identity, from/to, attempt, `maxAttempts`, worker/lease, result status, provider mode, latency, and bounded reason data; secrets/raw payloads remain excluded.
+
+## Latest Validator Correction
+
+- [x] Corrected claim prior-state telemetry, removed the illegal dispatch-failure mutation path, and completed transition identity/attempt telemetry coverage.
+- [ ] 3.3 remains explicitly unchecked: no authorized API→Redis→worker→Postgres restart harness was run or claimed.
 
 ## Work Unit Evidence — Units 2–3 runtime seam
 
 | Evidence | Result |
 |---|---|
-| Focused test command and exact result | `python -m pytest apps/workflow-runtime-python/tests -q` — 65 passed; API runtime/readiness/telemetry/scheduler suites via `pnpm exec tsx --test ...` — 44 passed; `pnpm --dir packages/contracts test:agronautas-contracts` — 6 passed; `pnpm --dir packages/contracts validate:schemas` — 10 schemas validated; `pnpm --dir packages/contracts validate:agronautas-schema` — 1 schema validated; `pnpm --dir packages/zod-schemas test` — 51 passed. |
+| Focused test command and exact result | Latest correction: `pnpm --dir apps/api exec tsx --test src/infrastructure/database/postgres/agronautas-job-run-repository.test.ts src/application/usecases/request-risk-recompute-usecase.test.ts src/infrastructure/observability/agronautas-telemetry.test.ts` — 27 passed; `python -m pytest apps/workflow-runtime-python/tests -q` — 65 passed; `pnpm --dir packages/contracts test:agronautas-contracts` — 6 passed; `pnpm --dir packages/contracts validate:schemas` — 10 schemas validated; `pnpm --dir packages/contracts validate:agronautas-schema` — 1 schema validated; `pnpm --dir packages/zod-schemas test` — 51 passed. |
 | Runtime harness command/scenario and exact result | N/A — no authorized live API→Redis→worker→Postgres boundary was available; fake Redis/Postgres seam tests passed. Live acceptance remains task 3.3 and unchecked. |
-| Build command and exact result | `pnpm build` — completed successfully for all 11 workspace packages. |
+| Build command and exact result | `pnpm --dir apps/api build` — passed; `pnpm build` — 5 successful build tasks across 11 workspace packages in scope. |
 | Rollback boundary | Revert the runtime coordinator/consumer, PostgreSQL transition guard, v2 schema, and their focused tests; retain the existing legacy read adapters and unrelated product surfaces. |

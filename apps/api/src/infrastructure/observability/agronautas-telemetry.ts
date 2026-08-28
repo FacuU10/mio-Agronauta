@@ -3,15 +3,20 @@ import type { EvidenceEnvelope } from '@repo/zod-schemas'
 
 const MAX_TELEMETRY_STRING_LENGTH = 256
 const MAX_TRANSITION_METRIC_KEYS = 32
+const MAX_TELEMETRY_ATTEMPTS = 1000
+const MAX_TELEMETRY_LATENCY_MS = 86_400_000
+const MAX_TELEMETRY_TTL_SECONDS = 86_400
 const TELEMETRY_ATTRIBUTE_KEYS = new Set([
   'fieldId',
   'contractVersion',
   'jobId',
   'runId',
   'requestId',
+  'correlationId',
   'from',
   'to',
   'attempt',
+  'maxAttempts',
   'workerId',
   'leaseExpiresAt',
   'resultStatus',
@@ -52,12 +57,16 @@ export function sanitizeTelemetryAttributes(input: Record<string, unknown>): Rec
 
   for (const [key, value] of Object.entries(input)) {
     if (!TELEMETRY_ATTRIBUTE_KEYS.has(key)) continue
+    if (value === null && (key === 'fieldId' || key === 'leaseExpiresAt')) {
+      output[key] = null
+      continue
+    }
     if (typeof value === 'string') {
       output[key] = value.slice(0, MAX_TELEMETRY_STRING_LENGTH)
       continue
     }
     if (typeof value === 'number' && Number.isFinite(value)) {
-      output[key] = value
+      output[key] = boundTelemetryNumber(key, value)
       continue
     }
     if (typeof value === 'boolean') {
@@ -75,6 +84,14 @@ export function sanitizeTelemetryAttributes(input: Record<string, unknown>): Rec
   return output
 }
 
+function boundTelemetryNumber(key: string, value: number): number {
+  if (key === 'attempt' || key === 'maxAttempts') return Math.min(MAX_TELEMETRY_ATTEMPTS, Math.max(0, Math.trunc(value)))
+  if (key === 'latencyMs') return Math.min(MAX_TELEMETRY_LATENCY_MS, Math.max(0, Math.trunc(value)))
+  if (key === 'ttlSeconds') return Math.min(MAX_TELEMETRY_TTL_SECONDS, Math.max(0, Math.trunc(value)))
+  if (key === 'httpStatus') return Math.min(599, Math.max(100, Math.trunc(value)))
+  return value
+}
+
 export interface AgronautasTelemetry {
   runtime: RuntimeTelemetry
   getQueueTransitionMetrics(): Readonly<Record<string, number>>
@@ -84,7 +101,7 @@ export interface AgronautasTelemetry {
   onDispatchPublished(input: { fieldId: string; runId: string; jobId: string; requestId: string }): void
   onDispatchFailed(input: { fieldId: string; runId: string; jobId: string; requestId: string; error: string }): void
   onJobRunPersisted(input: { fieldId: string; runId: string; jobId: string; status: string }): void
-  onQueueTransition(input: { contractVersion: string; jobId: string; runId: string; from: string; to: string; attempt: number; workerId: string; leaseExpiresAt: string | null; resultStatus: string; providerMode: string; latencyMs: number; reason?: string }): void
+  onQueueTransition(input: { contractVersion: string; fieldId: string | null; jobId: string; runId: string; requestId: string; correlationId: string; from: string; to: string; attempt: number; maxAttempts: number; workerId: string; leaseExpiresAt: string | null; resultStatus: string; providerMode: string; latencyMs: number; reason?: string }): void
   onLeaseHeartbeat(input: { jobId: string; runId: string; leaseExpiresAt?: string | null }): void
   onQueueResult(input: { jobId: string; runId: string; status: string }): void
   onQueueDeadLetter(input: { jobId: string; runId: string; reason: string }): void

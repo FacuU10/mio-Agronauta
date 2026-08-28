@@ -54,11 +54,15 @@ test('telemetry drops non-finite metrics and preserves explicit unavailable reas
 test('transition telemetry retains the bounded metadata needed to explain a durable transition', () => {
   const attributes = sanitizeTelemetryAttributes({
     contractVersion: '2.0.0',
+    fieldId: 'field-3',
     jobId: 'job-3',
     runId: 'run-3',
+    requestId: 'request-3',
+    correlationId: 'correlation-3',
     from: 'running',
     to: 'succeeded',
     attempt: 1,
+    maxAttempts: 3,
     workerId: 'worker-3',
     leaseExpiresAt: null,
     resultStatus: 'available',
@@ -68,14 +72,40 @@ test('transition telemetry retains the bounded metadata needed to explain a dura
 
   assert.deepEqual(attributes, {
     contractVersion: '2.0.0',
+    fieldId: 'field-3',
     jobId: 'job-3',
     runId: 'run-3',
+    requestId: 'request-3',
+    correlationId: 'correlation-3',
     from: 'running',
     to: 'succeeded',
     attempt: 1,
+    maxAttempts: 3,
     workerId: 'worker-3',
+    leaseExpiresAt: null,
     resultStatus: 'available',
     providerMode: 'live',
     latencyMs: 42,
+  })
+})
+
+test('transition telemetry bounds attempt metadata and preserves nullable field identity', () => {
+  const attributes = sanitizeTelemetryAttributes({
+    fieldId: null,
+    requestId: 'request-4',
+    correlationId: 'correlation-4',
+    attempt: 10_000,
+    maxAttempts: 10_000,
+    latencyMs: 10_000_000_000,
+    password: 'must-not-log',
+  })
+
+  assert.deepEqual(attributes, {
+    fieldId: null,
+    requestId: 'request-4',
+    correlationId: 'correlation-4',
+    attempt: 1000,
+    maxAttempts: 1000,
+    latencyMs: 86_400_000,
   })
 })

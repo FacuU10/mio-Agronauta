@@ -19,15 +19,51 @@ function guarded(repository: PostgresAgronautasJobRunRepository): GuardedJobRunR
 }
 
 test('claim guards the queued transition and reclaims an expired lease atomically', async () => {
+  const transitions: Array<Record<string, unknown>> = []
   const repository = new PostgresAgronautasJobRunRepository({
     async query() {
-      return { rows: [{ claimed: true, lease_expires_at: new Date('2026-08-04T00:05:00.000Z') }] }
+      return { rows: [{ claimed: true, previous_status: 'queued', lease_expires_at: new Date('2026-08-04T00:05:00.000Z') }] }
     },
-  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0])
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0], {
+    onQueueTransition(input: Record<string, unknown>) { transitions.push(input) },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[1])
 
   const result = await guarded(repository).claim('job-1', 'worker-1', new Date('2026-08-04T00:00:00.000Z'), 300)
 
   assert.deepEqual(result, { claimed: true, leaseExpiresAt: new Date('2026-08-04T00:05:00.000Z') })
+  assert.equal(transitions[0]?.['from'], 'queued')
+})
+
+test('claim telemetry reports a due waiting job as waiting before leasing it', async () => {
+  const transitions: Array<Record<string, unknown>> = []
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query() {
+      return { rows: [{ previous_status: 'waiting', lease_expires_at: new Date('2026-08-04T00:05:00.000Z') }] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0], {
+    onQueueTransition(input: Record<string, unknown>) { transitions.push(input) },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[1])
+
+  await guarded(repository).claim('job-waiting', 'worker-1', new Date('2026-08-04T00:00:00.000Z'), 300)
+
+  assert.equal(transitions[0]?.['from'], 'waiting')
+  assert.equal(transitions[0]?.['to'], 'leased')
+})
+
+test('claim telemetry reports the expired lease state when reclaiming a running job', async () => {
+  const transitions: Array<Record<string, unknown>> = []
+  const repository = new PostgresAgronautasJobRunRepository({
+    async query() {
+      return { rows: [{ previous_status: 'running', lease_expires_at: new Date('2026-08-04T00:05:00.000Z') }] }
+    },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[0], {
+    onQueueTransition(input: Record<string, unknown>) { transitions.push(input) },
+  } as unknown as ConstructorParameters<typeof PostgresAgronautasJobRunRepository>[1])
+
+  await guarded(repository).claim('job-expired', 'worker-1', new Date('2026-08-04T00:10:00.000Z'), 300)
+
+  assert.equal(transitions[0]?.['from'], 'running')
+  assert.equal(transitions[0]?.['reason'], 'lease_expired_reclaim')
 })
 
 test('claim only takes waiting jobs whose durable retry window is due', async () => {
@@ -281,10 +317,14 @@ test('durable transition emits complete bounded telemetry from persisted metadat
       async query() {
         return {
           rows: [{
-            jobId: 'job-telemetry',
-            runId: 'run-telemetry',
-            contractVersion: '2.0.0',
-            attempt: 2,
+             jobId: 'job-telemetry',
+             runId: 'run-telemetry',
+             fieldId: 'field-telemetry',
+             requestId: 'request-telemetry',
+             correlationId: 'correlation-telemetry',
+             contractVersion: '2.0.0',
+             attempt: 2,
+             max_attempts: 3,
             lease_expires_at: new Date('2026-08-04T00:08:00.000Z'),
             providerMode: 'live',
           }],
@@ -311,11 +351,15 @@ test('durable transition emits complete bounded telemetry from persisted metadat
   assert.equal(persisted, true)
   assert.deepEqual(transitions[0], {
     contractVersion: '2.0.0',
+    fieldId: 'field-telemetry',
     jobId: 'job-telemetry',
     runId: 'run-telemetry',
+    requestId: 'request-telemetry',
+    correlationId: 'correlation-telemetry',
     from: 'running',
     to: 'succeeded',
     attempt: 2,
+    maxAttempts: 3,
     workerId: 'worker-telemetry',
     leaseExpiresAt: '2026-08-04T00:08:00.000Z',
     resultStatus: 'available',

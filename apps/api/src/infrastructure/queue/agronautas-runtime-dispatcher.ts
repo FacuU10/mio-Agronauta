@@ -99,13 +99,13 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
     const idempotencyKey = `agronautas:scheduler:idempotency:${window.runId}`
     const acquired = await redis.set(idempotencyKey, parsed.jobId, 'EX', 55 * 60, 'NX')
     if (acquired !== 'OK') {
-      telemetry.onQueueTransition({ contractVersion: parsed.contractVersion, jobId: parsed.jobId, runId: parsed.runId, from: 'waiting', to: 'waiting', attempt: parsed.lease.attempt, workerId: 'scheduler', leaseExpiresAt: parsed.lease.leaseExpiresAt ?? null, resultStatus: 'waiting', providerMode: 'unavailable', latencyMs: 0, reason: 'duplicate_run_id' })
+      telemetry.onQueueTransition({ contractVersion: parsed.contractVersion, fieldId: 'fieldId' in parsed ? parsed.fieldId : null, jobId: parsed.jobId, runId: parsed.runId, requestId: parsed.trace.traceId, correlationId: parsed.trace.correlationId, from: 'waiting', to: 'waiting', attempt: parsed.lease.attempt, maxAttempts: parsed.lease.maxAttempts, workerId: 'scheduler', leaseExpiresAt: parsed.lease.leaseExpiresAt ?? null, resultStatus: 'waiting', providerMode: 'unavailable', latencyMs: 0, reason: 'duplicate_run_id' })
       return
     }
 
     try {
       await redis.lpush(RUNTIME_QUEUE_NAME, JSON.stringify(parsed))
-      telemetry.onQueueTransition({ contractVersion: parsed.contractVersion, jobId: parsed.jobId, runId: parsed.runId, from: 'scheduler', to: 'waiting', attempt: parsed.lease.attempt, workerId: 'scheduler', leaseExpiresAt: parsed.lease.leaseExpiresAt ?? null, resultStatus: 'waiting', providerMode: 'unavailable', latencyMs: 0 })
+      telemetry.onQueueTransition({ contractVersion: parsed.contractVersion, fieldId: 'fieldId' in parsed ? parsed.fieldId : null, jobId: parsed.jobId, runId: parsed.runId, requestId: parsed.trace.traceId, correlationId: parsed.trace.correlationId, from: 'scheduler', to: 'waiting', attempt: parsed.lease.attempt, maxAttempts: parsed.lease.maxAttempts, workerId: 'scheduler', leaseExpiresAt: parsed.lease.leaseExpiresAt ?? null, resultStatus: 'waiting', providerMode: 'unavailable', latencyMs: 0 })
     } catch (error) {
       await redis.del?.(idempotencyKey)
       throw error

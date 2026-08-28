@@ -228,7 +228,6 @@ export interface AgronautasJobRunRepository {
   markHeartbeat(jobId: string, heartbeatAt: Date, workerId: string): Promise<void>
   markCompleted(jobId: string, completedAt: Date, resultPayload: Record<string, unknown>, workerId: string): Promise<void>
   markFailed(jobId: string, failedAt: Date, errorCode: string, errorMessage: string, workerId: string): Promise<void>
-  markDispatchFailed?(jobId: string, failedAt: Date, errorCode: string, errorMessage: string): Promise<void>
   claim?(jobId: string, workerId: string, now: Date, leaseSeconds: number): Promise<AgronautasJobClaim>
   heartbeat?(jobId: string, runId: string, workerId: string, heartbeatAt: Date, leaseSeconds?: number): Promise<void>
   scheduleRetry?(jobId: string, runId: string, nextRetryAt: Date, errorCode: string, errorMessage?: string, workerId?: string): Promise<void>

@@ -42,8 +42,8 @@ test('RequestRiskRecomputeUseCase reuses in-flight run metadata when lock alread
   })
 })
 
-test('RequestRiskRecomputeUseCase marks job failed when dispatch throws', async () => {
-  let failed: { jobId: string; errorCode: string } | null = null
+test('RequestRiskRecomputeUseCase leaves the queued run durable when dispatch throws', async () => {
+  let failed = false
   let releasedFieldId: string | null = null
   const useCase = new RequestRiskRecomputeUseCase(
     {
@@ -56,7 +56,7 @@ test('RequestRiskRecomputeUseCase marks job failed when dispatch throws', async 
       async markRunning() {},
       async markHeartbeat() {},
       async markCompleted() {},
-      async markFailed(jobId, _failedAt, errorCode) { failed = { jobId, errorCode } },
+      async markFailed() { failed = true },
     },
     {
       idGenerator: (() => {
@@ -72,7 +72,7 @@ test('RequestRiskRecomputeUseCase marks job failed when dispatch throws', async 
     assert.equal(error.details.jobId, 'agro-job-job-1')
     return true
   })
-  assert.deepEqual(failed, { jobId: 'agro-job-job-1', errorCode: 'WORKER_UNAVAILABLE' })
+  assert.equal(failed, false)
   assert.equal(releasedFieldId, 'field-1')
 })
 
