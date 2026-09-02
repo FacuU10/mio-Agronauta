@@ -38,13 +38,16 @@ test('municipalities overview renders matched official alerts without leaking th
 })
 
 test('municipality detail keeps telemetry and renders the explicit empty official-alert state', async ({ page }) => {
+  const goya = overviewPayload.municipalities.find((municipality) => municipality.id === 'goya')
+  if (!goya) throw new Error('Expected Goya fixture')
+
   await page.route('**/api/hydrology/municipalities/goya/dashboard', async (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
       contractVersion: 'hydrology-government-dashboard-v1',
       municipality: { id: 'goya', localityId: 'goya-corrientes', name: 'Goya', officialAlerts: [] },
-      gaugeMappings: overviewPayload.municipalities[1].gaugeMappings,
+     gaugeMappings: goya.gaugeMappings,
       telemetryCards: [{ source: 'PNA', stationId: 'goya', metric: 'river_height_m', value: 2.8, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', label: 'Altura PNA' }],
       inaPredictions30d: [], alerts: [], provenance: [],
     }),

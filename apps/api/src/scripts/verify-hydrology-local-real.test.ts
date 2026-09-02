@@ -72,3 +72,53 @@ test('completion observation proof requires a terminal response with matching co
   assert.equal(queued, false)
   assert.equal(mismatched, false)
 })
+
+test('completion observation does not promote a 202 acknowledgement without durable completion evidence', () => {
+  const ackOnly = completionObservationPassesGate({
+    proofRunId: 'proof-test-1',
+    status: 'completed',
+    results: [{ source: 'PNA', status: 'success', recordsIngested: 2 }],
+    acknowledgementStatus: 202,
+    durableRowId: null,
+  } as unknown as Parameters<typeof completionObservationPassesGate>[0], 'proof-test-1', 'PNA')
+
+  assert.equal(ackOnly, false)
+})
+
+test('database proof blocks duplicate rows for one proof run and source', () => {
+  const duplicate = evaluateDatabaseProof(
+    'proof-test-1',
+    'PNA',
+    { status: 'success', recordsIngested: 2 },
+    [correlatedRow, { ...correlatedRow, id: 'run-row-duplicate' }],
+    false,
+  )
+
+  assert.equal(duplicate.status, 'blocked')
+  assert.match(duplicate.detail, /duplicate|exactly one|idempot/i)
+})
+
+test('hydrology receipt rejects unsafe durable-row identifiers instead of serializing secrets or diagnostics', () => {
+  const unsafeRowIds = [
+    'Bearer token-value',
+    'https://user:password@example.test/row',
+    'postgresql://user:password@db.example.test:5432/agronautas',
+    '{"source":"PNA","message":"raw payload"}',
+    'raw chat content',
+    'Error: failed\\n    at ingest (hydrology.ts:1:1)',
+  ]
+
+  const unsafeRows = unsafeRowIds.filter((rowId) => {
+    const evidence = evaluateDatabaseProof(
+      'proof-test-1',
+      'PNA',
+      { status: 'success', recordsIngested: 2 },
+      [{ ...correlatedRow, id: rowId }],
+      false,
+    )
+
+    return evidence.status !== 'blocked' || /token-value|password@|postgresql:\/\/|raw payload|raw chat|at ingest/i.test(JSON.stringify(evidence))
+  })
+
+  assert.deepEqual(unsafeRows, [])
+})

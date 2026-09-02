@@ -1,6 +1,6 @@
 'use client'
 
-import { createElement, Fragment, useState, type InputHTMLAttributes } from 'react'
+import { createElement, Fragment, useRef, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
 import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextResponse, AssumptionSimulationResponse, AssumptionSimulationRequest } from '@/lib/agronautas/schemas'
@@ -8,7 +8,7 @@ import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
 import { ProductShell } from '@/components/shell/product-shell'
-import { EvidenceStateBadge, FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard } from '@/components/visibility/primitives'
+import { EvidenceStateBadge, FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard, VisibilityState } from '@/components/visibility/primitives'
 import { FutureCapabilities } from '@/components/visibility/future-capabilities'
 import { ChatEvidencePanel } from '@/components/visibility/chat-evidence'
 import type { ChatStreamState } from '@/lib/visibility/chat'
@@ -23,7 +23,50 @@ import { FieldGeometryEditor } from './field-geometry-editor'
 
 const React = { createElement, Fragment }
 
+const AGRONAUTAS_INTAKE_ERROR_ID = 'agronautas-intake-error'
+const AGRONAUTAS_CHAT_ERROR_ID = 'agronautas-chat-error'
+const AGRONAUTAS_HYDROLOGY_CHAT_ERROR_ID = 'agronautas-hydrology-chat-error'
+const focusVisibleClassName = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700'
+
+const AGRONAUTAS_ACCESS_STATE_VALUES = {
+  LOADING: 'loading',
+  AUTHENTICATED: 'authenticated',
+  DEMO: 'demo',
+  UNAUTHORIZED: 'unauthorized',
+  FORBIDDEN: 'forbidden',
+  UNAVAILABLE: 'unavailable',
+} as const
+
+export type AgronautasAccessState = (typeof AGRONAUTAS_ACCESS_STATE_VALUES)[keyof typeof AGRONAUTAS_ACCESS_STATE_VALUES]
+
+const AGRONAUTAS_CAPABILITY_STATE_VALUES = {
+  LOADING: 'loading',
+  AVAILABLE: 'available',
+  UNAVAILABLE: 'unavailable',
+  ERROR: 'error',
+  UNAUTHORIZED: 'unauthorized',
+  FORBIDDEN: 'forbidden',
+} as const
+
+export type AgronautasCapabilityStateName = (typeof AGRONAUTAS_CAPABILITY_STATE_VALUES)[keyof typeof AGRONAUTAS_CAPABILITY_STATE_VALUES]
+
+export interface AgronautasCapabilityState {
+  state: AgronautasCapabilityStateName
+  status?: number
+  reason?: string
+}
+
+export interface AgronautasCapabilityStates {
+  geometry: AgronautasCapabilityState
+  activity: AgronautasCapabilityState
+  intelligence: AgronautasCapabilityState
+  hydrology: AgronautasCapabilityState
+}
+
 interface WorkspaceProps {
+  accessState?: AgronautasAccessState
+  accessReason?: string | null
+  capabilityStates?: AgronautasCapabilityStates
   runtimeMode: 'real' | 'demo'
   runtimeStatus: 'loading' | 'ready' | 'error'
   runtimeError: string | null
@@ -73,6 +116,20 @@ interface WorkspaceProps {
 }
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
+  if (props.accessState === 'unauthorized') {
+    return <ProductShell product="agronautas" title="Workspace Agronautas" description="Acceso controlado al workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="unauthorized" title="Acceso Agronautas no autorizado" description="Este workspace requiere una sesión autorizada. La vista no muestra datos de producción mientras falta autenticación." /><a className="mt-4 inline-flex rounded-full bg-stone-950 px-4 py-2 text-sm font-semibold text-white hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" href="/probar-demo">Solicitar entrada al demo</a></div></ProductShell>
+  }
+
+  if (props.accessState === 'forbidden') {
+    return <ProductShell product="agronautas" title="Workspace Agronautas" description="Acceso restringido al workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="forbidden" title="Acceso Agronautas restringido" description={`Tu sesión no tiene permisos para este workspace (HTTP 403). Consultá al administrador para solicitar acceso.`} /></div></ProductShell>
+  }
+
+  if (props.accessState === 'unavailable') {
+    return <ProductShell product="agronautas" title="Workspace Agronautas" description="Estado de disponibilidad del workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="error" title="Backend Agronautas no disponible" description={props.accessReason ?? 'No se pudo conectar con el backend. No se muestran datos como si fueran actuales.'} retryLabel="Reintentar conexión" onRetry={props.onRetrySync} /></div></ProductShell>
+  }
+
+  const isDemo = props.runtimeMode === 'demo' || props.accessState === 'demo'
+
   return (
     <ProductShell
       product="agronautas"
@@ -80,12 +137,13 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
       description="De la ubicación del lote a una decisión verificable: cobertura por punto, nivel de riesgo, siguiente acción y evidencia contratada."
       navItems={[{ href: '#agronautas-intake', label: 'Nuevo lote' }, { href: '#agronautas-dashboard', label: 'Decisión' }, { href: '#agronautas-alerts', label: 'Alertas' }, { href: '#agronautas-timeline', label: 'Timeline' }]}
     >
-    <main className="agronautas-canvas mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 rounded-[2rem] px-4 py-8 md:px-8">
+    <div className="agronautas-canvas mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 rounded-[2rem] px-4 py-8 md:px-8">
       <section className="grid gap-4 rounded-[32px] border border-emerald-950/20 bg-stone-950 px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
         <div className="space-y-4">
-          <Badge className="bg-amber-200 text-stone-950">Web MVP · Modo {props.runtimeMode === 'demo' ? 'demo' : 'real'}</Badge>
+          <Badge className="bg-amber-200 text-stone-950">Web MVP · Modo {isDemo ? 'demo' : 'real'}</Badge>
           <h2 className="max-w-2xl font-serif text-3xl font-semibold leading-tight md:text-5xl">Agronautas: dashboard de riesgo para el campo argentino.</h2>
           <p className="max-w-2xl text-sm text-white/85 md:text-base">Riesgo, frescura, fuentes y evidencia persistida para lotes agrícolas de Corrientes, sin reglas de negocio calculadas en el cliente.</p>
+          {isDemo ? <p role="status" className="max-w-2xl rounded-2xl border border-amber-200/40 bg-amber-100/10 px-4 py-3 text-sm text-amber-100">Demo aislada: no representa identidad, rol ni tenancy de producción.</p> : null}
         </div>
         <Card className="border-white/10 bg-white/10 text-white backdrop-blur">
           <CardHeader>
@@ -99,7 +157,7 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
              <StatusRow label="Runtime backend" value={props.runtimeStatus === 'ready' ? props.runtimeMode : props.runtimeStatus} />
              <StatusRow label="Fuentes y telemetría" value={props.dashboardPayload?.presentation.sourcesUnavailable ? 'degradado' : 'observado'} />
              {props.runtimeError ? <p role="alert" className="rounded-xl bg-rose-950/60 px-3 py-2 text-sm text-rose-100">{props.runtimeError}</p> : null}
-             {props.queryErrors.length ? <div role="alert" className="rounded-xl bg-rose-950/60 px-3 py-2 text-sm text-rose-100"><p>Una capacidad no está disponible: {props.queryErrors[0]}</p><p className="mt-1 text-rose-200">Las demás capacidades continúan visibles con su último estado conocido.</p></div> : null}
+              {props.queryErrors.length ? <div role="alert" aria-label="Error de capacidades Agronautas" className="rounded-xl bg-rose-950/60 px-3 py-2 text-sm text-rose-100"><p>Una capacidad no está disponible: {props.queryErrors[0]}</p><p className="mt-1 text-rose-200">Las demás capacidades continúan visibles con su último estado conocido.</p></div> : null}
              <Button type="button" variant="outline" className="border-white/25 bg-white/10 text-white hover:bg-white/20" onClick={() => void props.onRetrySync()}>Reintentar sincronización</Button>
            </CardContent>
         </Card>
@@ -115,7 +173,7 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
        </section>
         <PlanningPanel {...props} />
         <FutureCapabilities product="agronautas" />
-    </main>
+    </div>
     </ProductShell>
   )
 }
@@ -146,8 +204,8 @@ function PlanningPanel({ fieldIndex, planningContext, simulation, onLoadPlanning
   }
   return <section id="agronautas-planning" className="grid gap-5" aria-label="Planificación de campaña Agronautas">
     <Card><CardHeader><CardTitle>Planificación de campaña</CardTitle><CardDescription>Contexto de solo lectura y simulación local con supuestos de la persona usuaria. No se guarda una campaña ni una relación de propiedad.</CardDescription></CardHeader><CardContent className="grid gap-4">
-       <div className="grid gap-4 md:grid-cols-2"><Field label="Nombre de campaña" name="campaign-name" value={campaignName} onChange={(event) => setCampaignName(event.target.value)} /><Field label="Temporada" name="campaign-season" value={season} onChange={(event) => setSeason(event.target.value)} /></div>
-       <Button type="button" onClick={() => void onLoadPlanningContext({ campaignName, season, fieldIds: [fieldId ?? 'field-demo-1'] })}>Ver contexto de lectura</Button>
+       <div className="grid gap-4 md:grid-cols-2"><Field label="Nombre de campaña" name="campaign-name" autoComplete="off" value={campaignName} onChange={(event) => setCampaignName(event.target.value)} /><Field label="Temporada" name="campaign-season" autoComplete="off" value={season} onChange={(event) => setSeason(event.target.value)} /></div>
+        <Button type="button" className={focusVisibleClassName} onClick={() => void onLoadPlanningContext({ campaignName, season, fieldIds: [fieldId ?? 'field-demo-1'] })}>Ver contexto de lectura</Button>
        {planningContext ? <div role="status" className="grid gap-4 rounded-2xl border border-stone-200 p-4">
          <div>
            <p className="font-semibold">{planningContext.campaignName} · {planningContext.season}</p>
@@ -201,24 +259,44 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   const [localityQuery, setLocalityQuery] = useState('Mercedes')
   const [selectedLocality, setSelectedLocality] = useState(AGRONAUTAS_LOCALITIES[0])
   const [point, setPoint] = useState(defaultPoint)
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  const submitInFlightRef = useRef(false)
   const coverage = previewAgronautasPoint(point)
   const matches = mapAdapter.searchLocalities(localityQuery)
 
   async function handleSubmit(form: HTMLFormElement) {
     const valueFor = (name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value ?? ''
+    const values = {
+      fieldId: valueFor('fieldId'),
+      locality: selectedLocality && localityQuery.trim() === selectedLocality.name ? selectedLocality.name : '',
+      lat: valueFor('lat'),
+      lng: valueFor('lng'),
+      hectares: valueFor('hectares'),
+      growthStage: valueFor('growthStage'),
+      crop: valueFor('crop'),
+    }
+    const nextErrors = validateIntakeValues(values)
+    if (Object.keys(nextErrors).length) {
+      setValidationErrors(nextErrors)
+      const firstInvalidField = Object.keys(nextErrors)[0]
+      if (firstInvalidField) document.getElementById(firstInvalidField)?.focus()
+      return
+    }
+
+    setValidationErrors({})
     await onSubmitIntake({
       contractVersion: AGRONAUTAS_CONTRACT_VERSION,
-      fieldId: valueFor('fieldId'),
+      fieldId: values.fieldId,
       cropCategory: 'cereal',
-      crop: valueFor('crop') as FieldIntake['crop'],
+      crop: values.crop as FieldIntake['crop'],
       provinceCode: 'AR-W',
       countryCode: 'AR',
-      hectares: Number(valueFor('hectares') || 0),
-      locality: selectedLocality?.name ?? valueFor('locality'),
-      growthStage: parseOptional(valueFor('growthStage')) as FieldIntake['growthStage'],
+      hectares: Number(values.hectares),
+      locality: values.locality,
+      growthStage: parseOptional(values.growthStage) as FieldIntake['growthStage'],
       location: {
-        lat: Number(valueFor('lat') || point.lat),
-        lng: Number(valueFor('lng') || point.lng),
+        lat: Number(values.lat || point.lat),
+        lng: Number(values.lng || point.lng),
       },
     })
   }
@@ -232,45 +310,54 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
       <CardContent>
         <form
           data-testid="agronautas-intake-form"
+          aria-label="Alta de lote Agronautas"
+          aria-describedby={intakeError ? AGRONAUTAS_INTAKE_ERROR_ID : undefined}
           className="grid gap-4"
           onSubmit={async (event) => {
             event.preventDefault()
+            if (submitInFlightRef.current) return
+            submitInFlightRef.current = true
             try {
                await handleSubmit(event.currentTarget)
             } catch {
               // Error surface is handled in store state by the mutation.
+            } finally {
+              submitInFlightRef.current = false
             }
           }}
         >
-          <Field label="ID externo" name="fieldId" placeholder="corrientes-lote-001" defaultValue="corrientes-lote-001" />
+           <Field label="ID externo" name="fieldId" autoComplete="off" error={validationErrors['fieldId']} placeholder="corrientes-lote-001" defaultValue="corrientes-lote-001" />
           <div className="grid gap-2">
             <Label htmlFor="locality-search">Buscar localidad</Label>
-            <Input id="locality-search" aria-label="Buscar localidad" value={localityQuery} onChange={(event) => setLocalityQuery(event.target.value)} placeholder="Mercedes" />
+              <Input id="locality-search" name="localityQuery" autoComplete="address-level2" aria-invalid={validationErrors['locality'] ? true : undefined} aria-describedby={validationErrors['locality'] ? 'locality-error' : undefined} value={localityQuery} onChange={(event) => setLocalityQuery(event.target.value)} placeholder="Mercedes" className={focusVisibleClassName} />
             {localityQuery.trim() ? <div className="grid gap-2" role="listbox" aria-label="Localidades sugeridas">{matches.map((locality) => <button className="rounded-xl border border-stone-300 bg-stone-50 px-3 py-2 text-left text-sm hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" key={locality.id} type="button" role="option" aria-selected={selectedLocality?.id === locality.id} onClick={() => { setSelectedLocality(locality); setLocalityQuery(locality.name); if (locality.coordinates) setPoint(locality.coordinates) }}>{locality.name} · {locality.provinceCode}</button>)}</div> : null}
-            <input type="hidden" name="locality" value={selectedLocality?.name ?? localityQuery} />
+             <input type="hidden" name="locality" value={selectedLocality?.name ?? localityQuery} />
+              {validationErrors['locality'] ? <p id="locality-error" role="alert" aria-live="assertive" aria-atomic="true">{validationErrors['locality']}</p> : null}
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Latitud" name="lat" type="number" step="0.0001" defaultValue={point.lat} onChange={(event) => setPoint((current) => ({ ...current, lat: Number(event.target.value) }))} />
-            <Field label="Longitud" name="lng" type="number" step="0.0001" defaultValue={point.lng} onChange={(event) => setPoint((current) => ({ ...current, lng: Number(event.target.value) }))} />
+              <Field label="Latitud" name="lat" autoComplete="off" error={validationErrors['lat']} type="number" step="0.0001" defaultValue={point.lat} onChange={(event) => setPoint((current) => ({ ...current, lat: Number(event.target.value) }))} />
+              <Field label="Longitud" name="lng" autoComplete="off" error={validationErrors['lng']} type="number" step="0.0001" defaultValue={point.lng} onChange={(event) => setPoint((current) => ({ ...current, lng: Number(event.target.value) }))} />
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Hectáreas" name="hectares" type="number" step="0.1" defaultValue="42.5" />
+              <Field label="Hectáreas" name="hectares" autoComplete="off" error={validationErrors['hectares']} type="number" step="0.1" defaultValue="42.5" />
             <div className="grid gap-2">
               <Label htmlFor="growthStage">Etapa</Label>
-              <Select id="growthStage" name="growthStage" defaultValue="tillering">
+                <Select id="growthStage" name="growthStage" autoComplete="off" aria-invalid={validationErrors['growthStage'] ? true : undefined} aria-describedby={validationErrors['growthStage'] ? 'growthStage-error' : undefined} className={focusVisibleClassName} defaultValue="tillering">
                 <option value="emergence">Emergencia</option>
                 <option value="tillering">Macollaje</option>
                 <option value="panicle_initiation">Iniciación de panoja</option>
                 <option value="flowering">Floración</option>
                 <option value="maturity">Madurez</option>
-              </Select>
+               </Select>
+                {validationErrors['growthStage'] ? <p id="growthStage-error" role="alert" aria-live="assertive" aria-atomic="true">{validationErrors['growthStage']}</p> : null}
             </div>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="crop">Cultivo permitido</Label>
-            <Select id="crop" name="crop" defaultValue="rice">
+              <Select id="crop" name="crop" autoComplete="off" aria-invalid={validationErrors['crop'] ? true : undefined} aria-describedby={validationErrors['crop'] ? 'crop-error' : undefined} className={focusVisibleClassName} defaultValue="rice">
               {agronautasSupportedCrops.map((crop) => <option key={crop} value={crop}>{cropLabel(crop)}</option>)}
-            </Select>
+             </Select>
+              {validationErrors['crop'] ? <p id="crop-error" role="alert" aria-live="assertive" aria-atomic="true">{validationErrors['crop']}</p> : null}
           </div>
           <div className="grid gap-3">
             <MapFrame title="Previsualización de cobertura" fallback={`${selectedLocality?.name ?? 'Localidad no seleccionada'} · ${coverage.provinceCode ?? 'sin provincia'} · ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`}>
@@ -279,15 +366,17 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
             <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-3 text-xs leading-5 text-stone-600">`polygonWkt` se conserva en el contrato, pero este MVP resuelve cobertura por punto y no promete análisis poligonal.</p>
             <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-3 text-xs leading-5 text-stone-600">Google Maps no está disponible sin una clave pública restringida; la búsqueda por localidad y coordenadas continúa operativa.</p>
           </div>
-          {intakeError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{intakeError}</p> : null}
-          <Button type="submit" data-testid="agronautas-submit-intake" disabled={isSubmitting}>{isSubmitting ? 'Registrando...' : 'Registrar lote'}</Button>
+           {intakeError ? <p id={AGRONAUTAS_INTAKE_ERROR_ID} role="alert" aria-label="Error de intake Agronautas" aria-live="assertive" aria-atomic="true" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{intakeError}</p> : null}
+           <Button type="submit" className={focusVisibleClassName} data-testid="agronautas-submit-intake" disabled={isSubmitting}>{isSubmitting ? 'Registrando…' : 'Registrar lote'}</Button>
         </form>
       </CardContent>
     </Card>
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, activity, intelligence, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, activity, intelligence, capabilityStates, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat, onRetrySync }: WorkspaceProps) {
+  const [chatValidationError, setChatValidationError] = useState<string | null>(null)
+
   if (!selectedFieldId) {
     return (
       <Card className="border-dashed">
@@ -315,7 +404,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
 
   return (
     <div id="agronautas-dashboard" className="grid gap-6">
-      {geometry && onSaveGeometry ? <FieldGeometryEditor fieldId={selectedFieldId} initialGeometry={geometry} onSave={async (input) => onSaveGeometry({ polygonWkt: input.polygonWkt ?? '', expectedUpdatedAt: input.expectedUpdatedAt })} /> : null}
+      {geometry && onSaveGeometry ? <FieldGeometryEditor fieldId={selectedFieldId} initialGeometry={geometry} onSave={async (input) => onSaveGeometry({ polygonWkt: input.polygonWkt ?? '', expectedUpdatedAt: input.expectedUpdatedAt })} /> : <CapabilityUnavailableState capability={capabilityStates?.geometry} label="Geometría" onRetry={onRetrySync} />}
       <section className="grid gap-5 rounded-[2rem] border border-emerald-900/20 bg-emerald-950 p-5 text-white shadow-lg md:grid-cols-[1.15fr,0.85fr] md:p-7" aria-labelledby="decision-heading">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">Resumen · {field?.externalFieldId ?? selectedFieldId}</p>
@@ -349,7 +438,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => onSelectField(selectedFieldId)}>Refrescar vista</Button>
-              <Button onClick={() => void onRequestRecompute()} disabled={isRecomputePending}>{isRecomputePending ? 'Solicitando...' : 'Solicitar recompute'}</Button>
+               <Button onClick={() => void onRequestRecompute()} disabled={isRecomputePending}>{isRecomputePending ? 'Solicitando…' : 'Solicitar recompute'}</Button>
             </div>
           </CardContent>
         </Card>
@@ -369,11 +458,11 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         </Card>
       ) : null}
 
-      <HydrologyPanel dashboard={hydrologyDashboard} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
+      <HydrologyPanel dashboard={hydrologyDashboard} availability={capabilityStates?.hydrology} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
 
       <AgronautasEvidenceStatePanel dashboardPayload={dashboardPayload} hydrologyDashboard={hydrologyDashboard} risk={risk} />
 
-      <IntelligencePanel intelligence={intelligence} />
+      <IntelligencePanel intelligence={intelligence} availability={capabilityStates?.intelligence} onRetry={onRetrySync} />
 
       <NextFeaturesPanel dashboardPayload={dashboardPayload} />
 
@@ -445,7 +534,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
       <Card id="agronautas-activity" data-testid="agronautas-activity-card">
         <CardHeader><CardTitle>Actividad derivada de fuentes</CardTitle><CardDescription>No es historial autoral: muestra únicamente registros persistidos de campo, riesgo, alertas, ingestión y recompute.</CardDescription></CardHeader>
         <CardContent className="grid gap-3 text-sm">
-          {activity?.items.length ? activity.items.map((item) => <div key={item.activityId} className="rounded-2xl border border-[var(--border)] p-3"><p className="font-medium">{item.title}</p><p className="text-[var(--muted-foreground)]">{item.sourceType} · {item.sourceId} · {formatDateTime(item.occurredAt)}</p></div>) : <p role="status">Sin actividad fuente para este lote.</p>}
+          {capabilityStates?.activity && capabilityStates.activity.state !== 'available' && capabilityStates.activity.state !== 'loading' ? <CapabilityUnavailableState capability={capabilityStates.activity} label="Actividad" onRetry={onRetrySync} /> : activity?.items.length ? activity.items.map((item) => <div key={item.activityId} className="rounded-2xl border border-[var(--border)] p-3"><p className="font-medium">{item.title}</p><p className="text-[var(--muted-foreground)]">{item.sourceType} · {item.sourceId} · {formatDateTime(item.occurredAt)}</p></div>) : <p role="status">Sin actividad fuente para este lote.</p>}
         </CardContent>
       </Card>
 
@@ -502,21 +591,28 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
           <CardDescription>Solo explica overview, riesgo, alertas o comparaciones aprobadas. Nunca reemplaza el dashboard.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <form
-            className="grid gap-3"
+           <form
+             aria-label="Consulta al chat Agronautas"
+             aria-describedby={chatError ? AGRONAUTAS_CHAT_ERROR_ID : undefined}
+             className="grid gap-3"
             onSubmit={async (event) => {
               event.preventDefault()
-              const formData = new FormData(event.currentTarget)
-              const message = String(formData.get('chatMessage') ?? '').trim()
-              if (!message) return
-              await onAskChat(message)
-            }}
-          >
-            <Field label="Pregunta" name="chatMessage" placeholder="Explicá el riesgo actual del lote" />
-            <Button type="submit" disabled={isChatPending}>{isChatPending ? 'Consultando...' : 'Preguntar al chat'}</Button>
-          </form>
+               const formData = new FormData(event.currentTarget)
+               const message = String(formData.get('chatMessage') ?? '').trim()
+               if (!message) {
+                 setChatValidationError('Escribí una pregunta antes de consultar el chat.')
+                 document.getElementById('chatMessage')?.focus()
+                 return
+               }
+               setChatValidationError(null)
+               await onAskChat(message)
+             }}
+           >
+             <Field label="Pregunta" name="chatMessage" autoComplete="off" error={chatValidationError ?? undefined} placeholder="Explicá el riesgo actual del lote" />
+             <Button type="submit" className={focusVisibleClassName} disabled={isChatPending}>{isChatPending ? 'Consultando…' : 'Preguntar al chat'}</Button>
+           </form>
 
-          {chatError ? <p role="alert" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{chatError}</p> : null}
+           {chatError ? <p id={AGRONAUTAS_CHAT_ERROR_ID} role="alert" aria-live="assertive" aria-atomic="true" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{chatError}</p> : null}
 
           {chatResponse ? <ChatEvidencePanel response={chatResponse} onRetry={onRetryChat} /> : null}
         </CardContent>
@@ -525,8 +621,26 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
   )
 }
 
-function IntelligencePanel({ intelligence }: { intelligence?: AgronautasIntelligence }) {
-  if (!intelligence) return null
+function CapabilityUnavailableState({ capability, label, onRetry }: { capability?: AgronautasCapabilityState; label: string; onRetry: () => Promise<unknown> }) {
+  if (!capability || capability.state === 'available') return null
+  if (capability.state === 'loading') return <VisibilityState state="loading" title={`Cargando ${label.toLowerCase()}`} description={`Sincronizando ${label.toLowerCase()} con el contrato disponible.`} retryAllowed={false} />
+  const isNotFound = capability.state === 'unavailable' && capability.status === 404
+  const isBoundary = isNotFound || capability.state === 'unauthorized' || capability.state === 'forbidden'
+  const boundaryDescription = capability.state === 'unauthorized'
+    ? `La capacidad de ${label.toLowerCase()} requiere autenticación (HTTP 401). No se muestra información de producción.`
+    : capability.state === 'forbidden'
+      ? `Tu sesión no tiene permisos para ${label.toLowerCase()} (HTTP 403). No se sustituye con otra capacidad.`
+      : undefined
+  const description = isNotFound
+    ? `El endpoint de ${label.toLowerCase()} respondió HTTP 404. Esta capacidad no está disponible en el contrato actual; no se reemplaza con datos fabricados.`
+    : boundaryDescription ?? capability.reason ?? `No se pudo cargar ${label.toLowerCase()} desde el backend.`
+  const state = capability.state === 'unauthorized' || capability.state === 'forbidden' ? capability.state : capability.state === 'unavailable' ? 'missing' : 'error'
+  const title = capability.state === 'unauthorized' ? `${label} requiere autenticación` : capability.state === 'forbidden' ? `${label} restringida` : `${label} no disponible`
+  return <VisibilityState state={state} title={title} description={description} retryLabel={`Reintentar ${label.toLowerCase()}`} retryAllowed={!isBoundary} onRetry={isBoundary ? undefined : () => void onRetry()} />
+}
+
+function IntelligencePanel({ intelligence, availability, onRetry }: { intelligence?: AgronautasIntelligence; availability?: AgronautasCapabilityState; onRetry: () => Promise<unknown> }) {
+  if (!intelligence) return <CapabilityUnavailableState capability={availability} label="Inteligencia" onRetry={onRetry} />
   const recommendationReason = 'reason' in intelligence.recommendation ? intelligence.recommendation.reason : 'No hay evidencia suficiente para una recomendación.'
   const recommendationInputs = 'missingInputs' in intelligence.recommendation ? intelligence.recommendation.missingInputs ?? [] : []
   const capabilities = [
@@ -616,7 +730,13 @@ function NextFeaturesPanel({ dashboardPayload }: { dashboardPayload?: DashboardS
   )
 }
 
-function HydrologyPanel({ dashboard, locality, hydrologyChatState, isHydrologyChatPending, onAskHydrologyChat, onRetryHydrologyChat }: { dashboard?: HydrologyDashboard; locality: string | null; hydrologyChatState: ChatStreamState; isHydrologyChatPending: boolean; onAskHydrologyChat: (message: string) => Promise<unknown>; onRetryHydrologyChat: () => Promise<unknown> }) {
+function HydrologyPanel({ dashboard, availability, locality, hydrologyChatState, isHydrologyChatPending, onAskHydrologyChat, onRetryHydrologyChat }: { dashboard?: HydrologyDashboard; availability?: AgronautasCapabilityState; locality: string | null; hydrologyChatState: ChatStreamState; isHydrologyChatPending: boolean; onAskHydrologyChat: (message: string) => Promise<unknown>; onRetryHydrologyChat: () => Promise<unknown> }) {
+  const [hydrologyChatValidationError, setHydrologyChatValidationError] = useState<string | null>(null)
+
+  if (!dashboard && availability && availability.state !== 'available' && availability.state !== 'loading') {
+    return <section className="grid gap-6" data-testid="agronautas-hydrology-panel"><Card className="border-amber-200 bg-amber-50"><CardHeader><CardTitle>Agronautas · Hidrología</CardTitle><CardDescription>La señal hidrológica conserva su límite contractual y no se sustituye con otra zona o fuente.</CardDescription></CardHeader><CardContent><CapabilityUnavailableState capability={availability} label="Hidrología" onRetry={onRetryHydrologyChat} /></CardContent></Card></section>
+  }
+
   const zone = dashboard?.zone ?? locality ?? 'Zona no mapeada'
   const height = dashboard?.heights[0]
   const trend = dashboard?.trends[0] ?? height
@@ -662,19 +782,26 @@ function HydrologyPanel({ dashboard, locality, hydrologyChatState, isHydrologyCh
           <CardDescription>Seleccioná el lote activo y preguntá en español sobre riesgo de crecida, caminos, maquinaria o alertas locales. La respuesta se transmite en vivo con contexto oficial.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <form
-            className="grid gap-3"
+           <form
+             aria-label="Consulta al Copilot Hidrológico"
+             aria-describedby={hydrologyChatState.error ? AGRONAUTAS_HYDROLOGY_CHAT_ERROR_ID : undefined}
+             className="grid gap-3"
             onSubmit={async (event) => {
               event.preventDefault()
-              const message = String(new FormData(event.currentTarget).get('hydrologyMessage') ?? '').trim()
-              if (!message) return
-              await onAskHydrologyChat(message)
-            }}
-          >
-            <Field label="Pregunta hidrológica" name="hydrologyMessage" placeholder="¿Qué riesgo de crecida tiene mi lote en los próximos 7 días?" />
-            <Button type="submit" disabled={isHydrologyChatPending}>{isHydrologyChatPending ? 'Transmitiendo respuesta...' : 'Preguntar al Copilot Hidrológico'}</Button>
+               const message = String(new FormData(event.currentTarget).get('hydrologyMessage') ?? '').trim()
+               if (!message) {
+                 setHydrologyChatValidationError('Escribí una pregunta antes de consultar el Copilot Hidrológico.')
+                 document.getElementById('hydrologyMessage')?.focus()
+                 return
+               }
+               setHydrologyChatValidationError(null)
+               await onAskHydrologyChat(message)
+             }}
+           >
+             <Field label="Pregunta hidrológica" name="hydrologyMessage" autoComplete="off" error={hydrologyChatValidationError ?? undefined} placeholder="¿Qué riesgo de crecida tiene mi lote en los próximos 7 días?" />
+             <Button type="submit" className={focusVisibleClassName} disabled={isHydrologyChatPending}>{isHydrologyChatPending ? 'Transmitiendo respuesta…' : 'Preguntar al Copilot Hidrológico'}</Button>
           </form>
-          {hydrologyChatState.status !== 'idle' ? <ChatEvidencePanel stream={hydrologyChatState} onRetry={onRetryHydrologyChat} /> : null}
+           {hydrologyChatState.status !== 'idle' ? <div id={AGRONAUTAS_HYDROLOGY_CHAT_ERROR_ID}><ChatEvidencePanel stream={hydrologyChatState} onRetry={onRetryHydrologyChat} /></div> : null}
         </CardContent>
       </Card>
     </section>
@@ -766,11 +893,49 @@ function StatusRow({ label, value }: { label: string; value: string }) {
   return <div className="flex items-center justify-between gap-4 rounded-2xl bg-white/10 px-4 py-3"><span className="text-white/70">{label}</span><span className="font-medium">{value}</span></div>
 }
 
-function Field({ label, name, ...props }: { label: string; name: string } & InputHTMLAttributes<HTMLInputElement>) {
+interface IntakeValues {
+  fieldId: string
+  locality: string
+  lat: string
+  lng: string
+  hectares: string
+  growthStage: string
+  crop: string
+}
+
+function validateIntakeValues(values: IntakeValues): Record<string, string> {
+  const errors: Record<string, string> = {}
+  if (!values.fieldId.trim()) errors['fieldId'] = 'El ID externo es obligatorio.'
+  if (!values.locality.trim()) errors['locality'] = 'Seleccioná una localidad.'
+  if (!values.lat.trim() || !Number.isFinite(Number(values.lat))) errors['lat'] = 'Ingresá una latitud válida.'
+  if (!values.lng.trim() || !Number.isFinite(Number(values.lng))) errors['lng'] = 'Ingresá una longitud válida.'
+  if (!values.hectares.trim() || !Number.isFinite(Number(values.hectares)) || Number(values.hectares) <= 0) errors['hectares'] = 'Ingresá una superficie mayor que cero.'
+  if (!values.growthStage.trim()) errors['growthStage'] = 'Seleccioná una etapa del cultivo.'
+  if (!values.crop.trim()) errors['crop'] = 'Seleccioná un cultivo permitido.'
+  return errors
+}
+
+interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
+  label: string
+  name: string
+  error?: string
+}
+
+function Field({ label, name, error, className, ...props }: FieldProps) {
+  const errorId = `${name}-error`
   return (
     <div className="grid gap-2">
       <Label htmlFor={name}>{label}</Label>
-      <Input id={name} name={name} {...props} />
+      <Input
+        {...props}
+        id={name}
+        name={name}
+        autoComplete={props.autoComplete ?? 'off'}
+        aria-invalid={error ? true : props['aria-invalid']}
+        aria-describedby={error ? errorId : props['aria-describedby']}
+        className={`${focusVisibleClassName}${className ? ` ${className}` : ''}`}
+      />
+      {error ? <p id={errorId} role="alert" aria-label={`Error de formulario: ${label}`} aria-live="assertive" aria-atomic="true">{error}</p> : null}
     </div>
   )
 }

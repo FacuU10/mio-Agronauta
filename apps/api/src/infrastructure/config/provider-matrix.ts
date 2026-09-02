@@ -7,9 +7,19 @@ import type { AgronautasTelemetry } from '../observability/agronautas-telemetry'
 
 export type ProviderMode = EvidenceEnvelope['providerMode']
 
+const PROVIDER_BOUNDARY_STATUS = {
+  LIVE: 'live',
+  BLOCKED: 'blocked',
+  NOT_RUN: 'not_run',
+  UNAVAILABLE: 'unavailable',
+} as const
+
+export type ProviderBoundaryStatus = (typeof PROVIDER_BOUNDARY_STATUS)[keyof typeof PROVIDER_BOUNDARY_STATUS]
+
 export interface ProviderEvidence extends EvidenceEnvelope {
   proofRef: string
   mode: ProviderMode
+  boundaryStatus: ProviderBoundaryStatus
 }
 
 export interface ProviderEvidencePort {
@@ -45,7 +55,7 @@ export class RealProviderEvidencePort implements ProviderEvidencePort {
     const envKey = `PROVIDER_MODE_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`
     const override = process.env[envKey] || process.env['PROVIDER_MODE_OVERRIDE']
 
-    if (isProviderMode(override)) {
+    if (isProviderMode(override) && override !== 'live') {
       return this.record(createEvidence({ provider, signalType, sourceUrl, providerMode: override, retrievedAt, proofRef: `override-active-${override}`, failureReason: override === 'unavailable' ? 'weather_data_unavailable' : undefined }))
     }
 
@@ -147,12 +157,14 @@ function createEvidence(input: {
   const httpStatus = input.httpStatus ?? null
   const schemaStatus = input.schemaStatus ?? (isUnavailable ? 'unavailable' : 'valid')
   const degradationReasons = [...(input.degradationReasons ?? []), ...(input.failureReason ? [input.failureReason] : [])]
+  const sourceUrl = sanitizeSourceUrl(input.sourceUrl)
+  const boundaryStatus = providerBoundaryStatus(input.providerMode)
   const evidence: ProviderEvidence = {
     contractVersion: 'agronautas-evidence-v1',
     evidenceId: `${input.provider}:${input.signalType}:${randomUUID()}`,
     provider: input.provider,
     signalType: input.signalType,
-    sourceUrl: input.sourceUrl,
+    sourceUrl,
     providerMode: input.providerMode,
     mode: input.providerMode,
     observedAt: input.observedAt ?? null,
@@ -170,16 +182,37 @@ function createEvidence(input: {
     schemaStatus,
     http: { status: httpStatus, ok: httpStatus === 200 },
     schema: { status: schemaStatus },
-    lineage: { sourceUrl: input.sourceUrl, rawHash: input.rawHash ?? null, parentRunId: input.parentRunId ?? null },
+    lineage: { sourceUrl, rawHash: input.rawHash ?? null, parentRunId: input.parentRunId ?? null },
     degradationReasons,
     ...(input.failureReason ? { failureReason: input.failureReason } : {}),
     lastSuccessfulObservedAt: input.lastSuccessfulObservedAt ?? null,
     latencyMs: 0,
     proofRef: input.proofRef,
+    boundaryStatus,
   }
   Object.defineProperty(evidence, 'mode', { value: input.providerMode, enumerable: false })
   Object.defineProperty(evidence, 'proofRef', { value: input.proofRef, enumerable: false })
+  Object.defineProperty(evidence, 'boundaryStatus', { value: boundaryStatus, enumerable: false })
   return evidence
+}
+
+function providerBoundaryStatus(providerMode: ProviderMode): ProviderBoundaryStatus {
+  if (providerMode === 'live') return PROVIDER_BOUNDARY_STATUS.LIVE
+  if (providerMode === 'mock') return PROVIDER_BOUNDARY_STATUS.NOT_RUN
+  return providerMode === 'unavailable' ? PROVIDER_BOUNDARY_STATUS.UNAVAILABLE : PROVIDER_BOUNDARY_STATUS.BLOCKED
+}
+
+function sanitizeSourceUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return 'https://invalid.example.invalid/provider'
+  }
 }
 
 function hasProviderConfiguration(provider: string): boolean {

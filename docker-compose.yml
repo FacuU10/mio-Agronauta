@@ -14,7 +14,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/bootstrap/agronautas:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
+      test: ["CMD-SHELL", "pg_isready -U user -d appdb && psql -U user -d appdb -tAc 'SELECT PostGIS_Version()' | grep -q ."]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -67,10 +67,18 @@ services:
       READINESS_OPTIONAL_SERVICES: "mongodb"
       AGRONAUTAS_RUNTIME_REQUIRED: "true"
       AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS: 180
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      worker:
         condition: service_healthy
 
   worker:
@@ -82,6 +90,12 @@ services:
       WORKER_POSTGRES_DSN: "postgresql://user:password@postgres:5432/appdb"
       WORKER_REDIS_URL: "redis://redis:6379/0"
       WORKER_CONTRACTS_ROOT: "/app/packages/contracts/schemas"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, psycopg; from redis import Redis; connection = psycopg.connect(os.environ['WORKER_POSTGRES_DSN'], connect_timeout=3); connection.close(); redis = Redis.from_url(os.environ['WORKER_REDIS_URL'], socket_connect_timeout=3); assert redis.ping(); redis.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy

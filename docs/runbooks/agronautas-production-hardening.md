@@ -8,10 +8,10 @@ Cerrar el gate operativo del MVP Agronautas con rutas endurecidas, readiness ver
 
 1. `cp .env.example .env`
 2. `pnpm install`
-3. `docker-compose up --build postgres redis api worker`
-4. Si se quiere validar la capacidad futura Mongo, agregar `--profile optional mongodb`
+3. Suministrar por variables de entorno o configuración de procesos los endpoints de PostgreSQL/PostGIS y Redis, además del proceso worker.
+4. Iniciar la API y la web con `cd backend && pnpm run dev` y `cd frontend && pnpm run dev`.
 
-El bootstrap de PostGIS y seeds vive en `infra/bootstrap/agronautas/001-postgis-schema.sql` y `infra/bootstrap/agronautas/002-corrientes-seeds.sql`.
+Las migraciones aditivas y los seeds de PostGIS viven en `infra/bootstrap/agronautas/001-postgis-schema.sql` y `infra/bootstrap/agronautas/002-corrientes-seeds.sql`; deben ejecutarse contra la base suministrada por el entorno.
 
 ## Release gate actual
 
@@ -46,10 +46,10 @@ Esta validación mínima no reemplaza el gate final. Para lanzamiento, el verify
 
 `pnpm --filter web test -- src/components/agronautas/page-client.test.tsx`
 
-### Opcional / manual fuerte
+### Manual fuerte
 
 - `pnpm --filter web test:e2e`
-- inspeccionar `GET /agronautas/runtime` y `GET /ready` sobre el stack Compose levantado
+- inspeccionar `GET /agronautas/runtime` y `GET /ready` contra la API y los servicios suministrados por el entorno
 
 ## Credenciales y configuración de proveedores
 

@@ -196,7 +196,7 @@ test('Agronautas keeps unrelated panels available when one source query fails', 
   fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
 
   await waitFor(() => {
-    assert.ok(view.getByRole('alert').textContent?.includes('weather source unavailable'))
+    assert.ok(view.getByRole('alert', { name: 'Error de capacidades Agronautas' }).textContent?.includes('weather source unavailable'))
     assert.ok(view.getByText('Drivers y evidencia'))
     assert.ok(view.getAllByText('Alertas actuales').length >= 1)
     assert.ok(view.getByRole('button', { name: /Reintentar sincronización/i }))
@@ -218,4 +218,100 @@ test('Agronautas intake only exposes crops from the approved runtime contract', 
   fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
 
   await waitFor(() => assert.deepEqual(submitted[0], { crop: 'maize' }))
+})
+
+test('Agronautas intake exposes meaningful control names and autocomplete metadata', () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+
+  const view = render(<QueryProvider><AgronautasPageClient service={createAgronautasMockService()} /></QueryProvider>)
+
+  const fieldId = view.getByLabelText('ID externo')
+  const locality = view.getByLabelText('Buscar localidad')
+  const latitude = view.getByLabelText('Latitud')
+  const longitude = view.getByLabelText('Longitud')
+  const hectares = view.getByLabelText('Hectáreas')
+  const growthStage = view.getByLabelText('Etapa')
+  const crop = view.getByLabelText('Cultivo permitido')
+
+  assert.equal(fieldId.getAttribute('name'), 'fieldId')
+  assert.equal(fieldId.getAttribute('autocomplete'), 'off')
+  assert.equal(locality.getAttribute('name'), 'localityQuery')
+  assert.equal(locality.getAttribute('autocomplete'), 'address-level2')
+  assert.equal(latitude.getAttribute('name'), 'lat')
+  assert.equal(latitude.getAttribute('autocomplete'), 'off')
+  assert.equal(longitude.getAttribute('name'), 'lng')
+  assert.equal(longitude.getAttribute('autocomplete'), 'off')
+  assert.equal(hectares.getAttribute('name'), 'hectares')
+  assert.equal(hectares.getAttribute('autocomplete'), 'off')
+  assert.equal(growthStage.getAttribute('name'), 'growthStage')
+  assert.equal(growthStage.getAttribute('autocomplete'), 'off')
+  assert.equal(crop.getAttribute('name'), 'crop')
+  assert.equal(crop.getAttribute('autocomplete'), 'off')
+})
+
+test('Agronautas intake announces validation errors and focuses the first invalid control', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+
+  const view = render(<QueryProvider><AgronautasPageClient service={createAgronautasMockService()} /></QueryProvider>)
+  const fieldId = view.getByLabelText('ID externo') as HTMLInputElement
+  fireEvent.change(fieldId, { target: { value: '' } })
+  fireEvent.submit(view.getByTestId('agronautas-intake-form'))
+
+  await waitFor(() => {
+    const error = view.getByRole('alert', { name: /ID externo/i })
+    assert.equal(error.getAttribute('aria-live'), 'assertive')
+    assert.equal(error.getAttribute('aria-atomic'), 'true')
+    assert.match(error.textContent ?? '', /ID externo/i)
+    assert.equal(fieldId.getAttribute('aria-invalid'), 'true')
+    assert.equal(fieldId.getAttribute('aria-describedby'), error.id)
+    assert.equal(document.activeElement, fieldId)
+  })
+})
+
+test('Agronautas intake keeps native submit semantics for keyboard-operated submission', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+  const submitted: string[] = []
+  const base = createAgronautasMockService()
+
+  const view = render(<QueryProvider><AgronautasPageClient service={{ ...base, async createFieldIntake(input) { submitted.push(input.fieldId); return base.createFieldIntake(input) } }} /></QueryProvider>)
+  const form = view.getByTestId('agronautas-intake-form')
+  assert.equal(view.getByRole('button', { name: 'Registrar lote' }).getAttribute('type'), 'submit')
+  fireEvent.submit(form)
+
+  await waitFor(() => assert.deepEqual(submitted, ['corrientes-lote-001']))
+})
+
+test('Agronautas intake prevents duplicate submissions while the backend confirms the draft', async () => {
+  setupDom()
+  cleanup()
+  useAgronautasStore.getState().reset()
+  const base = createAgronautasMockService()
+  let calls = 0
+  let submittedInput: Parameters<typeof base.createFieldIntake>[0] | undefined
+  let resolvePending: ((value: Awaited<ReturnType<typeof base.createFieldIntake>>) => void) | undefined
+  const pending = new Promise<Awaited<ReturnType<typeof base.createFieldIntake>>>((resolve) => { resolvePending = resolve })
+  const service = {
+    ...base,
+    async createFieldIntake(input: Parameters<typeof base.createFieldIntake>[0]) {
+      calls += 1
+      submittedInput = input
+      return pending
+    },
+  }
+
+  const view = render(<QueryProvider><AgronautasPageClient service={service} /></QueryProvider>)
+  const submit = view.getByRole('button', { name: 'Registrar lote' })
+  fireEvent.click(submit)
+  fireEvent.click(submit)
+
+  await waitFor(() => assert.equal(calls, 1))
+  assert.equal(submit.hasAttribute('disabled'), true)
+  resolvePending?.(await base.createFieldIntake(submittedInput!))
+  await waitFor(() => assert.equal(view.getByRole('button', { name: 'Registrar lote' }).hasAttribute('disabled'), false))
 })

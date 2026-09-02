@@ -335,6 +335,70 @@ test('GET /ready explicitly reports disabled scheduler and unconfigured processo
   assert.deepEqual(body.processor, { status: 'not_configured', reason: 'processor_not_configured' })
 })
 
+test('GET /ready requires migration and PostGIS checks alongside Postgres, Redis, and the worker', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkPostGIS: async () => false,
+    checkMigrations: async () => false,
+    checkMongoDB: async () => false,
+    checkRedis: async () => true,
+    getConfig: () => ({ ...baseConfig, runtimeRequired: true }),
+    getWorkerReadiness: async () => ({
+      workerHealthy: true,
+      latestHeartbeatAt: '2026-08-27T00:00:00.000Z',
+      latestLeaseExpiresAt: '2026-08-27T00:05:00.000Z',
+      latestJobId: 'job-ready',
+      latestRunId: 'run-ready',
+    }),
+  } as unknown as Parameters<typeof createHealthRouter>[0]))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as {
+    checks: Record<string, boolean>
+    requiredChecks: Record<string, boolean>
+    failedRequiredChecks: string[]
+  }
+
+  assert.equal(response.status, 503)
+  assert.equal(body.checks['postgis'], false)
+  assert.equal(body.checks['migrations'], false)
+  assert.equal(body.requiredChecks['postgis'], false)
+  assert.equal(body.requiredChecks['migrations'], false)
+  assert.deepEqual(body.failedRequiredChecks, ['postgis', 'migrations'])
+})
+
+test('GET /ready does not treat a stale worker heartbeat as durable readiness', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => false,
+    checkRedis: async () => true,
+    getConfig: () => ({ ...baseConfig, runtimeRequired: true, workerHeartbeatMaxAgeSeconds: 60 }),
+    getWorkerReadiness: async () => ({
+      workerHealthy: true,
+      latestHeartbeatAt: '2026-08-26T23:00:00.000Z',
+      latestLeaseExpiresAt: '2026-08-27T00:05:00.000Z',
+      latestJobId: 'job-stale',
+      latestRunId: 'run-stale',
+    }),
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as {
+    ready: boolean
+    worker?: { status: string; healthy: boolean; heartbeatFresh: boolean }
+    failedRequiredChecks: string[]
+  }
+
+  assert.equal(response.status, 503)
+  assert.equal(body.ready, false)
+  assert.equal(body.worker?.status, 'unavailable')
+  assert.equal(body.worker?.healthy, false)
+  assert.equal(body.worker?.heartbeatFresh, false)
+  assert.deepEqual(body.failedRequiredChecks, ['worker'])
+})
+
 async function request(app: express.Express, path: string) {
   const server = createServer(app)
   await new Promise<void>((resolve) => server.listen(0, resolve))

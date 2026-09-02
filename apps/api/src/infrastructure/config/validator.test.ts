@@ -113,3 +113,24 @@ test('ProductionEnvValidatorPort.validate throws error when NODE_ENV is producti
     ProductionEnvValidatorPort.validate(envInvalid, false)
   }, /Production environment validation failed/)
 })
+
+test('validateProductionEnv blocks local or implicit production boundaries without echoing secret values', () => {
+  const result = validateProductionEnv({
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://runtime-user:runtime-password@db.internal:5432/runtime',
+    REDIS_URL: 'redis://redis.internal:6379/0',
+    WORKER_POSTGRES_DSN: 'postgresql://runtime-user:runtime-password@db.internal:5432/runtime',
+    HYDROLOGY_INGEST_TOKEN: 'runtime-ingest-token',
+    AGRONAUTAS_RUNTIME_REQUIRED: 'true',
+    NASA_FIRMS_API_KEY: 'runtime-provider-key',
+    SENTINEL_CLIENT_ID: 'runtime-client-id',
+    SENTINEL_CLIENT_SECRET: 'runtime-client-secret',
+    AGRONAUTAS_API_INTERNAL_URL: 'http://localhost:3001',
+    TRUST_PROXY: 'false',
+  })
+
+  assert.equal(result.isValid, false)
+  assert.ok(result.errors.some((error) => error.includes('AGRONAUTAS_API_INTERNAL_URL')))
+  assert.ok(result.errors.some((error) => error.includes('TRUST_PROXY')))
+  assert.doesNotMatch(JSON.stringify(result), /runtime-password|runtime-ingest-token|runtime-provider-key|runtime-client-secret/)
+})

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { checkPostgres } from '../../infrastructure/database/postgres/pool'
+import { checkPostgres, getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { checkMongoDB } from '../../infrastructure/database/mongodb/connection'
 import { checkRedis } from '../../infrastructure/database/redis/client'
 import { getAgronautasRuntimeConfig } from '../../infrastructure/config/agronautas-runtime'
@@ -23,12 +23,16 @@ export interface ReadinessDependencyResult {
 
 interface HealthRouterDeps {
   checkPostgres: () => Promise<boolean>
+  checkPostGIS: () => Promise<boolean>
+  checkMigrations: () => Promise<boolean>
   checkMongoDB: () => Promise<boolean>
   checkRedis: () => Promise<boolean>
   getConfig: typeof getAgronautasRuntimeConfig
   getWorkerReadiness: (maxHeartbeatAgeSeconds: number) => Promise<Awaited<ReturnType<PostgresAgronautasRuntimeReadinessRepository['getWorkerReadiness']>> | null>
   readinessTimeoutMs: number
 }
+
+type WorkerReadiness = Awaited<ReturnType<PostgresAgronautasRuntimeReadinessRepository['getWorkerReadiness']>>
 
 export async function withReadinessTimeout(
   service: string,
@@ -59,11 +63,72 @@ export async function withReadinessTimeout(
   }
 }
 
+async function checkPostGIS(): Promise<boolean> {
+  try {
+    const result = await getPostgresPool().query('SELECT PostGIS_Version()')
+    return result.rowCount === 1
+  } catch {
+    return false
+  }
+}
+
+async function checkMigrations(): Promise<boolean> {
+  try {
+    const result = await getPostgresPool().query(
+      `SELECT COUNT(*)::int AS pending
+         FROM _prisma_migrations
+        WHERE finished_at IS NULL
+          AND rolled_back_at IS NULL`,
+    )
+    return result.rowCount === 1 && Number(result.rows[0]?.pending ?? 1) === 0
+  } catch {
+    return false
+  }
+}
+
+async function withWorkerReadinessTimeout(
+  check: () => Promise<WorkerReadiness | null>,
+  timeoutMs: number,
+): Promise<WorkerReadiness | null> {
+  let timeout: NodeJS.Timeout | undefined
+
+  try {
+    const timeoutResult = new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), timeoutMs)
+    })
+    return await Promise.race([check(), timeoutResult])
+  } catch {
+    return null
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
+function isWorkerHeartbeatFresh(worker: WorkerReadiness | null, maxHeartbeatAgeSeconds: number): boolean {
+  if (!worker?.workerHealthy || !worker.latestHeartbeatAt) return false
+
+  const heartbeatAt = Date.parse(worker.latestHeartbeatAt)
+  if (!Number.isFinite(heartbeatAt)) return false
+
+  const ageMs = Date.now() - heartbeatAt
+  if (ageMs <= maxHeartbeatAgeSeconds * 1000) return true
+
+  const leaseExpiresAt = worker.latestLeaseExpiresAt ? Date.parse(worker.latestLeaseExpiresAt) : Number.NaN
+  if (Number.isFinite(leaseExpiresAt) && leaseExpiresAt >= heartbeatAt) {
+    const leaseWindowMs = leaseExpiresAt - heartbeatAt
+    if (leaseWindowMs > Math.max(maxHeartbeatAgeSeconds * 2 * 1000, 300_000)) return false
+  }
+
+  return true
+}
+
 export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router {
   const router = Router()
   const workerReadinessRepository = new PostgresAgronautasRuntimeReadinessRepository()
   const resolved: HealthRouterDeps = {
     checkPostgres,
+    checkPostGIS,
+    checkMigrations,
     checkMongoDB,
     checkRedis,
     getConfig: getAgronautasRuntimeConfig,
@@ -82,8 +147,16 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
       const config = resolved.getConfig()
       const optionalServices = new Set(config.optionalReadinessServices)
       const mongoEnabled = optionalServices.has('mongodb')
-      const [postgres, mongo, redis, worker] = await Promise.all([
+      const topologyChecksRequired = config.runtimeRequired
+        && (deps.checkPostGIS !== undefined || deps.checkMigrations !== undefined || process.env['NODE_ENV'] === 'production')
+      const dependencyResults = await Promise.all([
         withReadinessTimeout('postgres', resolved.checkPostgres, resolved.readinessTimeoutMs),
+        config.runtimeRequired
+          ? withReadinessTimeout('postgis', resolved.checkPostGIS, resolved.readinessTimeoutMs)
+          : Promise.resolve({ service: 'postgis', ok: false, timedOut: false, error: 'postgis readiness is not configured' }),
+        config.runtimeRequired
+          ? withReadinessTimeout('migrations', resolved.checkMigrations, resolved.readinessTimeoutMs)
+          : Promise.resolve({ service: 'migrations', ok: false, timedOut: false, error: 'migrations readiness is not configured' }),
         mongoEnabled
           ? withReadinessTimeout('mongodb', resolved.checkMongoDB, resolved.readinessTimeoutMs)
           : Promise.resolve({
@@ -94,20 +167,34 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
             }),
         withReadinessTimeout('redis', resolved.checkRedis, resolved.readinessTimeoutMs),
         config.runtimeRequired
-          ? resolved.getWorkerReadiness(config.workerHeartbeatMaxAgeSeconds)
+          ? withWorkerReadinessTimeout(() => resolved.getWorkerReadiness(config.workerHeartbeatMaxAgeSeconds), resolved.readinessTimeoutMs)
           : Promise.resolve(null),
       ])
+
+      const [postgres, postgis, migrations, mongo, redis, worker] = dependencyResults
+
+      const heartbeatFresh = config.runtimeRequired
+        ? isWorkerHeartbeatFresh(worker, config.workerHeartbeatMaxAgeSeconds)
+        : false
+      const workerHealthy = config.runtimeRequired
+        ? Boolean(worker?.workerHealthy && heartbeatFresh)
+        : false
 
       const dependencyChecks = {
         postgres: postgres.ok,
         redis: redis.ok,
+        postgis: postgis.ok,
+        migrations: migrations.ok,
         mongodb: mongo.ok,
-        worker: worker?.workerHealthy ?? false,
+        worker: workerHealthy,
       }
 
       const requiredChecks = {
         postgres: dependencyChecks.postgres,
         redis: dependencyChecks.redis,
+        ...(topologyChecksRequired
+          ? { postgis: dependencyChecks.postgis, migrations: dependencyChecks.migrations }
+          : {}),
         ...(config.runtimeRequired ? { worker: dependencyChecks.worker } : {}),
       }
 
@@ -121,22 +208,25 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
 
       const workerStatus: WorkerStatus = !config.runtimeRequired
         ? WORKER_STATUS.NOT_CONFIGURED
-        : worker?.workerHealthy ? WORKER_STATUS.AVAILABLE : WORKER_STATUS.UNAVAILABLE
+        : workerHealthy ? WORKER_STATUS.AVAILABLE : WORKER_STATUS.UNAVAILABLE
       const workerDetails = {
         required: config.runtimeRequired,
-        healthy: config.runtimeRequired ? worker?.workerHealthy ?? false : null,
+        healthy: config.runtimeRequired ? workerHealthy : null,
         status: workerStatus,
         durableCapability: config.runtimeRequired
-          ? worker?.durableCapability ?? (worker?.workerHealthy ? 'available' : 'unavailable')
+          ? worker?.durableCapability ?? (workerHealthy ? 'available' : 'unavailable')
           : 'not_configured',
-        reason: worker?.workerHealthy
+        reason: workerHealthy
           ? undefined
-          : config.runtimeRequired ? 'worker_heartbeat_not_available' : 'worker_not_configured',
+          : config.runtimeRequired
+            ? worker?.workerHealthy && !heartbeatFresh ? 'worker_heartbeat_stale' : 'worker_heartbeat_not_available'
+            : 'worker_not_configured',
         latestHeartbeatAt: worker?.latestHeartbeatAt ?? null,
         latestLeaseExpiresAt: worker?.latestLeaseExpiresAt ?? null,
         latestJobId: worker?.latestJobId ?? null,
         latestRunId: worker?.latestRunId ?? null,
         heartbeatMaxAgeSeconds: config.workerHeartbeatMaxAgeSeconds,
+        ...(config.runtimeRequired ? { heartbeatFresh } : {}),
       }
 
       res.status(ready ? 200 : 503).json({
@@ -151,6 +241,8 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
         degraded,
         checkDetails: {
           postgres,
+          postgis,
+          migrations,
           redis,
           mongodb: mongo,
         },

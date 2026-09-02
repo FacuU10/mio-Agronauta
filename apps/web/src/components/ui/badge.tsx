@@ -2,11 +2,11 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 const variants = {
-  default: 'bg-[var(--secondary)] text-[var(--secondary-foreground)]',
+  default: 'bg-surface-secondary text-surface-secondary-foreground',
   success: 'bg-emerald-100 text-emerald-800',
   warning: 'bg-amber-100 text-amber-800',
   destructive: 'bg-rose-100 text-rose-800',
-  outline: 'border border-[var(--border)] bg-white text-[var(--foreground)]',
+  outline: 'border-surface border bg-white text-slate-950',
 } as const
 
 export function Badge({ className, variant = 'default', ...props }: React.HTMLAttributes<HTMLSpanElement> & { variant?: keyof typeof variants }) {

@@ -544,3 +544,28 @@ async def test_missing_worker_postgres_dsn_does_not_ack_an_agronautas_result(con
         await consumer.consume_forever()
 
     assert consumer.redis.lists[consumer.processing_queue_name] == [payload]
+
+
+@pytest.mark.asyncio
+async def test_consumer_rejects_success_when_postgres_completion_is_not_available(consumer: WorkflowQueueConsumer) -> None:
+    job = _job(workflow_id="agronautas-risk-recompute")
+
+    with pytest.raises(consumer_module.DurableOutcomePersistenceError, match="WORKER_POSTGRES_DSN"):
+        await consumer.persist_outcome_before_ack(
+            job,
+            {"accepted": True, "status": "succeeded", "jobId": job["jobId"], "runId": job["runId"]},
+        )
+
+    assert consumer.redis.hashes[consumer.results_key] == {}
+
+
+@pytest.mark.asyncio
+async def test_timeout_failure_keeps_a_typed_timeout_classification(consumer: WorkflowQueueConsumer) -> None:
+    result = await consumer.outcome_coordinator.resolve_failure(
+        _job(),
+        TimeoutError("upstream timed out"),
+    )
+
+    assert result["status"] == "retryable_failure"
+    assert result["failureKind"] == "timeout"
+    assert "upstream timed out" in result["error"]

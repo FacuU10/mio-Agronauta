@@ -1,5 +1,6 @@
 import type { GroundedChatResponse } from '@/lib/agronautas/schemas'
 import type { SseEvent } from './sse'
+import { normalizeCopilotResponse, normalizeCopilotStream, type CopilotResponseInput, type CopilotViewModel } from './view-models'
 
 export type ChatStreamStatus = 'idle' | 'streaming' | 'done' | 'partial' | 'error' | 'degraded'
 
@@ -18,28 +19,41 @@ export interface ChatStreamState {
   citationMode?: 'validated-context' | 'context-only' | 'none'
   citationUnavailable?: boolean
   unavailableReason?: string
+  actionable?: boolean
+  unverifiedClaims?: boolean
+  httpStatus?: number
+  retryAfterMs?: number
+  retryAt?: string
 }
 
-export interface ChatViewModel extends ChatStreamState {
-  unavailableReason?: string
-}
+export interface ChatViewModel extends Omit<ChatStreamState, 'actionable' | 'unverifiedClaims'>, Pick<CopilotViewModel, 'outcome' | 'actionable' | 'unverifiedClaims'> {}
 
 export function createChatStreamState(): ChatStreamState {
   return { status: 'idle', answer: '', metadata: {}, facts: [], citations: [], trace: [], sources: [], limits: [], retryable: false }
 }
 
-export function createChatViewModel(response: GroundedChatResponse): ChatViewModel {
+export function createChatViewModel(response: GroundedChatResponse & Partial<CopilotResponseInput>): ChatViewModel {
+  const normalized = normalizeCopilotResponse(response)
   return {
     ...createChatStreamState(),
-    status: response.degraded ? 'degraded' : 'done',
-    answer: response.answer,
+    status: chatStatusForOutcome(normalized.outcome),
+    answer: normalized.answer,
     metadata: { contractVersion: response.contractVersion, fieldId: response.fieldId },
     facts: response.supportingFacts,
-    citations: response.citations,
+    citations: normalized.citations,
     trace: response.trace,
-    sources: response.citations,
+    sources: normalized.sources.length ? normalized.sources : normalized.citations,
     unavailableReason: response.unavailableReason,
-    retryable: response.degraded,
+    error: normalized.outcome === 'ready' ? undefined : response.unavailableReason ?? normalized.reason,
+    retryable: normalized.retryable,
+    citationMode: normalized.citationMode,
+    citationUnavailable: normalized.citationUnavailable,
+    actionable: normalized.actionable,
+    unverifiedClaims: normalized.unverifiedClaims,
+    outcome: normalized.outcome,
+    httpStatus: normalized.httpStatus,
+    retryAfterMs: normalized.retryAfterMs,
+    retryAt: retryAtFor(normalized.retryAfterMs),
   }
 }
 
@@ -48,17 +62,96 @@ export function createChatViewModelFromStream(state: ChatStreamState): ChatViewM
   const metadataCitations = asStrings(state.metadata['citations'])
   const metadataSources = asStrings(state.metadata['sources'])
   const metadataLimits = asStrings(state.metadata['limits'])
+  const normalized = normalizeCopilotStream({
+    status: state.httpStatus ?? (state.status === 'error' ? 503 : 200),
+    answer: state.answer,
+    citations: state.citations.length ? state.citations : metadataCitations,
+    sources: state.sources.length ? state.sources : metadataSources,
+    citationMode: state.metadata['citationMode'],
+    citationUnavailable: state.metadata['citationUnavailable'],
+    unverifiedClaims: state.metadata['unverifiedClaims'],
+    degraded: state.status === 'degraded' || state.status === 'partial' || state.status === 'error',
+    unavailableReason: state.error ?? state.metadata['unavailableReason'],
+    retryAfterMs: state.retryAfterMs ?? state.metadata['retryAfterMs'],
+    raw: state,
+  })
   return {
     ...state,
     facts: state.facts.length ? state.facts : metadataFacts,
     citations: state.citations.length ? state.citations : metadataCitations,
     sources: state.sources.length ? state.sources : metadataSources,
     limits: state.limits.length ? state.limits : metadataLimits,
-    retryable: state.retryable || state.status === 'partial' || state.status === 'error' || state.status === 'degraded',
-    citationMode: isCitationMode(state.metadata['citationMode']) ? state.metadata['citationMode'] : undefined,
-    citationUnavailable: state.metadata['citationUnavailable'] === true,
+    status: state.status === 'done' && normalized.outcome === 'empty' ? 'error' : state.status,
+    retryable: normalized.retryable || state.retryable || state.status === 'partial' || state.status === 'error' || state.status === 'degraded',
+    citationMode: normalized.citationMode,
+    citationUnavailable: normalized.citationUnavailable,
     unavailableReason: typeof state.metadata['unavailableReason'] === 'string' ? state.metadata['unavailableReason'] : undefined,
+    error: state.error ?? normalized.reason,
+    actionable: normalized.actionable,
+    unverifiedClaims: normalized.unverifiedClaims,
+    outcome: normalized.outcome,
+    retryAfterMs: normalized.retryAfterMs,
+    httpStatus: normalized.httpStatus,
+    retryAt: state.retryAt ?? retryAtFromMetadata(state.metadata) ?? retryAtFor(normalized.retryAfterMs, state.receivedAt),
   }
+}
+
+export function normalizeChatRetryAfterMs(value: unknown, nowMs = Date.now()): number | undefined {
+  const seconds = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim())
+      ? Number(value.trim())
+      : undefined
+
+  if (seconds !== undefined) {
+    const milliseconds = Math.ceil(seconds * 1_000)
+    return Number.isSafeInteger(milliseconds) && milliseconds >= 0 ? milliseconds : undefined
+  }
+
+  if (typeof value !== 'string') return undefined
+  const retryAtMs = Date.parse(value)
+  if (!Number.isFinite(retryAtMs)) return undefined
+  return Math.max(0, retryAtMs - nowMs)
+}
+
+export function applyChatRateLimit(state: ChatStreamState, retryAfter: unknown, nowMs = Date.now()): ChatStreamState {
+  const retryAfterMs = normalizeChatRetryAfterMs(retryAfter, nowMs)
+  return {
+    ...state,
+    status: 'degraded',
+    actionable: false,
+    retryable: true,
+    httpStatus: 429,
+    retryAfterMs,
+    retryAt: retryAtFor(retryAfterMs, new Date(nowMs).toISOString()),
+    unavailableReason: 'rate_limited',
+    error: 'rate_limited',
+  }
+}
+
+export function canRetryChat(state: ChatStreamState, nowMs = Date.now()): boolean {
+  if (!state.retryable || state.status === 'streaming') return false
+  if (!state.retryAt) return true
+  const retryAtMs = Date.parse(state.retryAt)
+  return Number.isFinite(retryAtMs) && nowMs >= retryAtMs
+}
+
+function chatStatusForOutcome(outcome: ChatViewModel['outcome']): ChatStreamStatus {
+  if (outcome === 'ready') return 'done'
+  if (outcome === 'loading') return 'streaming'
+  if (outcome === 'retryable') return 'degraded'
+  return 'error'
+}
+
+function retryAtFor(retryAfterMs: number | undefined, receivedAt?: string): string | undefined {
+  if (retryAfterMs === undefined) return undefined
+  const originMs = receivedAt ? Date.parse(receivedAt) : Date.now()
+  if (!Number.isFinite(originMs)) return undefined
+  return new Date(originMs + retryAfterMs).toISOString()
+}
+
+function retryAtFromMetadata(metadata: Record<string, unknown>): string | undefined {
+  return typeof metadata['retryAt'] === 'string' ? metadata['retryAt'] : undefined
 }
 
 export function applyChatEvent(state: ChatStreamState, event: SseEvent): ChatStreamState {
@@ -71,7 +164,7 @@ export function applyChatEvent(state: ChatStreamState, event: SseEvent): ChatStr
   }
 
   if (event.type === 'done') {
-    return { ...state, status: 'done', receivedAt: event.receivedAt }
+    return { ...state, status: state.answer.trim() ? 'done' : 'error', error: state.answer.trim() ? state.error : 'El stream no entregó tokens verificables.', receivedAt: event.receivedAt, retryable: !state.answer.trim() || state.retryable }
   }
 
   return {
@@ -132,6 +225,3 @@ function asFacts(value: unknown): Array<{ label: string; value: string }> {
     : []
 }
 
-function isCitationMode(value: unknown): value is NonNullable<ChatStreamState['citationMode']> {
-  return value === 'validated-context' || value === 'context-only' || value === 'none'
-}

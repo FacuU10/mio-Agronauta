@@ -276,6 +276,18 @@ test('hydrology government ingest schema carries proof run id and safe http summ
   assert.equal(parsed.results[0]?.httpSummary?.attempts, 2)
 })
 
+test('hydrology ingest acknowledgement cannot claim terminal completion without durable completion evidence', () => {
+  const acknowledgementOnly = hydrologyGovernmentIngestResponseSchema.safeParse({
+    contractVersion: 'hydrology-government-ingest-v1',
+    proofRunId: 'proof-ack-only',
+    status: 'completed',
+    requestedSources: ['PNA'],
+    results: [{ source: 'PNA', status: 'success', recordsIngested: 1 }],
+  })
+
+  assert.equal(acknowledgementOnly.success, false)
+})
+
 test('Iberá ledger schemas preserve source diagnostics and reject unsupported citation sources', () => {
   const sourceResult = hydrologyIberaSourceResultSchema.parse({
     source: 'PNA',
@@ -385,6 +397,83 @@ test('hydrology operator receipt rejects secret values, raw chat, and mismatched
   assert.equal(secretValue.success, false)
   assert.equal(rawChat.success, false)
   assert.equal(mismatchedRow.success, false)
+})
+
+const operatorReceiptFixture = () => ({
+  verifier: 'ibera-alerta-operator-v1' as const,
+  evidenceScope: 'local' as const,
+  capturedAt: '2026-07-18T12:00:00.000Z',
+  runtime: {
+    service: 'agronautas-api',
+    revision: 'local-revision',
+    config: {
+      schedulerEnabled: false,
+      secretNames: ['HYDROLOGY_INGEST_TOKEN'],
+      regionalRunner: { mode: 'direct' as const, allowlisted: true },
+    },
+  },
+  request: {
+    requestId: 'request-1',
+    method: 'POST' as const,
+    path: '/api/hydrology/ingest' as const,
+    acknowledgementStatus: 202 as const,
+    responseShape: {
+      contractVersion: 'hydrology-government-ingest-v1' as const,
+      status: 'completed' as const,
+      proofRunId: 'proof-1',
+      hasStatusPath: true,
+      resultCount: 1,
+    },
+  },
+  sourceOutcomes: [{ source: 'PNA' as const, status: 'success' as const, recordsIngested: 1, attempts: 1 as const }],
+  rowCorrelation: [{ rowId: 'row-1', source: 'PNA' as const, proofRunId: 'proof-1', status: 'success' as const, recordsIngested: 1, correlated: true as const }],
+  chat: { mode: 'not_run' as const, status: 'not_run' as const, eventTypes: [] as const, rawContentIncluded: false as const },
+  passed: true,
+})
+
+test('hydrology operator receipt rejects tokens, credentialed URLs, database strings, raw chat/payloads, and stack traces', () => {
+  const base = operatorReceiptFixture()
+  const candidates = [
+    ['token', { ...base, request: { ...base.request, requestId: 'Bearer token-value' } }],
+    ['credentialed URL', { ...base, runtime: { ...base.runtime, revision: 'https://user:password@example.test/revision' } }],
+    ['database connection string', { ...base, runtime: { ...base.runtime, revision: 'postgresql://user:password@db.example.test:5432/agronautas' } }],
+    ['raw chat', { ...base, runtime: { ...base.runtime, service: '{"role":"user","content":"raw chat"}' } }],
+    ['raw payload', { ...base, request: { ...base.request, requestId: '{"source":"PNA","token":"raw payload"}' } }],
+    ['stack trace', { ...base, runtime: { ...base.runtime, revision: 'Error: failed\\n    at ingest (hydrology.ts:1:1)' } }],
+  ] as const
+
+  const accepted = candidates.filter(([, candidate]) => hydrologyOperatorReceiptSchema.safeParse(candidate).success).map(([name]) => name)
+
+  assert.deepEqual(accepted, [])
+})
+
+test('hydrology operator receipt rejects missing request, revision, run, job, and proof identifiers', () => {
+  const base = operatorReceiptFixture()
+  const candidates = [
+    ['request ID', { ...base, request: { ...base.request, requestId: undefined } }],
+    ['revision ID', { ...base, runtime: { ...base.runtime, revision: undefined } }],
+    ['proof ID', { ...base, request: { ...base.request, responseShape: { ...base.request.responseShape, proofRunId: undefined } } }],
+    ['run ID', base],
+    ['job ID', base],
+  ] as const
+
+  const accepted = candidates.filter(([, candidate]) => hydrologyOperatorReceiptSchema.safeParse(candidate).success).map(([name]) => name)
+
+  assert.deepEqual(accepted, [])
+})
+
+test('hydrology operator receipt rejects mixed local and production evidence scopes', () => {
+  const mixedScope = operatorReceiptFixture()
+  mixedScope.runtime.revision = 'production-revision'
+
+  assert.equal(hydrologyOperatorReceiptSchema.safeParse(mixedScope).success, false)
+})
+
+test('hydrology operator receipt rejects a 202 acknowledgement without terminal completion evidence', () => {
+  const acknowledgementOnly = operatorReceiptFixture()
+  acknowledgementOnly.request.responseShape.hasStatusPath = false
+
+  assert.equal(hydrologyOperatorReceiptSchema.safeParse(acknowledgementOnly).success, false)
 })
 
 test('hydrology ingest diagnostic schema rejects unsafe or unbounded public fields', () => {

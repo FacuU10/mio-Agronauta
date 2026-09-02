@@ -1,6 +1,7 @@
 import 'express-async-errors'
 import express, { Application } from 'express'
 import dotenv from 'dotenv'
+import { resolve } from 'node:path'
 import { globalErrorHandler, notFoundHandler } from './presentation/middleware/error-handler'
 import { httpLogger, logger } from './infrastructure/observability/logger'
 import { helmetMiddleware } from './presentation/middleware/helmet'
@@ -21,7 +22,7 @@ import { HydrologyIngestionScheduler, type HydrologyIngestionRunner, type Hydrol
 import type { HydrologySource } from '@repo/zod-schemas'
 import { ProductionEnvValidatorPort } from './infrastructure/config/validator'
 
-dotenv.config()
+dotenv.config({ path: resolve(__dirname, '../.env') })
 
 function parseApiPort(name: 'PORT' | 'API_PORT', value: string | undefined): number | undefined {
   const normalized = value?.trim()

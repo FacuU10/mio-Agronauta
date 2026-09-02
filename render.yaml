@@ -2,9 +2,13 @@ services:
   - type: web
     runtime: node
     name: agronautas-api
+    # Render probes liveness here. Readiness remains an operator/release gate at /ready.
+    healthCheckPath: /health
     buildCommand: pnpm install --frozen-lockfile && pnpm --dir packages/zod-schemas build && pnpm --dir packages/hydrology-engine build && pnpm --dir apps/api build
     startCommand: pnpm --dir apps/api start
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: PORT
         sync: false
       - key: API_PORT
@@ -14,8 +18,26 @@ services:
       - key: REDIS_URL
         sync: false
       - key: TRUST_PROXY
-        sync: false
+        value: "1"
       - key: RENDER
+        value: "true"
+      - key: AGRONAUTAS_AUTH_ENABLED
+        value: "true"
+      - key: AGRONAUTAS_RUNTIME_REQUIRED
+        value: "true"
+      - key: AGRONAUTAS_RUNTIME_MODE
+        value: real
+      - key: AGRONAUTAS_ROUTE_PREFIX
+        value: /agronautas
+      - key: AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS
+        value: "5000"
+      - key: AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS
+        value: "180"
+      - key: READINESS_OPTIONAL_SERVICES
+        value: none
+      - key: AGRONAUTAS_FORCE_ENV_VALIDATION
+        value: "true"
+      - key: CORS_ORIGINS
         sync: false
       - key: HYDROLOGY_INGEST_TOKEN
         sync: false
@@ -28,6 +50,12 @@ services:
       - key: GROQ_MODEL
         sync: false
       - key: GROQ_TIMEOUT_MS
+        value: "15000"
+      - key: NASA_FIRMS_API_KEY
+        sync: false
+      - key: SENTINEL_CLIENT_ID
+        sync: false
+      - key: SENTINEL_CLIENT_SECRET
         sync: false
 
   - type: worker
@@ -48,8 +76,13 @@ services:
     name: ibera-hydrology-cron
     schedule: "0 * * * *"
     buildCommand: pnpm install --frozen-lockfile && pnpm --dir packages/zod-schemas build && pnpm --dir packages/hydrology-engine build && pnpm --dir apps/api build
+    # AUTHORITATIVE CONTRACT: Render invokes the existing direct scheduler:once entrypoint.
+    # Authentication is the named runtime secret plus fixed owner boundary; no HTTP POST or HTTP token/header is used.
+    # A process exit is not completion proof; retain the Render execution record and redacted receipt.
     startCommand: pnpm --dir apps/api scheduler:once -- --render-cron
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         sync: false
       - key: HYDROLOGY_INGEST_TOKEN
@@ -60,9 +93,12 @@ services:
   - type: web
     runtime: node
     name: agronautas-web
+    healthCheckPath: /
     buildCommand: pnpm install --frozen-lockfile && pnpm --dir apps/web build
     startCommand: pnpm --dir apps/web start
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: PORT
         sync: false
       - key: AGRONAUTAS_API_INTERNAL_URL
@@ -70,4 +106,4 @@ services:
       - key: AGRONAUTAS_BFF_BEARER_TOKEN
         sync: false
       - key: AGRONAUTAS_BFF_TIMEOUT_MS
-        sync: false
+        value: "60000"

@@ -69,6 +69,10 @@ function parseBearerToken(header: string | undefined): string | null {
 }
 
 function respondAuthError(res: Response, status: 401 | 403, code: 'UNAUTHORIZED' | 'FORBIDDEN', message: string) {
+  if (status === 401) {
+    res.setHeader('WWW-Authenticate', 'Bearer')
+  }
+
   return res.status(status).json(agronautasContractErrorSchema.parse({
     contractVersion: '1.0.0',
     code,

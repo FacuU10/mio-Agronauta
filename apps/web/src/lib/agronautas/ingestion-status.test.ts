@@ -10,9 +10,9 @@ const dashboard = {
   status: 'degraded',
   freshness: 'degraded',
   signals: [
-    { signalType: 'weather', status: 'fresh', evidenceRefs: ['weather:open-meteo'], confidence: 0.86, degradationReasons: [] },
-    { signalType: 'hydric_soil', status: 'stale', evidenceRefs: ['soil:inta'], confidence: 0.58, degradationReasons: ['weather_data_stale'] },
-    { signalType: 'satellite_vegetation', status: 'missing', evidenceRefs: ['satellite:sentinel'], confidence: 0.22, degradationReasons: ['satellite_data_unavailable'] },
+    { signalType: 'weather', status: 'fresh', evidenceRefs: ['weather:open-meteo'], confidence: 0.86, acquisitionTimes: ['2026-06-03T00:00:00.000Z'], degradationReasons: [] },
+    { signalType: 'hydric_soil', status: 'stale', evidenceRefs: ['soil:inta'], confidence: 0.58, acquisitionTimes: ['2026-06-01T12:00:00.000Z'], degradationReasons: ['weather_data_stale'] },
+    { signalType: 'satellite_vegetation', status: 'missing', evidenceRefs: ['satellite:sentinel'], confidence: 0.22, acquisitionTimes: [], degradationReasons: ['satellite_data_unavailable'] },
   ],
   risk: {
     score: 81,

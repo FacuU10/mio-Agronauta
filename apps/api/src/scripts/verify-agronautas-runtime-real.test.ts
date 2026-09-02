@@ -8,6 +8,49 @@ import {
   resolveRuntimeVerificationConfig,
   type RuntimeEvidenceCell,
 } from './verify-agronautas-runtime-real'
+import * as runtimeVerifier from './verify-agronautas-runtime-real'
+
+const BOUNDARY_STATUS = {
+  LIVE: 'live',
+  DEGRADED: 'degraded',
+  FAILED: 'failed',
+  BLOCKED: 'blocked',
+  NOT_RUN: 'not_run',
+} as const
+
+type BoundaryStatus = (typeof BOUNDARY_STATUS)[keyof typeof BOUNDARY_STATUS]
+
+interface RuntimeCompletionInput {
+  requestId: string
+  revisionId: string
+  proofRunId: string
+  jobId: string
+  acknowledgementStatus: number
+  workerStatus: 'queued' | 'running' | 'succeeded' | 'failed'
+  durableRowId: string | null
+}
+
+interface BoundaryEvidenceInput {
+  provider: BoundaryStatus
+  auth: BoundaryStatus
+  tenant: BoundaryStatus
+  lead: BoundaryStatus
+  ingest: BoundaryStatus
+}
+
+interface RuntimeVerifierRedBoundary {
+  classifyRuntimeCompletion(input: RuntimeCompletionInput): RuntimeEvidenceCell
+  classifyBoundaryEvidence(input: BoundaryEvidenceInput): {
+    provider: BoundaryStatus
+    auth: BoundaryStatus
+    tenant: BoundaryStatus
+    lead: BoundaryStatus
+    ingest: BoundaryStatus
+    overall: BoundaryStatus
+  }
+}
+
+const redBoundary = runtimeVerifier as unknown as RuntimeVerifierRedBoundary
 
 test('runtime verification defaults to local API/web endpoints and keeps writes disabled', () => {
   const config = resolveRuntimeVerificationConfig({})
@@ -195,4 +238,104 @@ test('runtime verification records the v2 contract and durable outcome boundary'
 
   assert.equal(manifest.contractVersion, '2.0.0')
   assert.equal(manifest.durableOutcomeBeforeAck, true)
+})
+
+test('runtime completion remains blocked when the API only acknowledges 202 without worker and Postgres completion', () => {
+  const result = redBoundary.classifyRuntimeCompletion({
+    requestId: 'request-202-only',
+    revisionId: 'revision-local',
+    proofRunId: 'proof-202-only',
+    jobId: 'job-202-only',
+    acknowledgementStatus: 202,
+    workerStatus: 'queued',
+    durableRowId: null,
+  })
+
+  assert.equal(result.status, 'blocked')
+  assert.match(result.detail, /durable|completion|terminal/i)
+  assert.doesNotMatch(JSON.stringify(result), /token|password|secret/i)
+})
+
+test('runtime completion is live only after a terminal worker transition and matching durable row', () => {
+  const result = redBoundary.classifyRuntimeCompletion({
+    requestId: 'request-complete',
+    revisionId: 'revision-local',
+    proofRunId: 'proof-complete',
+    jobId: 'job-complete',
+    acknowledgementStatus: 202,
+    workerStatus: 'succeeded',
+    durableRowId: 'row-complete',
+  })
+
+  assert.equal(result.status, 'pass')
+  assert.equal(result.evidence?.['requestId'], 'request-complete')
+  assert.equal(result.evidence?.['revisionId'], 'revision-local')
+  assert.equal(result.evidence?.['proofRunId'], 'proof-complete')
+  assert.equal(result.evidence?.['jobId'], 'job-complete')
+  assert.equal(result.evidence?.['durableRowId'], 'row-complete')
+})
+
+test('runtime boundary evidence keeps provider, auth, tenant, lead, and ingest blockers separate and secret-free', () => {
+  const result = redBoundary.classifyBoundaryEvidence({
+    provider: BOUNDARY_STATUS.BLOCKED,
+    auth: BOUNDARY_STATUS.BLOCKED,
+    tenant: BOUNDARY_STATUS.NOT_RUN,
+    lead: BOUNDARY_STATUS.NOT_RUN,
+    ingest: BOUNDARY_STATUS.NOT_RUN,
+  })
+
+  assert.deepEqual(result, {
+    provider: BOUNDARY_STATUS.BLOCKED,
+    auth: BOUNDARY_STATUS.BLOCKED,
+    tenant: BOUNDARY_STATUS.NOT_RUN,
+    lead: BOUNDARY_STATUS.NOT_RUN,
+    ingest: BOUNDARY_STATUS.NOT_RUN,
+    overall: BOUNDARY_STATUS.BLOCKED,
+  })
+  assert.doesNotMatch(JSON.stringify(result), /token|password|secret|postgresql|redis:|https?:\/\/.*@/i)
+})
+
+test('runtime receipt cannot be complete when request, revision, run, job, or proof identifiers are missing', () => {
+  const manifest = buildRuntimeManifest({
+    runId: 'runtime-missing-correlation',
+    startedAt: '2026-08-30T00:00:00.000Z',
+    finishedAt: '2026-08-30T00:01:00.000Z',
+    checks: { worker_tests: { status: 'pass', detail: 'contract checks completed' } },
+  })
+
+  assert.notEqual(manifest.status, 'complete')
+  assert.equal(manifest.requestId, null)
+  assert.equal(manifest.revisionId, null)
+  assert.equal(manifest.proofRunId, null)
+  assert.equal(manifest.jobId, null)
+})
+
+test('runtime receipt rejects credentialed URLs, tokens, database strings, raw payload/chat, and stack traces', () => {
+  const baseInput = {
+    runId: 'runtime-sensitive-evidence',
+    requestId: 'request-safe',
+    revisionId: 'revision-safe',
+    proofRunId: 'proof-safe',
+    jobId: 'job-safe',
+    startedAt: '2026-08-30T00:00:00.000Z',
+    finishedAt: '2026-08-30T00:01:00.000Z',
+  }
+  const cases: ReadonlyArray<readonly [string, Record<string, string>]> = [
+    ['token', { authorization: 'Bearer token-value' }],
+    ['credentialed URL', { endpoint: 'https://user:password@example.test/api' }],
+    ['database connection string', { database: 'postgresql://user:password@db.example.test:5432/agronautas' }],
+    ['raw chat', { payload: '{"message":"raw chat"}' }],
+    ['raw payload', { payload: '{"source":"PNA","records":[1]}' }],
+    ['stack trace', { stack: 'Error: failed\\n    at verify (runtime.ts:1:1)' }],
+  ]
+
+  const leaked = cases.filter(([, evidence]) => {
+    const manifest = buildRuntimeManifest({
+      ...baseInput,
+      checks: { api: { status: 'blocked', detail: 'boundary unavailable', evidence } },
+    })
+    return /Bearer token-value|https:\/\/user:password@|postgresql:\/\/|raw chat|records|at verify \(runtime\.ts/i.test(JSON.stringify(manifest))
+  }).map(([name]) => name)
+
+  assert.deepEqual(leaked, [])
 })

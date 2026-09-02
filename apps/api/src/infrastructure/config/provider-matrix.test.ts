@@ -101,3 +101,32 @@ test('ProviderEvidencePort preserves stale latest-good lineage without inventing
   assert.deepEqual(evidence.degradationReasons, ['timeout'])
   delete process.env['AGRONAUTAS_RUNTIME_MODE']
 })
+
+test('provider evidence classifies missing real proof as blocked without exposing configuration values', async () => {
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
+  process.env['AGRONAUTAS_RUNTIME_REQUIRED'] = 'true'
+  process.env['NASA_FIRMS_API_KEY'] = 'provider-test-key'
+
+  try {
+    const port = new RealProviderEvidencePort({
+      async query() {
+        return { rows: [] }
+      },
+    } as unknown as ConstructorParameters<typeof RealProviderEvidencePort>[0])
+    const evidence = await port.getEvidence('nasa-firms', 'fire') as unknown as {
+      providerMode: string
+      boundaryStatus: string
+      detail?: string
+      proofRef: string
+    }
+
+    assert.equal(evidence.providerMode, 'seam')
+    assert.equal(evidence.boundaryStatus, 'blocked')
+    assert.equal(evidence.proofRef, 'no-db-proof')
+    assert.doesNotMatch(JSON.stringify(evidence), /provider-test-key/)
+  } finally {
+    delete process.env['AGRONAUTAS_RUNTIME_MODE']
+    delete process.env['AGRONAUTAS_RUNTIME_REQUIRED']
+    delete process.env['NASA_FIRMS_API_KEY']
+  }
+})

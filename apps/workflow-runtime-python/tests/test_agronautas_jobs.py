@@ -14,7 +14,7 @@ os.environ.setdefault(
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, build_scheduled_window_unavailable_result, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job, handle_scheduled_window_job
+from worker.runtime.agronautas_jobs import PostgresAgronautasJobStore, RuntimeOutcomeCoordinator, build_scheduled_window_unavailable_result, compute_risk_snapshot, fetch_field_coordinates, handle_agronautas_job, handle_scheduled_window_job
 
 
 class FakeRedis:
@@ -673,6 +673,108 @@ async def test_outcome_coordinator_owns_fallback_failure_classification_and_pers
     assert retry["nextAttempt"] == 2
     assert dead_letter["status"] == "dlq"
     assert events == ["retry", "dlq"]
+
+
+@pytest.mark.asyncio
+async def test_expired_heartbeat_lease_is_not_reported_as_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ExpiredCursor:
+        rowcount = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def execute(self, _sql, _params):
+            return None
+
+    class ExpiredConnection:
+        def cursor(self):
+            return ExpiredCursor()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def commit(self):
+            return None
+
+    async def fake_connect(_dsn: str):
+        return ExpiredConnection()
+
+    monkeypatch.setattr("worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect", fake_connect)
+    store = PostgresAgronautasJobStore("postgres://test", "worker-1")
+
+    assert await store.heartbeat("job-expired", "run-expired", _parse_test_timestamp("2026-08-04T00:01:00Z")) is False
+
+
+@pytest.mark.asyncio
+async def test_duplicate_terminal_outcome_is_idempotent_for_the_same_job_and_run() -> None:
+    complete_calls = 0
+
+    class FakeStore:
+        worker_id = "worker-1"
+
+        async def complete(self, *args, **kwargs):
+            nonlocal complete_calls
+            complete_calls += 1
+            return True
+
+    coordinator = RuntimeOutcomeCoordinator(FakeStore())
+    job = {"jobId": "job-idempotent", "runId": "run-idempotent", "lease": {"attempt": 1, "maxAttempts": 3}}
+    result = {"status": "succeeded", "jobId": job["jobId"], "runId": job["runId"]}
+
+    await coordinator.persist_outcome_before_ack(job, result)
+    await coordinator.persist_outcome_before_ack(job, result)
+
+    assert complete_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_database_readiness_proves_postgres_postgis_and_migrations_separately(monkeypatch: pytest.MonkeyPatch) -> None:
+    queries: list[str] = []
+
+    class ReadinessCursor:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def execute(self, sql, _params=()):
+            queries.append(sql)
+
+        async def fetchone(self):
+            return (1,)
+
+    class ReadinessConnection:
+        def cursor(self):
+            return ReadinessCursor()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    async def fake_connect(_dsn: str):
+        return ReadinessConnection()
+
+    monkeypatch.setattr("worker.runtime.agronautas_jobs.psycopg.AsyncConnection.connect", fake_connect)
+    store = PostgresAgronautasJobStore("postgres://test", "worker-1")
+
+    readiness = await store.check_database_readiness()
+
+    assert readiness == {
+        "postgres": "ready",
+        "postgis": "ready",
+        "migrations": "ready",
+    }
+    assert any("postgis" in query.lower() for query in queries)
+    assert any("_prisma_migrations" in query for query in queries)
 
 
 @pytest.mark.asyncio

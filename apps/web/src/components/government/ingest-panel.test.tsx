@@ -27,6 +27,8 @@ test('hides ingest controls until the memory-only verification succeeds', async 
     const input = view.getByLabelText('Token de ingesta') as HTMLInputElement
     const button = view.getByRole('button', { name: 'Verificar acceso' })
     assert.equal(input.type, 'password')
+    assert.equal(input.getAttribute('name'), 'ingestToken')
+    assert.equal(input.getAttribute('autocomplete'), 'off')
     assert.equal(button.hasAttribute('disabled'), true)
     fireEvent.input(input, { target: { value: token } })
     await waitFor(() => assert.equal(button.hasAttribute('disabled'), false))
@@ -194,6 +196,141 @@ test('failed verification keeps ingest controls hidden and leaves browser storag
   assert.equal(window.sessionStorage.length, 0)
   assert.equal(document.cookie, '')
   assert.doesNotMatch(view.container.textContent ?? '', new RegExp(token))
+})
+
+test('announces unauthorized verification with a reachable retry and restores focus to the token field', async () => {
+  const previousFetch = globalThis.fetch
+  const token = crypto.randomUUID()
+  globalThis.fetch = (async () => jsonResponse({ code: 'HYDROLOGY_INGEST_UNAUTHORIZED', message: token }, 401)) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    const input = view.getByLabelText('Token de ingesta') as HTMLInputElement
+    fireEvent.input(input, { target: { value: token } })
+    fireEvent.click(view.getByRole('button', { name: 'Verificar acceso' }))
+
+    await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'No se pudo autorizar la ingesta con el token indicado.'))
+    const retryButton = view.getByRole('button', { name: 'Reintentar verificación' })
+    assert.equal(retryButton.getAttribute('aria-describedby'), 'hydrology-ingest-error')
+    assert.equal(input.getAttribute('aria-invalid'), 'true')
+    assert.equal(input.getAttribute('aria-describedby'), 'hydrology-ingest-token-help hydrology-ingest-error')
+    assert.equal(document.activeElement, retryButton)
+    assert.doesNotMatch(view.container.innerHTML, new RegExp(token))
+
+    fireEvent.click(retryButton)
+    await waitFor(() => assert.equal(document.activeElement, input))
+    assert.equal(input.value, '')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('keeps partial source availability explicit and exposes only sanitized provenance links', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async () => requestCount++ === 0
+    ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    : jsonResponse({
+      status: 'partial',
+      requestedSources: ['PNA', 'INA', 'INMET', 'SMN'],
+      results: [
+        { source: 'PNA', status: 'success', recordsIngested: 1, provenanceUrl: 'https://pna.gov.ar/observations' },
+        { source: 'INA', status: 'empty', recordsIngested: 0 },
+        { source: 'INMET', status: 'skipped', recordsIngested: 0 },
+        { source: 'SMN', status: 'failed', recordsIngested: 0 },
+      ],
+    })) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+
+    await waitFor(() => assert.equal(view.getByRole('status').textContent, 'Ingesta parcial'))
+    assert.match(view.container.textContent ?? '', /INA.*Sin registros/s)
+    assert.match(view.container.textContent ?? '', /INMET.*Omitida/s)
+    assert.ok(view.getByRole('link', { name: 'Ver fuente PNA' }))
+    assert.equal(view.getByRole('link', { name: 'Ver fuente PNA' }).getAttribute('href'), 'https://pna.gov.ar/observations')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('returns keyboard focus to the token field when retrying a terminal ingest result', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async () => requestCount++ === 0
+    ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    : jsonResponse({ status: 'failed', runId: 'run-failed', requestedSources: ['PNA'], results: [{ source: 'PNA', status: 'failed', recordsIngested: 0 }] })) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+    await waitFor(() => assert.ok(view.getByRole('button', { name: 'Reintentar ingesta' })))
+
+    fireEvent.click(view.getByRole('button', { name: 'Reintentar ingesta' }))
+    await waitFor(() => assert.equal(document.activeElement, view.getByLabelText('Token de ingesta')))
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('IngestPanel exposes one landmark and a keyboard skip target', () => {
+  const view = render(<IngestPanel />)
+
+  assert.equal(view.container.querySelectorAll('main').length, 1)
+  assert.equal(view.container.querySelectorAll('main main').length, 0)
+  const skipLink = view.getByRole('link', { name: 'Saltar a controles de ingesta' })
+  assert.equal(skipLink.getAttribute('href'), '#ingest-controls')
+  const skipTarget = view.container.querySelector('#ingest-controls')
+  assert.ok(skipTarget)
+  assert.equal(skipTarget?.getAttribute('tabindex'), '-1')
+  assert.equal(view.getAllByRole('heading', { level: 1 }).length, 1)
+  assert.ok(view.getByRole('heading', { level: 1, name: 'Ingesta hidrológica' }))
+  assert.ok(view.getByRole('form', { name: 'Verificar acceso a ingesta' }))
+})
+
+test('keeps an ingest authorization failure safe after access was granted and exposes verification recovery', async () => {
+  const previousFetch = globalThis.fetch
+  const token = crypto.randomUUID()
+  let requestCount = 0
+  globalThis.fetch = (async () => requestCount++ === 0
+    ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    : jsonResponse({ code: 'HYDROLOGY_INGEST_UNAUTHORIZED', message: token }, 401)) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view, token)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+
+    await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'No se pudo autorizar la ingesta con el token indicado.'))
+    assert.ok(view.getByRole('button', { name: 'Reintentar verificación' }))
+    assert.doesNotMatch(view.container.innerHTML, new RegExp(token))
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('announces an admitted started run as progress and offers a safe ingest retry', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async () => requestCount++ === 0
+    ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    : jsonResponse({ status: 'started', runId: 'run-started', requestedSources: ['INA'], results: [] })) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+
+    await waitFor(() => assert.equal(view.getByRole('status').textContent, 'Ingesta iniciada'))
+    assert.match(view.container.textContent ?? '', /run-started/)
+    assert.match(view.container.textContent ?? '', /INA/)
+    assert.ok(view.getByRole('button', { name: 'Reintentar ingesta' }))
+  } finally {
+    globalThis.fetch = previousFetch
+  }
 })
 
 test('accepts 202 admission, polls statusPath without treating queued as completed, and renders source ranges/http summary', async () => {

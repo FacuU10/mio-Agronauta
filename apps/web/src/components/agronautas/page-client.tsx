@@ -5,16 +5,43 @@ import { useInfiniteQuery, useMutation, useQueries } from '@tanstack/react-query
 import type { FieldIntake } from '@repo/zod-schemas'
 import { ApiError } from '@/lib/api-client'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
-import { AGRONAUTAS_CONTRACT_VERSION, agronautasWorkspaceFieldPageSchema, contractErrorSchema, recomputeRequestResultSchema, type GroundedChatResponse, type AgronautasWorkspaceFieldPage, type CampaignPlanningContextResponse, type AssumptionSimulationResponse } from '@/lib/agronautas/schemas'
+import { AGRONAUTAS_CONTRACT_VERSION, agronautasWorkspaceFieldPageSchema, contractErrorSchema, fieldCreatedSchema, recomputeRequestResultSchema, type GroundedChatResponse, type AgronautasWorkspaceFieldPage, type CampaignPlanningContextResponse, type AssumptionSimulationResponse } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
 import { applyChatEvent, createChatStreamState, type ChatStreamState } from '@/lib/visibility/chat'
+import { normalizeRequestError } from '@/lib/visibility/view-models'
 import type { SseEvent } from '@/lib/visibility/sse'
-import { AgronautasWorkspace } from './workspace'
+import { AgronautasWorkspace, type AgronautasAccessState, type AgronautasCapabilityState, type AgronautasCapabilityStates } from './workspace'
 
 const React = { createElement }
 
 interface AgronautasPageClientProps {
   service?: AgronautasService
+}
+
+function capabilityState(query: { data?: unknown; error: unknown; isLoading: boolean }): AgronautasCapabilityState {
+  if (query.isLoading) return { state: 'loading' }
+  if (query.error) {
+    const outcome = normalizeRequestError(query.error)
+    const status = query.error instanceof ApiError ? query.error.status : outcome.httpStatus
+    if (status === 401) return { state: 'unauthorized', status, reason: outcome.reason }
+    if (status === 403) return { state: 'forbidden', status, reason: outcome.reason }
+    return { state: status === 404 ? 'unavailable' : 'error', status, reason: outcome.reason }
+  }
+  return { state: query.data === undefined ? 'unavailable' : 'available' }
+}
+
+function resolveAccessState(runtimeQuery: { data?: { mode?: string }; error: unknown }, workspaceQuery: { error: unknown }): { state: AgronautasAccessState; reason?: string } {
+  const error = runtimeQuery.error ?? workspaceQuery.error
+  if (error) {
+    const outcome = normalizeRequestError(error)
+    const status = error instanceof ApiError ? error.status : outcome.httpStatus
+    if (status === 401) return { state: 'unauthorized', reason: outcome.reason }
+    if (status === 403) return { state: 'forbidden', reason: outcome.reason }
+    return { state: 'unavailable', reason: outcome.reason }
+  }
+  if (runtimeQuery.data?.mode === 'demo') return { state: 'demo' }
+  if (runtimeQuery.data) return { state: 'authenticated' }
+  return { state: 'loading' }
 }
 
 export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
@@ -42,7 +69,9 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
     retry: false,
   })
   const fieldIndex = fieldsQuery.data?.pages.reduce<AgronautasWorkspaceFieldPage | undefined>((current, page) => {
-    const parsed = agronautasWorkspaceFieldPageSchema.parse(page)
+    const parsedResult = agronautasWorkspaceFieldPageSchema.safeParse(page)
+    if (!parsedResult.success) return current
+    const parsed = parsedResult.data
     return {
       ...parsed,
       items: [...(current?.items ?? []), ...parsed.items],
@@ -56,7 +85,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   }, onSuccess: () => void geometryQuery.refetch() })
 
   const intakeMutation = useMutation({
-    mutationFn: (input: FieldIntake) => resolvedService.createFieldIntake(input),
+    mutationFn: async (input: FieldIntake) => fieldCreatedSchema.parse(await resolvedService.createFieldIntake(input)),
     onSuccess: (result) => {
       setSelectedFieldId(result.fieldId)
       setLastCreatedFieldId(result.fieldId)
@@ -67,11 +96,11 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
     onError: (error) => {
       if (error instanceof ApiError) {
         const parsed = contractErrorSchema.safeParse(error.data)
-        setIntakeError(parsed.success ? parsed.data.message : error.message)
+        setIntakeError(formatRequestError(error, parsed.success ? parsed.data.message : undefined))
         return
       }
 
-      setIntakeError(error instanceof Error ? error.message : 'No se pudo registrar el lote')
+      setIntakeError(formatRequestError(error, 'No se pudo confirmar el registro del lote'))
     },
   })
 
@@ -171,8 +200,15 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
   const loadPlanningContext = async (input: { campaignName: string; season: string; fieldIds: string[] }) => { const result = await resolvedService.getCampaignPlanningContext({ contractVersion: 'agronautas-campaign-planning-context-v1', workspaceId: 'agronautas-default-workspace', ...input }); setPlanningContext(result) }
   const simulateAssumptions = async (input: Parameters<AgronautasService['simulateAssumptions']>[0]) => { setSimulation(undefined); setSimulation(await resolvedService.simulateAssumptions(input)) }
   const runtimeQuery = useQueries({
-    queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime() }],
+    queries: [{ queryKey: ['agronautas', 'runtime'], queryFn: () => resolvedService.getRuntime(), retry: false }],
   })[0]
+  const access = resolveAccessState(runtimeQuery, workspaceQuery)
+  const capabilityStates: AgronautasCapabilityStates = {
+    geometry: capabilityState(geometryQuery),
+    activity: capabilityState(activityQuery),
+    intelligence: capabilityState(intelligenceQuery),
+    hydrology: capabilityState(hydrologyQuery),
+  }
   const queryErrors = [fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, dashboardQuery, hydrologyQuery]
     .filter((query) => Boolean(query.error))
     .map((query) => query.error instanceof Error ? query.error.message : 'Una capacidad devolvió un error no identificado')
@@ -182,14 +218,26 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       ...[fieldQuery, riskQuery, alertsQuery, statusQuery, riskTimelineQuery, weatherTimelineQuery, dashboardQuery, hydrologyQuery]
         .filter((query) => query.isEnabled)
         .map((query) => query.refetch()),
+      geometryQuery.refetch(),
+      activityQuery.refetch(),
+      intelligenceQuery.refetch(),
     ])
   }
 
   return (
-    <AgronautasWorkspace
-      runtimeMode={runtimeQuery.data?.mode ?? 'real'}
-      runtimeStatus={runtimeQuery.isLoading ? 'loading' : runtimeQuery.error ? 'error' : 'ready'}
-      runtimeError={runtimeQuery.error instanceof Error ? runtimeQuery.error.message : null}
+    <div
+      id="main-content"
+      data-testid="agronautas-main-content"
+      tabIndex={-1}
+      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+    >
+      <AgronautasWorkspace
+        runtimeMode={runtimeQuery.data?.mode ?? 'real'}
+        runtimeStatus={runtimeQuery.isLoading ? 'loading' : runtimeQuery.error ? 'error' : 'ready'}
+        runtimeError={runtimeQuery.error instanceof Error ? runtimeQuery.error.message : null}
+        accessState={access.state}
+        accessReason={access.reason ?? null}
+        capabilityStates={capabilityStates}
        selectedFieldId={selectedFieldId}
         fieldIndex={fieldIndex}
         isFieldIndexLoading={fieldsQuery.isLoading}
@@ -224,7 +272,7 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
       isRecomputePending={recomputeMutation.isPending}
        isDashboardLoading={fieldQuery.isLoading || riskQuery.isLoading || alertsQuery.isLoading || statusQuery.isLoading || riskTimelineQuery.isLoading || weatherTimelineQuery.isLoading || dashboardQuery.isLoading}
        queryErrors={[...queryErrors, ...(workspaceQuery.error ? [workspaceQuery.error instanceof Error ? workspaceQuery.error.message : 'No se pudo cargar el contexto Agronautas'] : []), ...(activityQuery.error ? [activityQuery.error instanceof Error ? activityQuery.error.message : 'No se pudo cargar la actividad'] : []), ...(intelligenceQuery.error ? [intelligenceQuery.error instanceof Error ? intelligenceQuery.error.message : 'No se pudo cargar la inteligencia Agronautas'] : []), ...(fieldsQuery.error ? [fieldsQuery.error instanceof Error ? fieldsQuery.error.message : 'No se pudo cargar el índice de lotes'] : [])]}
-      onRetrySync={retrySync}
+       onRetrySync={retrySync}
       onSelectField={setSelectedFieldId}
       onSubmitIntake={(input) => intakeMutation.mutateAsync(input)}
       onSaveGeometry={(input) => geometryMutation.mutateAsync(input) as Promise<NonNullable<typeof geometryQuery.data>>}
@@ -233,8 +281,19 @@ export function AgronautasPageClient({ service }: AgronautasPageClientProps) {
        onRetryChat={() => lastChatMessage ? chatMutation.mutateAsync(lastChatMessage) : Promise.resolve()}
        onAskHydrologyChat={(message) => hydrologyChatMutation.mutateAsync(message)}
        onRetryHydrologyChat={() => lastHydrologyMessage ? hydrologyChatMutation.mutateAsync(lastHydrologyMessage) : Promise.resolve()}
-    />
+      />
+    </div>
   )
+}
+
+function formatRequestError(error: unknown, fallback = 'No se pudo registrar el lote'): string {
+  const outcome = normalizeRequestError(error)
+  if (outcome.httpStatus === 401) return 'Sesión requerida para registrar el lote (HTTP 401). Iniciá sesión y reintentá.'
+  if (outcome.httpStatus === 403) return 'No tenés permisos para registrar el lote (HTTP 403). Consultá al administrador.'
+  if (outcome.httpStatus === 404) return 'La capacidad de registro no está disponible (HTTP 404). Conservamos el borrador para reintentar.'
+  if (error instanceof Error && error.name === 'ZodError') return 'La respuesta del registro no cumplió el contrato. Conservamos el borrador para reintentar.'
+  if (error instanceof Error && error.message) return error.message
+  return fallback
 }
 
 export function AgronautasPageClientForTests() {

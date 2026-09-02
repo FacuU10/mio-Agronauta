@@ -1,17 +1,112 @@
 # Iberá-Alerta Hydrology Ingest and Operator Proof Runbook
 
-This runbook operates one authenticated hydrology ingest path, preserves source-level degradation, and produces one bounded redacted receipt. It does not replace a Render execution record or invent production evidence.
+This runbook operates the owner-selected direct Render `scheduler:once` hydrology path, preserves source-level degradation, and produces one bounded redacted receipt. It does not replace a Render execution record or invent production evidence.
 
 ## Quick path
 
 1. Confirm health and readiness through the path being operated before touching ingest. For the public web origin, use `GET /api/agronautas/health` and `GET /api/agronautas/ready`; bare `/health` and `/ready` are not public web routes.
-2. Run exactly one authenticated `POST /api/hydrology/ingest` through the canonical API or regional BFF path.
-3. Observe the returned `statusPath` once and correlate the returned `proofRunId` to `hydrology_ingestion_runs`.
+2. Let Render run exactly the authoritative command `pnpm --dir apps/api scheduler:once -- --render-cron`; do not substitute an HTTP POST.
+3. Correlate the Render execution record and direct-run `proofRunId`/`runId` values to `hydrology_ingestion_runs` with one read-only query after terminal completion.
 4. Save only the redacted operator receipt described below; never save a token, secret value, raw chat, or repeated probe output.
 
-## Render Free operating contract
+## Current production status
 
-Render Free web services sleep. Keep the in-process scheduler disabled and configure exactly one external Cron invocation.
+**Status: `blocked` for live proof.** The owner selected the direct `scheduler:once` model. The checked-in `render.yaml` command is authoritative and resolves to the existing API package script, but no Render execution, deployment revision, provider authorization, identity, or read-only production DB correlation is available. No production execution is claimed; the execution cell is `not_run` and the release remains blocked.
+
+Local evidence and production evidence MUST remain separate. Missing capabilities are reported as `blocked` or `not_run`, never as inferred success.
+
+## Local command boundary
+
+Before API/web proof, the operator must supply API, Postgres/PostGIS, Redis, and worker endpoints/processes through environment variables or a process manager. There is no hidden infrastructure launcher. Readiness and real service calls determine the result; missing or unreachable services stop dependent checks and remain `blocked` or `not_run`.
+
+When starting the thin package delegates separately, use these exact commands:
+
+```bash
+cd backend && pnpm run dev
+cd frontend && pnpm run dev
+```
+
+Run additive migrations and verify `/health` versus `/ready` before any proof step. The API and web commands do not create, own, or bypass the required env-backed services.
+
+## Render configuration contract
+
+The manifest makes the following production boundaries explicit without embedding secret values:
+
+| Boundary | Required Render configuration | Failure meaning |
+|---|---|---|
+| API liveness/readiness | `healthCheckPath: /health`; operator gate `/ready`; `AGRONAUTAS_RUNTIME_REQUIRED=true`; `AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS=5000`; `AGRONAUTAS_WORKER_HEARTBEAT_MAX_AGE_SECONDS=180` | `/health` proves process liveness only. `/ready` must fail closed when Postgres, Redis, migrations/PostGIS, or the worker heartbeat is unavailable/stale. |
+| API authentication | `AGRONAUTAS_AUTH_ENABLED=true`; `HYDROLOGY_INGEST_TOKEN` and provider credentials supplied by named references | Missing/invalid auth is `blocked`; no token value may appear in a receipt or log. |
+| Proxy trust | `TRUST_PROXY=1` and `RENDER=true` for the known Render hop | Do not trust arbitrary forwarded headers or use `TRUST_PROXY=false` in production. |
+| API origin/CORS | `CORS_ORIGINS` supplied by named environment reference and limited to approved exact origins | Localhost or an invalid origin blocks production composition. |
+| Web internal proxy | `AGRONAUTAS_API_INTERNAL_URL` supplied by named reference and non-local; `AGRONAUTAS_BFF_BEARER_TOKEN` remains server-only | Missing, invalid, or localhost upstream is `blocked`; browser requests never receive the bearer token. |
+| Request timeouts | `AGRONAUTAS_BFF_TIMEOUT_MS=60000`; readiness timeout remains bounded at 5000 ms; provider/runner timeouts remain bounded by their existing contracts | Timeout is an explicit `blocked`/retryable outcome, not an implicit infinite wait. |
+| In-process schedulers | `HYDROLOGY_SCHEDULER_ENABLED=false`; `AGRONAUTAS_SCHEDULER_ENABLED=false` | Render Free must have one external scheduler decision, not multiple competing schedulers. |
+| Environment boundary | `NODE_ENV=production`, `AGRONAUTAS_RUNTIME_MODE=real`, `AGRONAUTAS_FORCE_ENV_VALIDATION=true` | Local defaults, demo mode, or missing production variables cannot silently pass launch review. |
+
+Every secret remains a named `sync: false` environment reference in `render.yaml`. Never replace a reference with a literal token, credential, credentialed URL, database string, or provider payload.
+
+## Render Cron decision gate
+
+The owner-selected model is **direct `scheduler:once`**. The HTTP POST model below remains a rejected, unselected alternative and is `not_run`; it is not equivalent evidence. Static selection is not live execution proof.
+
+### Authoritative direct `scheduler:once` contract
+
+| Contract field | Required owner decision and evidence |
+|---|---|
+| Schedule | One Render Cron schedule, declared as `0 * * * *`; both in-process schedulers remain disabled and duplicate Cron schedules must be disabled before enablement. |
+| Auth/permission boundary | The Cron process uses the fixed `HYDROLOGY_CRON_OWNER_ID` and named runtime secret references, including `HYDROLOGY_INGEST_TOKEN` required by the existing runner configuration. It invokes the runner directly: no HTTP POST and no `x-hydrology-ingest-token` header is sent to the API or worker. Values never enter docs, history, logs, or receipts. |
+| Idempotency key | Existing scheduler metadata derives `scheduledSlot` per source; the effective replay key is `ownerId + scheduledSlot`, with `runId=scheduled-${scheduledSlot}` and one shared `proofRunId`. Repeated execution must not create duplicate terminal rows. |
+| Timeout | Existing runner/provider bounds are mandatory and must remain bounded. Timeout is recorded as `failed`/`blocked` and never becomes success on process exit. |
+| ID propagation | Preserve the Render `executionId`, generated safe `proofRunId`, per-source `runId`, and any emitted `requestId`/`jobId`. This direct path has no HTTP request or worker queue job; absent `requestId`/`jobId` are explicitly `not_run`/not applicable, never invented. |
+| Completion | The runner reaches terminal per-source outcomes (`completed`, `partial`, or `failed`) and durable completion is checked once. This path has no HTTP `202`; a successful process exit without durable completion is not success. |
+| DB correlation | One read-only query must find exactly one expected row per source by `proofRunId`/`runId`, source, terminal status, and counts; store safe row identifiers only. |
+| Failure/rollback | Provider/auth/timeout/duplicate/worker/migration/DB failure keeps evidence `failed`, `blocked`, or `not_run`; disable the Cron before retrying and revert only this configuration/runbook slice, never reset or delete database/audit data. |
+| Evidence | `pass` means only a validated static contract or completed redacted boundary. Missing Render/deployment/provider/identity/DB access is `blocked` or `not_run`. Tokens, DSNs, credentialed URLs, raw payloads/chat, and stack traces are forbidden. |
+
+### Rejected authenticated HTTP POST alternative (not selected)
+
+| Contract field | Required owner decision and evidence |
+|---|---|
+| Schedule | Not active; one approved scheduler would invoke the canonical path once per window. |
+| Auth | Rejected for this deployment. The request would send `x-hydrology-ingest-token` from a named reference to `POST /api/hydrology/ingest`; no browser token or literal value is used. |
+| Idempotency | `proofRunId` and the API coordinator/lease prevent duplicate terminal ingestion for the same scheduled window. |
+| Timeout | The request and one bounded `statusPath` observation have explicit limits; `202` without terminal completion remains blocked. |
+| IDs | Receipt records scheduler execution ID, API `requestId`, `proofRunId`, run/job IDs when returned, and deployment revision. |
+| Completion | Rejected alternative only. Its `202` acknowledgement would require one terminal `statusPath` observation; that evidence cannot substitute for direct-run completion. |
+| DB correlation | Read-only query finds exactly the rows for the proof/run ID and matching source/count outcomes; store safe row identifiers only. |
+
+No document may silently convert the rejected HTTP POST alternative into an active path. The direct model is selected, but release readiness remains `blocked` until its exact Render execution and receipt are live-proven.
+
+## Boundary matrix and reporting
+
+`pass` below means the static contract or an explicitly completed evidence step passed. It never means that an unavailable runtime was inferred to be healthy.
+
+### Local evidence (separate bundle)
+
+| Boundary | Status | Reason/evidence to retain |
+|---|---|---|
+| Exact command/config contract | `pass` | The required local command names, service ownership, and secret-free configuration rules are statically validated. |
+| Postgres/PostGIS, Redis, worker heartbeat | `blocked` | Env-backed service endpoints/processes or a live worker heartbeat were unavailable; downstream checks stop. |
+| API liveness/readiness and migrations | `not_run` | Run only after the required dependency cell is `pass`. |
+| Real BFF/browser route matrix | `not_run` | Capture route, viewport, request/revision IDs, console/network, and screenshots only in the local bundle. |
+| Providers, auth, tenant, lead, authorized ingest | `blocked` | Requires real approvals, credentials, identities, and durable correlation. |
+
+### Production evidence (separate bundle)
+
+| Boundary | Status | Reason/evidence to retain |
+|---|---|---|
+| Render static manifest | `pass` | Required health paths, auth/readiness/proxy/origin/timeout settings, and named secret references are present; no live claim follows. |
+| Deployed revision and API/web readiness | `not_run` | Requires authorized Render access, revision identity, and direct/BFF probes. |
+| Worker/Redis/Postgres/migration completion | `not_run` | Requires a live worker transition and read-only database correlation. |
+| Provider/auth/tenant/lead/ingest | `blocked` | Owner credentials, identities, approvals, and write authorization are not available in this documentation slice. |
+| Cron model/configuration | `pass` | Direct `scheduler:once` is selected and the manifest command resolves to the existing API package script; static evidence only. |
+| Cron execution/completion/DB correlation | `not_run` | No Render execution ID, deployment revision, provider/identity authorization, worker proof, or read-only production DB access exists. |
+
+Do not merge or relabel these bundles. A `pass` in one scope cannot upgrade `blocked` or `not_run` in the other scope.
+
+## Authenticated HTTP POST candidate contract (rejected and not selected)
+
+Render Free web services sleep. Keep the in-process scheduler disabled. Do not configure this rejected HTTP path; the active Cron invocation is the direct command in `render.yaml`.
 
 | Setting | Required value or rule |
 |---|---|
@@ -31,7 +126,7 @@ Record names only. Values belong exclusively in the deployment secret manager.
 
 | Name | Owner | Receipt treatment |
 |---|---|---|
-| `HYDROLOGY_INGEST_TOKEN` | API + external Cron | Record the name only; never the value |
+| `HYDROLOGY_INGEST_TOKEN` | API + direct Cron runner configuration | Record the name only; never the value or an HTTP header |
 | `GROQ_API_KEY` | API Copilot | Record configured/unconfigured and `groq`/`degraded-fallback`; never the value |
 | `DATABASE_URL` | API/PostgreSQL operator | Use only for migration/read-only row correlation; never record the value |
 | `AGRONAUTAS_API_INTERNAL_URL` | Web BFF | Record origin/revision only; production must not point to localhost |
@@ -85,7 +180,7 @@ curl --fail-with-body --silent --show-error "$WEB_ORIGIN/municipalities"
 
 Expected: health `200`; ready `200` with required checks healthy (optional Mongo degradation is acceptable); BFF and UI return the canonical municipality view. Do not treat a later page load as ingest proof.
 
-### One authenticated Cron call through the API
+### Rejected HTTP POST candidate through the API — do not run for the selected contract
 
 `HYDROLOGY_INGEST_TOKEN` must already be injected by the operator environment or Cron secret manager. The command below makes one request and does not print the token.
 
@@ -107,7 +202,7 @@ curl --fail-with-body --silent --show-error \
 
 Expected acknowledgement: HTTP `202`, `contractVersion: hydrology-government-ingest-v1`, matching `proofRunId`, and a valid `statusPath`. The completion may be `completed`, `partial`, or `failed` when provider degradation is real; each source must remain independently represented.
 
-### One authenticated Cron call through the regional BFF
+### Rejected HTTP POST candidate through the regional BFF — do not run for the selected contract
 
 Use this instead of the API-origin command when the regional runner is the path under proof. Do not run both as production proof.
 
@@ -228,6 +323,6 @@ When running the complete opt-in suite against the shared configured database, u
 
 ## Production blocker and handoff
 
-If any of the following is unavailable, stop before production calls and mark the corresponding receipt fields `not_run`: API/web origins, Render Cron execution record, deployment revision, read-only `DATABASE_URL`, regional allowlist confirmation, or configured Groq access.
+If any of the following is unavailable, stop before production calls and mark the corresponding receipt fields `not_run`: Render Cron execution record, deployment revision, provider/identity authorization, read-only `DATABASE_URL`, worker completion, or configured direct-run dependencies. Mark the release `blocked`; do not claim production execution.
 
-The operator action is: execute one command path from this runbook, capture the external Cron execution ID plus the API `requestId`/`proofRunId`, observe completion once, run the read-only row query, and validate the redacted JSON with `hydrologyOperatorReceiptSchema`. Attach the redacted receipt and provider execution record to the final review/freeze/gates cycle.
+The operator action is: capture one Render `executionId`, run the exact direct command selected in `render.yaml`, preserve its safe `proofRunId`/`runId` values and any available `requestId`/`jobId`, verify terminal durable completion once, run the read-only row query, and validate only the redacted JSON with the applicable receipt schema. Until those inputs exist, retain `pass` for static contract only and `blocked`/`not_run` for unavailable runtime cells.

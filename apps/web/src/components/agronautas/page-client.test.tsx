@@ -1,13 +1,22 @@
-import test, { beforeEach } from 'node:test'
+import test, { afterEach, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import React from 'react'
 import { JSDOM } from 'jsdom'
-import { render, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, fireEvent, waitFor, cleanup } from '@testing-library/react/pure'
 import { QueryProvider } from '@/lib/query-client'
 import { AgronautasPageClient } from './page-client'
 import { createAgronautasMockService, type AgronautasService } from '@/lib/agronautas/service'
+import { ApiError } from '@/lib/api-client'
 import { fieldOverviewSchema } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
+
+const activeDoms: Array<InstanceType<typeof JSDOM>> = []
+const globalNames = ['window', 'document', 'HTMLElement', 'HTMLFormElement', 'HTMLButtonElement', 'FormData', 'Event', 'navigator'] as const
+const originalGlobals = new Map(globalNames.map((name) => [name, (globalThis as unknown as Record<string, unknown>)[name]]))
+
+function setGlobal(name: string, value: unknown) {
+  Object.defineProperty(globalThis, name, { value, configurable: true, writable: true })
+}
 
 test('apiClient usa BFF versionado por defecto', async () => {
   const capturedUrls: string[] = []
@@ -36,23 +45,27 @@ test('apiClient usa BFF versionado por defecto', async () => {
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
-  globalThis.window = dom.window as unknown as Window & typeof globalThis
-  globalThis.document = dom.window.document
-  globalThis.HTMLElement = dom.window.HTMLElement
-  globalThis.HTMLFormElement = dom.window.HTMLFormElement
-  globalThis.HTMLButtonElement = dom.window.HTMLButtonElement
-  globalThis.FormData = dom.window.FormData
-  globalThis.Event = dom.window.Event
-  Object.defineProperty(globalThis, 'navigator', {
-    value: dom.window.navigator,
-    configurable: true,
-  })
+  activeDoms.push(dom)
+  setGlobal('window', dom.window)
+  setGlobal('document', dom.window.document)
+  setGlobal('HTMLElement', dom.window.HTMLElement)
+  setGlobal('HTMLFormElement', dom.window.HTMLFormElement)
+  setGlobal('HTMLButtonElement', dom.window.HTMLButtonElement)
+  setGlobal('FormData', dom.window.FormData)
+  setGlobal('Event', dom.window.Event)
+  setGlobal('navigator', dom.window.navigator)
 }
 
 beforeEach(() => {
   setupDom()
-  cleanup()
   useAgronautasStore.getState().reset()
+})
+
+afterEach(async () => {
+  cleanup()
+  for (const dom of activeDoms.splice(0)) dom.window.close()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  for (const name of globalNames) setGlobal(name, originalGlobals.get(name))
 })
 
 test('alta válida muestra dashboard con alertas y evidencia', async () => {
@@ -306,4 +319,110 @@ test('localidad seed Mercedes renderiza contexto útil sin placeholders vacíos'
   await waitFor(() => {
     assert.ok(view.getByText(/contexto grounded/i))
   })
+})
+
+test('401 de runtime ofrece una entrada de demo explícita y no muestra workspace cargado', async () => {
+  const base = createAgronautasMockService()
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={{ ...base, async getRuntime() { throw new ApiError(401, 'Missing or invalid bearer token') } }} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('heading', { name: /Acceso Agronautas no autorizado/i }))
+    assert.ok(view.getByRole('link', { name: /Solicitar entrada al demo/i }))
+    assert.equal(view.getAllByRole('main').length, 1)
+    assert.equal(view.container.querySelector('main > main'), null)
+    assert.equal(view.queryByRole('button', { name: 'Registrar lote' }), null)
+  })
+})
+
+test('403 de runtime muestra acceso restringido sin ofrecer una falsa ruta de autenticación', async () => {
+  const base = createAgronautasMockService()
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={{ ...base, async getRuntime() { throw new ApiError(403, 'Workspace forbidden') } }} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('heading', { name: /Acceso Agronautas restringido/i }))
+    assert.equal(view.queryByRole('link', { name: /Solicitar entrada al demo/i }), null)
+    assert.equal(view.queryByRole('button', { name: 'Registrar lote' }), null)
+    assert.match(view.getByRole('alert', { name: /Acceso Agronautas restringido/i }).textContent ?? '', /403|restringido/i)
+  })
+})
+
+test('runtime backend unavailable se distingue del acceso no autorizado', async () => {
+  const base = createAgronautasMockService()
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={{ ...base, async getRuntime() { throw new ApiError(503, 'Runtime unavailable') } }} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('heading', { name: /Backend Agronautas no disponible/i }))
+    assert.ok(view.getByRole('button', { name: /Reintentar conexión/i }))
+    assert.equal(view.queryByRole('heading', { name: /Acceso Agronautas no autorizado/i }), null)
+  })
+})
+
+test('modo demo está rotulado como aislado y no como tenancy de producción', async () => {
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={createAgronautasMockService()} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/Demo aislada/i))
+    assert.ok(view.getByText(/no representa identidad, rol ni tenancy de producción/i))
+  })
+})
+
+test('404 de capacidades muestra estados no disponibles y conserva evidencia disponible', async () => {
+  const base = createAgronautasMockService()
+  const unavailable = (name: string) => async () => { throw new ApiError(404, `${name} capability unavailable`) }
+  const service: AgronautasService = {
+    ...base,
+    getFieldGeometry: unavailable('geometry'),
+    getFieldActivity: unavailable('activity'),
+    getFieldIntelligence: unavailable('intelligence'),
+    getHydrologyDashboard: unavailable('hydrology'),
+  }
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={service} />
+    </QueryProvider>,
+  )
+
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/Geometría no disponible/i))
+    assert.ok(view.getByText(/Actividad no disponible/i))
+    assert.ok(view.getByText(/Inteligencia no disponible/i))
+    assert.ok(view.getByText(/Hidrología no disponible/i))
+    assert.ok(view.getByText('Drivers y evidencia'))
+    assert.ok(view.getByText('Carga de lluvia'))
+    assert.ok(view.getByText(/Frescura degradada/i))
+    assert.doesNotMatch(view.getByTestId('agronautas-hydrology-panel').textContent ?? '', /5\.42\s*m|Pronóstico INA/i)
+  }, { timeout: 5000 })
+})
+
+test('el shell Agronautas expone un destino de contenido sin sumar otro main', async () => {
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={createAgronautasMockService()} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByTestId('agronautas-main-content'))
+    assert.equal(view.getAllByRole('main').length, 1)
+    assert.equal(view.container.querySelector('main > main'), null)
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
 })

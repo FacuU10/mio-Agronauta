@@ -181,17 +181,30 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   router.get('/municipalities/:id/dashboard', async (req, res) => {
-    const municipality = await resolved.hydrologyRepository.getMunicipalityTelemetryDashboard(req.params['id'] ?? '')
+    const requestId = requestIdFor(req)
+    let municipality: Awaited<ReturnType<HydrologyRepository['getMunicipalityTelemetryDashboard']>>
+    let sourceRegistry: Awaited<ReturnType<NonNullable<HydrologyRepository['getIberaSourceRegistry']>>> = []
+    let provenance: Awaited<ReturnType<typeof sourceFreshnessFromRepository>> = []
+    try {
+      municipality = await resolved.hydrologyRepository.getMunicipalityTelemetryDashboard(req.params['id'] ?? '')
+      if (municipality && resolved.hydrologyRepository.getIberaSourceRegistry) {
+        sourceRegistry = await resolved.hydrologyRepository.getIberaSourceRegistry(municipality.municipality.id)
+      }
+      if (municipality) provenance = await sourceFreshnessFromRepository(resolved.hydrologyRepository, municipality.latestTelemetry)
+    } catch (error) {
+      logHydrologyRouteError(requestId, 'dashboard_query', error)
+      return respondHydrologyUnavailable(res, 503, requestId, 'dashboard_query')
+    }
     if (!municipality) return respondContractError(res, 404, 'Municipio no encontrado')
 
     const payload = hydrologyGovernmentDashboardResponseSchema.parse({
       contractVersion: 'hydrology-government-dashboard-v1',
-       municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts), coverageGaps: coverageGapsFor(municipality.gaugeMappings), coverageStatus: coverageStatusFor(municipality), geometryStatus: 'unverified', sourceRegistry: await resolved.hydrologyRepository.getIberaSourceRegistry?.(municipality.municipality.id) ?? [] },
+       municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts), coverageGaps: coverageGapsFor(municipality.gaugeMappings), coverageStatus: coverageStatusFor(municipality), geometryStatus: 'unverified', sourceRegistry },
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
       inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
       alerts: municipality.latestTelemetry.filter((item) => item.metric === 'storm_alert'),
-      provenance: await sourceFreshnessFromRepository(resolved.hydrologyRepository, municipality.latestTelemetry),
+      provenance,
       coverageGaps: coverageGapsFor(municipality.gaugeMappings),
       explanation: hydrologyMunicipalityExplanationSchema.parse(buildMunicipalityExplanation(municipality)),
       timeline: hydrologyMunicipalityTimelineSchema.parse(buildMunicipalityTimeline(municipality)),
@@ -219,9 +232,16 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
   })
 
   router.get('/municipalities/:id/timeline', async (req, res) => {
+    const requestId = requestIdFor(req)
     const repository = resolved.hydrologyRepository.getIberaEvidenceTimeline
-    if (!repository) return res.status(503).json({ contractVersion: 'ibera-municipality-timeline-v1', municipalityId: req.params['id'] ?? '', events: [], nextCursor: null, currentStatus: 'unavailable', lastKnownEvidence: null })
-    const timeline = await repository({ municipalityId: req.params['id'] ?? '', from: parseDateQuery(req.query['from']), to: parseDateQuery(req.query['to']), cursor: parseDateQuery(req.query['cursor']), limit: boundedTimelineLimit(req.query['limit']) })
+    if (!repository) return respondHydrologyUnavailable(res, 503, requestId, 'timeline_query')
+    let timeline: Awaited<ReturnType<NonNullable<HydrologyRepository['getIberaEvidenceTimeline']>>>
+    try {
+      timeline = await repository({ municipalityId: req.params['id'] ?? '', from: parseDateQuery(req.query['from']), to: parseDateQuery(req.query['to']), cursor: parseDateQuery(req.query['cursor']), limit: boundedTimelineLimit(req.query['limit']) })
+    } catch (error) {
+      logHydrologyRouteError(requestId, 'timeline_query', error)
+      return respondHydrologyUnavailable(res, 503, requestId, 'timeline_query')
+    }
     return res.json({ contractVersion: 'ibera-municipality-timeline-v1', municipalityId: req.params['id'] ?? '', ...timeline })
   })
 
@@ -630,7 +650,7 @@ function respondContractError(res: Response, status: number, message: string, de
   return res.status(status).json(agronautasContractErrorSchema.parse({ contractVersion: '1.0.0', code: 'INVALID_CONTRACT', message, retryable: false, details }))
 }
 
-type MunicipalitiesFailurePhase = 'repository_query' | 'contract_validation' | 'contract_validation_fallback'
+type MunicipalitiesFailurePhase = 'repository_query' | 'dashboard_query' | 'timeline_query' | 'contract_validation' | 'contract_validation_fallback'
 
 function requestIdFor(req: Request): string {
   return req.header('x-request-id') || randomUUID()
@@ -641,7 +661,7 @@ function logHydrologyRouteError(requestId: string, phase: MunicipalitiesFailureP
     logger.error({ requestId, phase, issueCount: error.issues.length, issues: error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join('.'), code: issue.code, message: issue.message })) }, 'Government hydrology municipalities contract validation failed')
     return
   }
-  logger.error({ requestId, phase, errorName: error instanceof Error ? error.name : typeof error, errorMessage: error instanceof Error ? error.message : String(error) }, 'Government hydrology municipalities failed')
+  logger.error({ requestId, phase, ...safeErrorLogFields(error) }, 'Government hydrology municipalities failed')
 }
 
 function respondHydrologyUnavailable(res: Response, status: number, requestId: string, phase: Exclude<MunicipalitiesFailurePhase, 'contract_validation_fallback'>) {

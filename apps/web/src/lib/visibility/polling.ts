@@ -1,3 +1,5 @@
+import { normalizeRequestError, normalizeRequestResponse, type RequestOutcome } from './view-models'
+
 export type IngestStatus = 'queued' | 'started' | 'completed' | 'partial' | 'failed'
 export type IngestSourceStatus = 'success' | 'failed' | 'empty' | 'skipped'
 export type HydrologySource = 'PNA' | 'INA' | 'INMET' | 'SMN'
@@ -29,6 +31,13 @@ export type PollOptions = {
   fetcher?: typeof fetch
 }
 
+export class PollingError extends Error {
+  constructor(public readonly outcome: RequestOutcome<never>) {
+    super(outcome.reason ?? 'No se pudo consultar el estado de la ingesta.')
+    this.name = 'PollingError'
+  }
+}
+
 const TERMINAL_STATUSES = new Set<IngestStatus>(['completed', 'partial', 'failed'])
 const SOURCES = new Set<HydrologySource>(['PNA', 'INA', 'INMET', 'SMN'])
 
@@ -40,8 +49,15 @@ export async function pollStatusPath(statusPath: string, options: PollOptions = 
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const separator = statusPath.includes('?') ? '&' : '?'
-    const response = await fetcher(`${statusPath}${separator}waitMs=0`, { method: 'GET', cache: 'no-store' })
-    if (!response.ok) throw new Error('No se pudo consultar el estado de la ingesta.')
+    let response: Response
+    try {
+      response = await fetcher(`${statusPath}${separator}waitMs=0`, { method: 'GET', cache: 'no-store' })
+    } catch (error) {
+      throw new PollingError(normalizeRequestError(error))
+    }
+    if (!response.ok) {
+      throw new PollingError(normalizeRequestResponse({ status: response.status, retryAfterMs: parseRetryAfter(response), raw: response.statusText }))
+    }
     latest = sanitizeIngestResponse(await response.json())
     if (!latest) throw new Error('El estado de la ingesta no tiene un formato válido.')
     if (TERMINAL_STATUSES.has(latest.status)) return latest
@@ -49,6 +65,15 @@ export async function pollStatusPath(statusPath: string, options: PollOptions = 
   }
 
   return latest ?? { status: 'queued', requestedSources: [], results: [], coverageGaps: [] }
+}
+
+function parseRetryAfter(response: Response): number | undefined {
+  const header = response.headers.get('retry-after')
+  if (!header) return undefined
+  const value = header.trim()
+  if (/^\d+$/.test(value)) return Number(value) * 1_000
+  const dateMs = Date.parse(value) - Date.now()
+  return Number.isFinite(dateMs) && dateMs > 0 ? Math.floor(dateMs) : undefined
 }
 
 export function sanitizeIngestResponse(value: unknown): SafeIngestView | null {

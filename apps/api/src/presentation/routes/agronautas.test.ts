@@ -6,6 +6,7 @@ import { DEFAULT_GROQ_MODEL } from '@repo/hydrology-engine'
 import type { AgronautasActivitySourceRecord, AgronautasWorkspaceContextRecord, AgronautasWorkspaceRepository, DemoContactSubmissionRepository, FieldContextRepository, FieldRepository, SupportedCoverageResult } from '../../domain/repositories/agronautas'
 import { DEFAULT_AGRONAUTAS_WORKSPACE_ID } from '../../domain/repositories/agronautas'
 import { Field, FieldContext, RiskSnapshotFoundation, type ClimateSummary, type SatelliteSummary } from '../../domain/entities/agronautas'
+import type { ProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
 import { createAgronautasRouter } from './agronautas'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<NonNullable<NonNullable<Parameters<typeof createAgronautasRouter>[0]>['hydrologyRepository']>['getDenseContextForField']>>
@@ -26,6 +27,128 @@ test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async (
       message: 'Missing or invalid bearer token',
       retryable: false,
     })
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
+test('auth 401 expone el challenge Bearer sin cambiar el cuerpo contractual ni el request ID', { concurrency: false }, async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  try {
+    const response = await request(createTestApp(), '/agronautas/runtime', { headers: { 'x-request-id': 'agronautas-auth-401' } })
+
+    assert.equal(response.status, 401)
+    assert.equal(response.headers.get('www-authenticate'), 'Bearer')
+    assert.equal(response.headers.get('x-request-id'), 'agronautas-auth-401')
+    assert.deepEqual(await response.json(), {
+      contractVersion: '1.0.0',
+      code: 'UNAUTHORIZED',
+      message: 'Missing or invalid bearer token',
+      retryable: false,
+    })
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
+test('auth 403 mantiene el cuerpo FORBIDDEN y no anuncia un challenge de autenticación', { concurrency: false }, async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  try {
+    const response = await request(createTestApp(), '/agronautas/fields/field-1/recompute', {
+      method: 'POST',
+      headers: { authorization: 'Bearer reader-token', 'x-request-id': 'agronautas-auth-403' },
+    })
+
+    assert.equal(response.status, 403)
+    assert.equal(response.headers.get('www-authenticate'), null)
+    assert.equal(response.headers.get('x-request-id'), 'agronautas-auth-403')
+    assert.deepEqual(await response.json(), {
+      contractVersion: '1.0.0',
+      code: 'FORBIDDEN',
+      message: 'Role reader cannot access this operation',
+      retryable: false,
+    })
+  } finally {
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
+test('demo query no omite auth y la respuesta demo no declara identidad ni tenancy de producción', { concurrency: false }, async () => {
+  const previousMode = process.env['AGRONAUTAS_RUNTIME_MODE']
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+
+  try {
+    const app = createTestApp()
+    const unauthorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo', { headers: { 'x-request-id': 'agronautas-demo-401' } })
+    assert.equal(unauthorized.status, 401)
+
+    const authorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo', { headers: { authorization: 'Bearer reader-token', 'x-request-id': 'agronautas-demo-200' } })
+    assert.equal(authorized.status, 200)
+    assert.equal(authorized.headers.get('x-request-id'), 'agronautas-demo-200')
+    const demoPayload = await authorized.json() as Record<string, unknown>
+    assert.equal(demoPayload['fieldId'], 'field-demo-1')
+    assert.equal('role' in demoPayload, false)
+    assert.equal('tenantId' in demoPayload, false)
+  } finally {
+    if (previousMode === undefined) delete process.env['AGRONAUTAS_RUNTIME_MODE']
+    else process.env['AGRONAUTAS_RUNTIME_MODE'] = previousMode
+    if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
+    else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
+    if (previousReaderToken === undefined) delete process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+    else process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = previousReaderToken
+  }
+})
+
+test('Agronautas route propagates request IDs across auth, not-found, unavailable, and rate-limit outcomes', async () => {
+  const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
+  const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
+  const unavailableApp = createTestApp({ workspaceRepository: {
+    async ensureDefaultWorkspace() { throw new Error('workspace unavailable') },
+    async getWorkspace() { throw new Error('workspace unavailable') },
+    async listWorkspaceFields() { throw new Error('fields unavailable') },
+    async listFieldActivity() { throw new Error('activity unavailable') },
+  } })
+
+  process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
+  process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
+  try {
+    const unauthorized = await request(unavailableApp, '/agronautas/runtime', { headers: { 'x-request-id': 'agronautas-401' } })
+    assert.equal(unauthorized.status, 401)
+    assert.equal(unauthorized.headers.get('x-request-id'), 'agronautas-401')
+
+    const notFound = await request(unavailableApp, '/agronautas/fields/missing-field', { headers: { authorization: 'Bearer reader-token', 'x-request-id': 'agronautas-404' } })
+    assert.equal(notFound.status, 404)
+    assert.equal(notFound.headers.get('x-request-id'), 'agronautas-404')
+
+    const unavailable = await request(unavailableApp, '/agronautas/workspace', { headers: { authorization: 'Bearer reader-token', 'x-request-id': 'agronautas-503' } })
+    assert.equal(unavailable.status, 503)
+    assert.equal(unavailable.headers.get('x-request-id'), 'agronautas-503')
+    assert.equal((await unavailable.json() as { retryable: boolean }).retryable, true)
+
+    const forbidden = await request(unavailableApp, '/agronautas/fields/field-1/recompute', { method: 'POST', headers: { authorization: 'Bearer reader-token', 'x-request-id': 'agronautas-403' } })
+    assert.equal(forbidden.status, 403)
+    assert.equal(forbidden.headers.get('x-request-id'), 'agronautas-403')
   } finally {
     if (previousAuth === undefined) delete process.env['AGRONAUTAS_AUTH_ENABLED']
     else process.env['AGRONAUTAS_AUTH_ENABLED'] = previousAuth
@@ -1308,9 +1431,47 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     hydrologyRepository: overrides.hydrologyRepository ?? { async getDenseContextForField(fieldId: string) { return hydrologyContext(fieldId) } },
     hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: DEFAULT_GROQ_MODEL } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: DEFAULT_GROQ_MODEL } } } },
     groqProvider: overrides.groqProvider ?? { enabled: false, async selectAction() { throw new Error('groq_disabled_fixture') }, async finalizeResponse() { throw new Error('groq_disabled_fixture') } },
+    providerEvidencePort: overrides.providerEvidencePort ?? createTestProviderEvidencePort(),
     workspaceRepository: overrides.workspaceRepository ?? createWorkspaceRepository(),
   }))
   return app
+}
+
+function createTestProviderEvidencePort(): ProviderEvidencePort {
+  return {
+    async getEvidence() {
+      return {
+        contractVersion: 'agronautas-evidence-v1',
+        evidenceId: 'test-provider-evidence',
+        provider: 'open-meteo',
+        signalType: 'climate',
+        sourceUrl: 'https://example.com/provider',
+        providerMode: 'mock',
+        observedAt: null,
+        forecastAt: null,
+        retrievedAt: '2026-08-27T00:00:00.000Z',
+        timeStandard: 'retrieval-only',
+        forecastHorizonDays: null,
+        model: null,
+        units: {},
+        freshness: 'missing',
+        rawHash: null,
+        runId: 'test-provider-run',
+        requestId: 'test-provider-request',
+        httpStatus: null,
+        schemaStatus: 'unavailable',
+        http: { status: null, ok: false },
+        schema: { status: 'unavailable' },
+        lineage: { sourceUrl: 'https://example.com/provider', rawHash: null, parentRunId: null },
+        degradationReasons: ['weather_data_unavailable'],
+        lastSuccessfulObservedAt: null,
+        latencyMs: 0,
+        proofRef: 'test-provider-proof',
+        mode: 'mock',
+        boundaryStatus: 'not_run',
+      }
+    },
+  }
 }
 
 function testField(id: string): Field {

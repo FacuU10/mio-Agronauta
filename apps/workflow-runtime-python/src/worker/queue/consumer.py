@@ -113,6 +113,7 @@ class WorkflowQueueConsumer:
                 await self._handle_failure(payload, exc)
 
     async def persist_outcome_before_ack(self, job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        self._require_durable_runtime(job)
         try:
             persisted = await self.outcome_coordinator.persist_outcome_before_ack(job, result)
         except Exception as error:

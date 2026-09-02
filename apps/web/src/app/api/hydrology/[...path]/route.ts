@@ -57,6 +57,7 @@ async function proxyHydrologyRequest(request: NextRequest, context: RouteContext
 
   const responseHeaders = new Headers()
   copyResponseHeader(upstreamResponse.headers, responseHeaders, 'content-type')
+  copyResponseHeader(upstreamResponse.headers, responseHeaders, 'retry-after')
   responseHeaders.set('x-request-id', upstreamResponse.headers.get('x-request-id') || requestId)
   responseHeaders.set('Cache-Control', 'no-store')
   return new NextResponse(upstreamResponse.body, { status: upstreamResponse.status, headers: responseHeaders })

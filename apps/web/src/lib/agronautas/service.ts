@@ -1,5 +1,6 @@
 import { alertSnapshotSchema, riskSnapshotSchema, type FieldIntake } from '@repo/zod-schemas'
 import { ApiError, apiClient } from '@/lib/api-client'
+import { normalizeRequestError, type RequestOutcome } from '@/lib/visibility/view-models'
 import {
   demoContactSubmissionResponseSchema,
   demoContactSubmissionSchema,
@@ -33,6 +34,8 @@ import {
 import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextRequest, CampaignPlanningContextResponse, AssumptionSimulationRequest, AssumptionSimulationResponse } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
+const groundedChatResponseClientSchema = groundedChatResponseSchema.passthrough()
+
 const AGRONAUTAS_REQUEST_MODES = {
   DEMO: 'demo',
 } as const
@@ -41,6 +44,10 @@ type AgronautasRequestMode = (typeof AGRONAUTAS_REQUEST_MODES)[keyof typeof AGRO
 
 export interface AgronautasApiServiceOptions {
   mode?: AgronautasRequestMode
+}
+
+export function normalizeAgronautasServiceError(error: unknown, status?: number): RequestOutcome<never> {
+  return normalizeRequestError(error, status)
 }
 
 export async function submitDemoContact(input: DemoContactSubmission): Promise<DemoContactSubmissionResponse> {
@@ -103,7 +110,7 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
     getDashboard: async (fieldId) => dashboardSnapshotSchema.parse(await apiClient(fieldEndpoint(fieldId, '/dashboard'))),
     getHydrologyDashboard: async (fieldId) => hydrologyDashboardSchema.parse(await apiClient(`/fields/${fieldId}/hydrology/dashboard`)),
     requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(fieldEndpoint(fieldId, '/recompute'), { method: 'POST' })),
-    askFieldChat: async (fieldId, input) => groundedChatResponseSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
+    askFieldChat: async (fieldId, input) => groundedChatResponseClientSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
     askHydrologyCopilot: (fieldId, input, onToken) => streamHydrologyCopilot(fieldId, input, onToken),
   }
 }

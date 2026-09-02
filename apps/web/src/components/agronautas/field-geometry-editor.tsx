@@ -1,6 +1,6 @@
 'use client'
 
-import { createElement, useState } from 'react'
+import { createElement, useRef, useState } from 'react'
 import type { FieldGeometryResponse, FieldGeometryUpdate } from '@/lib/agronautas/schemas'
 import { createAgronautasMapAdapter, createPolygonDraft, formatGeometryMetrics } from '@/lib/agronautas/intake-map'
 import type { MapPoint } from '@/lib/visibility/map'
@@ -20,8 +20,11 @@ export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEd
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const addVertexButtonRef = useRef<HTMLButtonElement>(null)
+  const saveInFlightRef = useRef(false)
   const draft = createPolygonDraft(points)
   const metrics = formatGeometryMetrics({ hectares: draft.hectares, areaM2: draft.areaM2, perimeterM: draft.perimeterM })
+  const isDraftDirty = draft.polygonWkt !== savedGeometry.polygonWkt
 
   function addVertex() {
     const first = points[0] ?? initialGeometry.centroid
@@ -37,10 +40,14 @@ export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEd
   }
 
   async function save() {
+    if (saveInFlightRef.current) return
     if (!draft.isComplete || !draft.polygonWkt) {
       setError('El perímetro necesita tres vértices para poder guardarse.')
+      setSaveMessage(null)
+      addVertexButtonRef.current?.focus()
       return
     }
+    saveInFlightRef.current = true
     setIsSaving(true)
     setError(null)
     setSaveMessage(null)
@@ -51,6 +58,7 @@ export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEd
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo guardar el perímetro.')
     } finally {
+      saveInFlightRef.current = false
       setIsSaving(false)
     }
   }
@@ -62,7 +70,7 @@ export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEd
           <h2 className="font-serif text-2xl font-semibold">Editor de perímetro</h2>
           <p className="mt-1 text-sm text-stone-600">Dibujá con coordenadas deterministas; el API autenticado valida y confirma las métricas.</p>
         </div>
-        <span className="rounded-full border border-stone-300 px-3 py-1 text-xs font-semibold uppercase tracking-wide">{draft.isComplete ? 'Borrador' : 'Incompleto'}</span>
+          <span className="rounded-full border border-stone-300 px-3 py-1 text-xs font-semibold uppercase tracking-wide">{!draft.isComplete ? 'Incompleto' : isDraftDirty ? 'Borrador' : 'Guardado'}</span>
       </div>
       <div className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
         <div className="grid min-h-52 content-center gap-3 rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-5" aria-label="Alternativa no cartográfica">
@@ -77,13 +85,15 @@ export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEd
             <Metric label="Perímetro" value={metrics.perimeter} />
           </div>
           <p className="text-xs text-stone-500">{points.length} vértices · el borrador no reemplaza la geometría guardada.</p>
+          <form className="grid gap-3" aria-label="Guardar perímetro" onSubmit={(event) => { event.preventDefault(); void save() }}>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="rounded-xl border border-stone-300 px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" onClick={addVertex}>Agregar vértice</button>
+            <button ref={addVertexButtonRef} type="button" aria-describedby={error ? 'geometry-editor-error' : undefined} className="rounded-xl border border-stone-300 px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" onClick={addVertex}>Agregar vértice</button>
             <button type="button" className="rounded-xl border border-stone-300 px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" onClick={removeVertex} disabled={!points.length}>Quitar vértice</button>
-            <button type="button" className="rounded-xl bg-emerald-900 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void save()} disabled={isSaving}> {isSaving ? 'Guardando…' : 'Guardar perímetro'}</button>
+            <button type="submit" className="rounded-xl bg-emerald-900 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 disabled:cursor-not-allowed disabled:opacity-50" disabled={isSaving}> {isSaving ? 'Guardando…' : 'Guardar perímetro'}</button>
           </div>
-          {error ? <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p> : null}
+          {error ? <p id="geometry-editor-error" role="alert" aria-label="Error del editor de perímetro" aria-live="assertive" aria-atomic="true" className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p> : null}
           {saveMessage ? <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{saveMessage}</p> : null}
+          </form>
           <p className="rounded-xl border border-dashed border-stone-300 px-3 py-2 text-xs text-stone-600">Último perímetro guardado: {savedGeometry.status} · fuente {savedGeometry.source} · {savedGeometry.updatedAt ?? 'solo punto'}</p>
         </div>
       </div>

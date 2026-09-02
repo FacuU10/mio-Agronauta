@@ -158,6 +158,31 @@ class PostgresAgronautasJobStore:
             await connection.commit()
         return rowcount is None or rowcount > 0
 
+    async def check_database_readiness(self) -> dict[str, str]:
+        """Probe the required PostgreSQL, PostGIS, and migration boundaries."""
+        readiness: dict[str, str] = {}
+        probes = (
+            ("postgres", "SELECT 1"),
+            ("postgis", "SELECT PostGIS_Full_Version()"),
+            (
+                "migrations",
+                'SELECT migration_name FROM "_prisma_migrations" '
+                "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+            ),
+        )
+
+        for name, query in probes:
+            try:
+                async with await psycopg.AsyncConnection.connect(self._require_dsn()) as connection:
+                    async with connection.cursor() as cursor:
+                        await cursor.execute(query)
+                        row = await cursor.fetchone()
+                readiness[name] = "ready" if row is not None else "blocked"
+            except Exception:  # noqa: BLE001 - readiness must fail closed per boundary
+                readiness[name] = "blocked"
+
+        return readiness
+
     async def complete(self, job_id: str, run_id: str, completed_at: datetime, result: dict[str, Any]) -> bool:
         return await self._transition(
             """
@@ -210,6 +235,7 @@ class RuntimeOutcomeCoordinator:
     def __init__(self, job_store: PostgresAgronautasJobStore | None, redis: Redis | None = None) -> None:
         self.job_store = job_store
         self.redis = redis
+        self._terminal_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def claim(self, job: dict[str, Any]) -> bool:
         if self.job_store is None:
@@ -250,6 +276,8 @@ class RuntimeOutcomeCoordinator:
             "runId": str(job["runId"]),
             "error": failure_reason,
         }
+        if isinstance(error, TimeoutError):
+            result["failureKind"] = "timeout"
         payload = job.get("payload")
         if isinstance(payload, dict):
             if isinstance(payload.get("fieldId"), str):
@@ -262,9 +290,16 @@ class RuntimeOutcomeCoordinator:
         return await self.persist_outcome_before_ack(job, result)
 
     async def persist_outcome_before_ack(self, job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        outcome_key = (str(job["jobId"]), str(job["runId"]))
+        cached = self._terminal_outcomes.get(outcome_key)
+        if cached is not None:
+            return dict(cached)
+
         if self.job_store is None:
             if result.get("status") == "dlq" and self.redis is not None:
                 await self.redis.hset("agronautas:job-runs:dlq", str(job["jobId"]), json.dumps(result))
+            if result.get("status") in {"succeeded", "unavailable", "dlq", "stale_schema", "failed"}:
+                self._terminal_outcomes[outcome_key] = dict(result)
             return result
 
         job_id = str(job["jobId"])
@@ -291,6 +326,8 @@ class RuntimeOutcomeCoordinator:
 
         if persisted is False:
             raise DurableOutcomeError("durable outcome transition was not owned by this worker")
+        if result.get("status") in {"succeeded", "unavailable", "dlq", "stale_schema", "failed"}:
+            self._terminal_outcomes[outcome_key] = dict(result)
         return result
 
 

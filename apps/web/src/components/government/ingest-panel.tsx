@@ -32,6 +32,9 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
   const [result, setResult] = useState<SafeIngestView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  const tokenInputRef = useRef<HTMLInputElement | null>(null)
+  const verificationRetryRef = useRef<HTMLButtonElement | null>(null)
+  const focusTokenAfterResetRef = useRef(false)
   const [history, setHistory] = useState<Array<{ id: string; status: string; proofRunId: string; startedAt: string; freshness: string }>>([])
 
   useEffect(() => {
@@ -42,6 +45,16 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
       setAuthorized(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (error && !authorized) verificationRetryRef.current?.focus()
+  }, [authorized, error])
+
+  useEffect(() => {
+    if (!focusTokenAfterResetRef.current || authorized || result) return
+    focusTokenAfterResetRef.current = false
+    tokenInputRef.current?.focus()
+  }, [authorized, result])
 
   async function loadHistory() {
     if (!token.trim()) return
@@ -131,17 +144,19 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
 
   return (
     <main className="min-h-screen bg-slate-950 px-5 py-8 text-slate-50 sm:px-8 lg:px-12">
+      <a href="#ingest-controls" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-amber-300 focus:px-4 focus:py-2 focus:text-slate-950">Saltar a controles de ingesta</a>
       <div className="mx-auto max-w-3xl">
         <p className="text-sm font-semibold uppercase tracking-[0.22em] text-amber-200">Defensa Civil · Operaciones</p>
         <h1 className="mt-4 text-4xl font-black tracking-tight sm:text-5xl">Ingesta hidrológica</h1>
         <p className="mt-4 max-w-2xl text-slate-300">Iniciá una actualización puntual de las fuentes oficiales. El token se usa únicamente para esta solicitud y se descarta al finalizar.</p>
 
         {!authorized ? (
-          <form aria-label="Verificar acceso a ingesta" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl" onSubmit={verify}>
+          <form id="ingest-controls" tabIndex={-1} aria-label="Verificar acceso a ingesta" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-200/60" onSubmit={verify}>
             <label className="block text-sm font-bold text-slate-100" htmlFor="hydrology-ingest-token">Token de ingesta</label>
             <input
+              ref={tokenInputRef}
               id="hydrology-ingest-token"
-              name="hydrology-ingest-token"
+               name="ingestToken"
               type="password"
               value={token}
               onChange={(event) => setToken(event.target.value)}
@@ -149,7 +164,8 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
               autoComplete="off"
               spellCheck={false}
               required
-              aria-describedby="hydrology-ingest-token-help"
+               aria-invalid={error && !authorized ? 'true' : undefined}
+               aria-describedby={`hydrology-ingest-token-help${error && !authorized ? ' hydrology-ingest-error' : ''}`}
               className="mt-2 block w-full rounded-2xl border border-white/15 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-300/20"
             />
             <p id="hydrology-ingest-token-help" className="mt-2 text-sm text-slate-400">Campo obligatorio. Se conserva únicamente en memoria durante esta página.</p>
@@ -162,7 +178,7 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
             </button>
           </form>
         ) : (
-          <form aria-label="Iniciar ingesta hidrológica" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl" onSubmit={submit}>
+          <form id="ingest-controls" tabIndex={-1} aria-label="Iniciar ingesta hidrológica" className="mt-8 rounded-[2rem] border border-white/10 bg-slate-900/90 p-6 shadow-2xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-200/60" onSubmit={submit}>
             <p className="text-sm text-teal-100">Acceso verificado para esta página. La credencial permanece solo en memoria.</p>
             <button
               type="submit"
@@ -174,12 +190,30 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
           </form>
         )}
 
-        <p className="mt-6 rounded-2xl border border-teal-300/20 bg-teal-300/10 px-4 py-3 text-teal-100" role="status" aria-live="polite" aria-busy={pending}>
+         <p className="mt-6 rounded-2xl border border-teal-300/20 bg-teal-300/10 px-4 py-3 text-teal-100" role="status" aria-live="polite" aria-atomic="true" aria-busy={pending}>
           {statusMessage}
         </p>
 
-        {error ? <p className="mt-4 rounded-2xl border border-red-300/30 bg-red-950/60 px-4 py-3 text-red-100" role="alert">{error}</p> : null}
-        {result ? <SafeResultView result={result} onRetry={() => { setResult(null); setError(null); setAuthorized(false) }} /> : null}
+        {error ? (
+          <div className="mt-4 grid gap-3">
+            <p id="hydrology-ingest-error" className="rounded-2xl border border-red-300/30 bg-red-950/60 px-4 py-3 text-red-100" role="alert" aria-live="assertive" aria-atomic="true">{error}</p>
+            {!authorized ? (
+              <button
+                ref={verificationRetryRef}
+                type="button"
+                aria-describedby="hydrology-ingest-error"
+                onClick={() => {
+                  setError(null)
+                  tokenInputRef.current?.focus()
+                }}
+                className="w-fit rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100"
+              >
+                Reintentar verificación
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {result ? <SafeResultView result={result} onRetry={() => { focusTokenAfterResetRef.current = true; setResult(null); setError(null); setAuthorized(false) }} /> : null}
         {authorized ? <section className="mt-6 rounded-[2rem] border border-white/10 bg-slate-900/80 p-6" aria-label="Historial de corridas"><div className="flex items-center justify-between gap-3"><h2 className="text-2xl font-black">Historial durable</h2><button type="button" onClick={() => void loadHistory()} className="rounded-full border border-amber-300 px-3 py-2 text-sm font-bold text-amber-100">Actualizar</button></div>{history.length ? <ul className="mt-4 space-y-3">{history.map((run) => <li key={run.id} className="rounded-2xl bg-white/5 p-3 text-sm"><p className="font-bold">{run.id} · {run.status} · {run.freshness}</p><p className="text-slate-300">Proof: {run.proofRunId} · {run.startedAt}</p></li>)}</ul> : <p className="mt-3 text-slate-300">No hay corridas durables disponibles.</p>}</section> : null}
       </div>
     </main>
@@ -211,13 +245,14 @@ function SafeResultView({ result, onRetry }: { result: SafeIngestView; onRetry: 
               <span className="text-sm text-slate-300">{sourceStatusLabels[source.status]} · {source.recordsIngested} registros</span>
               {source.observedFrom || source.observedTo ? <span className="basis-full text-xs text-slate-400">Rango: {source.observedFrom ?? '—'} → {source.observedTo ?? '—'}</span> : null}
               {source.httpSummary ? <span className="basis-full text-xs text-slate-400">HTTP: {source.httpSummary.status ?? '—'} · {source.httpSummary.host}{source.httpSummary.path} · {source.httpSummary.elapsedMs} ms · {source.httpSummary.attempts} intento(s)</span> : null}
-              {source.diagnostic ? <span className="basis-full text-xs text-amber-100">Diagnóstico: {source.diagnostic.failureKind ?? 'degradación'}{source.diagnostic.providerHost ? ` · ${source.diagnostic.providerHost}` : ''}{source.diagnostic.upstreamStatus ? ` · HTTP ${source.diagnostic.upstreamStatus}` : ''}</span> : null}
+               {source.diagnostic ? <span className="basis-full text-xs text-amber-100">Diagnóstico: {source.diagnostic.failureKind ?? 'degradación'}{source.diagnostic.providerHost ? ` · ${source.diagnostic.providerHost}` : ''}{source.diagnostic.upstreamStatus ? ` · HTTP ${source.diagnostic.upstreamStatus}` : ''}</span> : null}
+               {source.provenanceUrl ? <a className="basis-full text-xs text-amber-100 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-100" href={source.provenanceUrl} target="_blank" rel="noreferrer">Ver fuente {source.source}</a> : null}
             </li>
           ))}
         </ul>
-      ) : null}
+       ) : <p className="mt-5 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4 text-sm text-amber-100">No se devolvieron resultados por fuente; el estado general no implica una ingesta completada.</p>}
       <IngestEvidenceStatePanel result={result} />
-      {result.status === 'partial' || result.status === 'failed' || result.status === 'queued' || result.status === 'started' ? <button type="button" onClick={onRetry} className="mt-5 rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button> : null}
+       {result.status === 'partial' || result.status === 'failed' || result.status === 'queued' || result.status === 'started' ? <button type="button" onClick={onRetry} className="mt-5 rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button> : null}
     </section>
   )
 }

@@ -1,7 +1,6 @@
 import { Client } from 'pg'
 import { PrismaClient } from '@prisma/client'
 import Redis from 'ioredis'
-import dotenv from 'dotenv'
 import { execFile } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
@@ -58,7 +57,11 @@ export interface RuntimeVerificationConfig {
 export interface RuntimeVerificationManifest {
   verifier: 'agronautas-real-runtime-evidence-v1'
   contractVersion: '2.0.0'
-  runId: string
+  runId: string | null
+  requestId: string | null
+  revisionId: string | null
+  proofRunId: string | null
+  jobId: string | null
   startedAt: string
   finishedAt: string
   status: 'complete' | 'blocked' | 'incomplete'
@@ -83,6 +86,10 @@ export interface WorkerReadinessEvidence {
 
 interface ManifestInput {
   runId: string
+  requestId?: string | null
+  revisionId?: string | null
+  proofRunId?: string | null
+  jobId?: string | null
   startedAt: string
   finishedAt: string
   checks: Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>>
@@ -148,6 +155,37 @@ const QUEUE_OBSERVATION_TIMEOUT_MS = 20_000
 const WORKER_TEST_TIMEOUT_MS = 120_000
 const execFileAsync = promisify(execFile)
 
+const CORRELATION_ID_MAX_LENGTH = 128
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+const BOUNDARY_STATUS = {
+  LIVE: 'live',
+  DEGRADED: 'degraded',
+  FAILED: 'failed',
+  BLOCKED: 'blocked',
+  NOT_RUN: 'not_run',
+} as const
+
+type BoundaryStatus = (typeof BOUNDARY_STATUS)[keyof typeof BOUNDARY_STATUS]
+
+export interface RuntimeCompletionInput {
+  requestId: string
+  revisionId: string
+  proofRunId: string
+  jobId: string
+  acknowledgementStatus: number
+  workerStatus: 'queued' | 'running' | 'succeeded' | 'failed'
+  durableRowId: string | null
+}
+
+export interface BoundaryEvidenceInput {
+  provider: BoundaryStatus
+  auth: BoundaryStatus
+  tenant: BoundaryStatus
+  lead: BoundaryStatus
+  ingest: BoundaryStatus
+}
+
 export function resolveRuntimeVerificationConfig(env: NodeJS.ProcessEnv = process.env): RuntimeVerificationConfig {
   return {
     apiBaseUrl: normalizeUrl(env['PLAYWRIGHT_API_BASE_URL'] ?? env['AGRONAUTAS_RUNTIME_API_URL'] ?? DEFAULT_API_BASE_URL),
@@ -175,19 +213,32 @@ export function evaluateHydrologyWriteGate(env: NodeJS.ProcessEnv = process.env,
 
 export function buildRuntimeManifest(input: ManifestInput): RuntimeVerificationManifest {
   const entries = Object.entries(input.checks) as Array<[RuntimeCheckName, RuntimeEvidenceCell]>
+  const correlation = {
+    runId: boundedCorrelationId(input.runId),
+    requestId: boundedCorrelationId(input.requestId),
+    revisionId: boundedCorrelationId(input.revisionId),
+    proofRunId: boundedCorrelationId(input.proofRunId),
+    jobId: boundedCorrelationId(input.jobId),
+  }
+  const correlationComplete = Object.values(correlation).every((value) => value !== null)
   const blockedCapabilities = entries.filter(([, item]) => item.status === EVIDENCE_STATUS.BLOCKED).map(([name]) => name)
   const notRunCapabilities = entries.filter(([, item]) => item.status === EVIDENCE_STATUS.NOT_RUN).map(([name]) => name)
   const unavailableCapabilities = entries.filter(([, item]) => item.status === EVIDENCE_STATUS.UNAVAILABLE).map(([name]) => name)
   const status = blockedCapabilities.length > 0
     ? 'blocked'
-    : notRunCapabilities.length > 0 || unavailableCapabilities.length > 0
+    : !correlationComplete || notRunCapabilities.length > 0 || unavailableCapabilities.length > 0
       ? 'incomplete'
       : 'complete'
+  const checks = Object.fromEntries(entries.map(([name, item]) => [name, sanitizeEvidenceCell(item)])) as Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>>
 
   return {
     verifier: 'agronautas-real-runtime-evidence-v1',
     contractVersion: '2.0.0',
-    runId: input.runId,
+    runId: correlation.runId,
+    requestId: correlation.requestId,
+    revisionId: correlation.revisionId,
+    proofRunId: correlation.proofRunId,
+    jobId: correlation.jobId,
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
     status,
@@ -203,14 +254,16 @@ export function buildRuntimeManifest(input: ManifestInput): RuntimeVerificationM
       browser: 'separate-playwright-evidence',
       fullDatabaseRedisWorkerCronRender: 'unproven',
     },
-    checks: input.checks,
+    checks,
   }
 }
 
 async function main(): Promise<void> {
-  loadLocalEnv()
   const config = resolveRuntimeVerificationConfig()
   const runId = `runtime-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15)}Z`
+  const requestId = `${runId}:request`
+  const proofRunId = `${runId}:proof`
+  const revisionId = resolveRevisionId()
   const startedAt = new Date().toISOString()
   const checks: Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>> = {}
 
@@ -221,7 +274,7 @@ async function main(): Promise<void> {
   checks[RUNTIME_CHECK.POSTGRES] = database.postgres
   checks[RUNTIME_CHECK.PRISMA] = database.prisma
 
-  const redis = await checkRedis(config, runId)
+  const redis = await checkRedis(config, proofRunId)
   checks[RUNTIME_CHECK.REDIS] = redis.redis
   checks[RUNTIME_CHECK.QUEUE] = redis.queue
 
@@ -234,6 +287,10 @@ async function main(): Promise<void> {
 
   const manifest = buildRuntimeManifest({
     runId,
+    requestId,
+    revisionId,
+    proofRunId,
+    jobId: config.queueProofEnabled ? `agronautas-window:${proofRunId}` : null,
     startedAt,
     finishedAt: new Date().toISOString(),
     checks,
@@ -345,7 +402,7 @@ async function checkPrisma(connectionString: string): Promise<RuntimeEvidenceCel
   }
 }
 
-async function checkRedis(config: RuntimeVerificationConfig, runId: string): Promise<{ redis: RuntimeEvidenceCell; queue: RuntimeEvidenceCell }> {
+async function checkRedis(config: RuntimeVerificationConfig, proofRunId: string): Promise<{ redis: RuntimeEvidenceCell; queue: RuntimeEvidenceCell }> {
   const redisUrl = normalizeValue(process.env['REDIS_URL'])
   if (!redisUrl) {
     const blocked = cell(EVIDENCE_STATUS.BLOCKED, 'REDIS_URL is unavailable; Redis and queue checks were not attempted')
@@ -356,7 +413,7 @@ async function checkRedis(config: RuntimeVerificationConfig, runId: string): Pro
   try {
     await redis.connect()
     const ping = await redis.ping()
-    const queue = await inspectQueue(redis, runId, config.queueProofEnabled)
+    const queue = await inspectQueue(redis, proofRunId, config.queueProofEnabled)
     const redisCell = ping === 'PONG'
       ? cell(EVIDENCE_STATUS.PASS, 'Redis PING and runtime key inspection completed', { ping })
       : cell(EVIDENCE_STATUS.BLOCKED, 'Redis did not return PONG', { ping })
@@ -369,7 +426,7 @@ async function checkRedis(config: RuntimeVerificationConfig, runId: string): Pro
   }
 }
 
-async function inspectQueue(redis: Redis, runId: string, proofEnabled: boolean): Promise<{ cell: RuntimeEvidenceCell; observation: QueueObservation }> {
+async function inspectQueue(redis: Redis, proofRunId: string, proofEnabled: boolean): Promise<{ cell: RuntimeEvidenceCell; observation: QueueObservation }> {
   const queueKey = 'bull:agronautas-runtime:wait'
   const processingKey = 'bull:agronautas-runtime:processing'
   const deadLetterKey = 'bull:agronautas-runtime:dead-letter'
@@ -385,7 +442,7 @@ async function inspectQueue(redis: Redis, runId: string, proofEnabled: boolean):
   }
 
   const windowStart = new Date()
-  const window: SourceWindow = { provider: 'open-meteo', signalType: 'climate', windowStart, windowEnd: new Date(windowStart.getTime() + 3_600_000), runId: `${runId}:queue-proof` }
+  const window: SourceWindow = { provider: 'open-meteo', signalType: 'climate', windowStart, windowEnd: new Date(windowStart.getTime() + 3_600_000), runId: proofRunId }
   await new RedisAgronautasRuntimeDispatcher(redis).enqueue(window)
   const deadline = Date.now() + QUEUE_OBSERVATION_TIMEOUT_MS
   let transition = 'waiting'
@@ -487,6 +544,40 @@ export function extractWorkerReadiness(value: unknown): WorkerReadinessEvidence 
     status: worker['status'],
     ...(typeof worker['reason'] === 'string' ? { reason: worker['reason'] } : {}),
   }
+}
+
+export function classifyRuntimeCompletion(input: RuntimeCompletionInput): RuntimeEvidenceCell {
+  const identifiers = [input.requestId, input.revisionId, input.proofRunId, input.jobId, input.durableRowId]
+  if (identifiers.some((value) => value !== null && !isBoundedCorrelationId(value))) {
+    return cell(EVIDENCE_STATUS.BLOCKED, 'Runtime completion correlation identifiers are missing or exceed the safe bound')
+  }
+  if (input.acknowledgementStatus < 200 || input.acknowledgementStatus >= 300) {
+    return cell(EVIDENCE_STATUS.BLOCKED, 'Runtime acknowledgement was not a successful HTTP response; terminal completion was not claimed')
+  }
+  if (input.workerStatus !== 'succeeded' || !input.durableRowId) {
+    return cell(EVIDENCE_STATUS.BLOCKED, 'Runtime acknowledgement lacks a terminal worker completion and matching durable database row')
+  }
+  return cell(EVIDENCE_STATUS.PASS, 'Runtime terminal worker transition and read-only durable row are correlated', {
+    requestId: input.requestId,
+    revisionId: input.revisionId,
+    proofRunId: input.proofRunId,
+    jobId: input.jobId,
+    durableRowId: input.durableRowId,
+  })
+}
+
+export function classifyBoundaryEvidence(input: BoundaryEvidenceInput): BoundaryEvidenceInput & { overall: BoundaryStatus } {
+  const statuses = Object.values(input)
+  const overall = statuses.includes(BOUNDARY_STATUS.BLOCKED)
+    ? BOUNDARY_STATUS.BLOCKED
+    : statuses.includes(BOUNDARY_STATUS.FAILED)
+      ? BOUNDARY_STATUS.FAILED
+      : statuses.includes(BOUNDARY_STATUS.DEGRADED)
+        ? BOUNDARY_STATUS.DEGRADED
+        : statuses.includes(BOUNDARY_STATUS.NOT_RUN)
+          ? BOUNDARY_STATUS.NOT_RUN
+          : BOUNDARY_STATUS.LIVE
+  return { ...input, overall }
 }
 
 async function checkProviders(config: RuntimeVerificationConfig, runId: string): Promise<{ cell: RuntimeEvidenceCell; liveEvidence: boolean }> {
@@ -604,7 +695,7 @@ function safeConfiguration(config: RuntimeVerificationConfig): Record<string, un
 }
 
 function redactHttpObservation(observation: HttpObservation): Record<string, unknown> {
-  return { ...observation, body: isRecord(observation.body) ? { keys: Object.keys(observation.body) } : observation.body }
+  return { ...observation, body: isRecord(observation.body) ? { keys: Object.keys(observation.body) } : sanitizeEvidenceValue(observation.body, 'body') }
 }
 
 function readFirstFieldId(value: unknown): string | null {
@@ -614,18 +705,29 @@ function readFirstFieldId(value: unknown): string | null {
   return first['fieldId']
 }
 
-function loadLocalEnv(): void {
-  dotenv.config({ path: resolve(process.cwd(), '.env'), override: false })
-  dotenv.config({ path: resolve(process.cwd(), '../../.env'), override: false })
-}
-
 function cell(status: EvidenceStatus, detail: string, evidence?: Record<string, unknown>): RuntimeEvidenceCell {
-  return { status, detail, ...(evidence ? { evidence } : {}) }
+  return { status, detail: sanitizeSensitiveText(detail), ...(evidence ? { evidence: sanitizeEvidenceRecord(evidence) } : {}) }
 }
 
 function normalizeValue(value: string | undefined): string | undefined {
   const normalized = value?.trim()
   return normalized ? normalized : undefined
+}
+
+function resolveRevisionId(): string | null {
+  return boundedCorrelationId(
+    normalizeValue(process.env['RENDER_GIT_COMMIT'])
+      ?? normalizeValue(process.env['VERCEL_GIT_COMMIT_SHA'])
+      ?? normalizeValue(process.env['GIT_COMMIT_SHA']),
+  )
+}
+
+function boundedCorrelationId(value: string | null | undefined): string | null {
+  return value && isBoundedCorrelationId(value) ? value : null
+}
+
+function isBoundedCorrelationId(value: string): boolean {
+  return value.length <= CORRELATION_ID_MAX_LENGTH && CORRELATION_ID_PATTERN.test(value)
 }
 
 function normalizeUrl(value: string): string {
@@ -637,19 +739,65 @@ function parseBoolean(value: string | undefined): boolean {
 }
 
 function redactUrl(value: string): string {
+  if (hasCredentialMaterial(value)) return '[redacted]'
   try {
     const url = new URL(value)
+    if (url.username || url.password) return '[redacted]'
+    url.username = ''
+    url.password = ''
     for (const key of [...url.searchParams.keys()]) {
       if (/token|key|secret|password|auth/i.test(key)) url.searchParams.set(key, '[redacted]')
     }
     return url.toString()
   } catch {
-    return value
+    return hasSensitiveMaterial(value) ? '[redacted]' : value
   }
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
+}
+
+function sanitizeEvidenceCell(item: RuntimeEvidenceCell): RuntimeEvidenceCell {
+  return {
+    status: item.status,
+    detail: sanitizeSensitiveText(item.detail),
+    ...(item.evidence ? { evidence: sanitizeEvidenceRecord(item.evidence) } : {}),
+  }
+}
+
+function sanitizeEvidenceRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeEvidenceValue(value) as Record<string, unknown>
+}
+
+function sanitizeEvidenceValue(value: unknown, key?: string): unknown {
+  if (key && isSensitiveEvidenceKey(key)) return '[redacted]'
+  if (typeof value === 'string') return sanitizeSensitiveText(value, key)
+  if (Array.isArray(value)) return value.map((item) => sanitizeEvidenceValue(item, key))
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [entryKey, sanitizeEvidenceValue(entryValue, entryKey)]))
+  }
+  return value
+}
+
+function sanitizeSensitiveText(value: string, key?: string): string {
+  if (key && isSensitiveEvidenceKey(key)) return '[redacted]'
+  return hasSensitiveMaterial(value) ? '[redacted]' : value
+}
+
+function isSensitiveEvidenceKey(key: string): boolean {
+  return /authorization|bearer|token|password|secret|credential|database|dsn|payload|body|chat|stack|raw/i.test(key)
+}
+
+function hasCredentialMaterial(value: string): boolean {
+  return /(?:https?|postgres(?:ql)?|redis|rediss|mongodb(?:\+srv)?):\/\/[^\s/@]+(?::[^\s/@]*)?@/i.test(value)
+}
+
+function hasSensitiveMaterial(value: string): boolean {
+  return hasCredentialMaterial(value)
+    || /\bBearer\s+[^\s]+/i.test(value)
+    || /(?:postgres(?:ql)?|redis|rediss|mongodb(?:\+srv)?):\/\//i.test(value)
+    || /(?:^|[\r\n])\s*at\s+[^\r\n]+/i.test(value)
 }
 
 function summarizeCommandOutput(output: string): string {

@@ -74,14 +74,14 @@ test.describe('Agronautas real runtime evidence', () => {
     await writeFile(networkPath, `${JSON.stringify(networkEvents, null, 2)}\n`, 'utf8')
     await writeFile(consolePath, `${JSON.stringify(consoleEvents, null, 2)}\n`, 'utf8')
     const runtimeWarnings = consoleEvents
-      .filter((event) => event.type === 'warning' || event.type === 'error' || event.type === 'pageerror')
-      .map((event) => typeof event.text === 'string' ? event.text : 'runtime browser warning')
+       .filter((event) => event['type'] === 'warning' || event['type'] === 'error' || event['type'] === 'pageerror')
+       .map((event) => typeof event['text'] === 'string' ? event['text'] : 'runtime browser warning')
     const evidence: BrowserEvidence = {
       verifier: 'agronautas-browser-runtime-evidence-v1',
       runId,
       outcome,
       productionProven: false,
-      topology: process.env.PLAYWRIGHT_BASE_URL ? 'configured-browser-target' : 'managed-playwright-harness',
+       topology: process.env['PLAYWRIGHT_BASE_URL'] ? 'configured-browser-target' : 'managed-playwright-harness',
       fullDatabaseRedisWorkerCronRender: 'unproven',
       pageUrl: page.url(),
       snapshotPath,

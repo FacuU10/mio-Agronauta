@@ -126,6 +126,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   const requireRecompute = requireAgronautasScope('recompute')
 
   router.use((req, res, next) => {
+    res.setHeader('x-request-id', req.header('x-request-id') || randomUUID())
     res.setHeader('X-Agronautas-Mode', runtimeConfig.mode)
     if (!resolved.isVersionedNamespace) {
       res.setHeader('X-Agronautas-Route-Compatibility', `${runtimeConfig.routePrefix}/v1`)

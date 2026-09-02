@@ -268,10 +268,10 @@ test('hydrology BFF sanitizes timeout details for clients while retaining safe s
 
     assert.equal(response.status, 503)
     const json = await response.json() as { details: Record<string, unknown> }
-    assert.equal(json.details.phase, 'upstream_timeout')
-    assert.equal(json.details.timeoutMs, undefined)
-    assert.equal(json.details.upstreamOrigin, undefined)
-    assert.equal(json.details.upstreamPath, undefined)
+     assert.equal(json.details['phase'], 'upstream_timeout')
+     assert.equal(json.details['timeoutMs'], undefined)
+     assert.equal(json.details['upstreamOrigin'], undefined)
+     assert.equal(json.details['upstreamPath'], undefined)
     assert.doesNotMatch(JSON.stringify(json), /api\.internal|municipalities/i)
     assert.match(logs.join('\n'), /https:\/\/api\.internal/)
     assert.match(logs.join('\n'), /\/api\/hydrology\/municipalities/)
@@ -282,5 +282,36 @@ test('hydrology BFF sanitizes timeout details for clients while retaining safe s
     else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
     if (previousTimeout === undefined) delete process.env['AGRONAUTAS_BFF_TIMEOUT_MS']
     else process.env['AGRONAUTAS_BFF_TIMEOUT_MS'] = previousTimeout
+  }
+})
+
+test('hydrology BFF preserves compatible error status, body, retry timing, and request IDs', async () => {
+  const previousFetch = globalThis.fetch
+  const previousUrl = process.env['AGRONAUTAS_API_INTERNAL_URL']
+  const statuses = [401, 403, 404, 429, 500, 503] as const
+  let call = 0
+  process.env['AGRONAUTAS_API_INTERNAL_URL'] = 'https://api.internal'
+  globalThis.fetch = (async () => {
+    const status = statuses[call++] ?? 503
+    return new Response(JSON.stringify({ contractVersion: '1.0.0', code: `UPSTREAM_${status}`, retryable: status === 429 || status >= 500 }), {
+      status,
+      headers: { 'content-type': 'application/json', ...(status === 429 ? { 'retry-after': '9' } : {}) },
+    })
+  }) as typeof fetch
+
+  try {
+    for (const status of statuses) {
+      const request = new NextRequest('http://web.local/api/hydrology/municipalities', { headers: { 'x-request-id': `hydrology-bff-${status}` } })
+      const response = await GET(request, { params: Promise.resolve({ path: ['municipalities'] }) })
+
+      assert.equal(response.status, status)
+      assert.equal(response.headers.get('x-request-id'), `hydrology-bff-${status}`)
+      assert.equal(response.headers.get('retry-after'), status === 429 ? '9' : null)
+      assert.deepEqual(await response.json(), { contractVersion: '1.0.0', code: `UPSTREAM_${status}`, retryable: status === 429 || status >= 500 })
+    }
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousUrl === undefined) delete process.env['AGRONAUTAS_API_INTERNAL_URL']
+    else process.env['AGRONAUTAS_API_INTERNAL_URL'] = previousUrl
   }
 })

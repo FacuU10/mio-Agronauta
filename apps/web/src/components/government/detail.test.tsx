@@ -2,11 +2,41 @@ import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import React from 'react'
 import { JSDOM } from 'jsdom'
-import { fireEvent, render, cleanup, waitFor } from '@testing-library/react'
-import { GovernmentDetail, parseSseData } from './detail'
+import { fireEvent, render, cleanup, waitFor } from '@testing-library/react/pure'
+import { GovernmentDetail, createMunicipalityOperatorSummary, parseSseData } from './detail'
+
+const originalGlobals = {
+  window: globalThis.window,
+  self: globalThis.self,
+  document: globalThis.document,
+  HTMLElement: globalThis.HTMLElement,
+  HTMLFormElement: globalThis.HTMLFormElement,
+  Event: globalThis.Event,
+  navigator: globalThis.navigator,
+}
+const activeDoms: Array<InstanceType<typeof JSDOM>> = []
+
+type DashboardPayload = NonNullable<Parameters<typeof GovernmentDetail>[0]['initialData']>
 
 beforeEach(() => setupDom())
-afterEach(() => cleanup())
+afterEach(async () => {
+  try {
+    cleanup()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  } finally {
+    try {
+      for (const dom of activeDoms.splice(0)) dom.window.close()
+    } finally {
+      globalThis.window = originalGlobals.window
+      globalThis.self = originalGlobals.self
+      globalThis.document = originalGlobals.document
+      globalThis.HTMLElement = originalGlobals.HTMLElement
+      globalThis.HTMLFormElement = originalGlobals.HTMLFormElement
+      globalThis.Event = originalGlobals.Event
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: originalGlobals.navigator })
+    }
+  }
+})
 
 test('GovernmentDetail renders canonical dashboard and degraded provenance safely', async () => {
   const view = render(<GovernmentDetail municipalityId="corrientes" initialData={dashboardPayload()} />)
@@ -35,7 +65,7 @@ test('GovernmentDetail renders governed coverage, unverified geometry and eviden
 })
 
 test('GovernmentDetail renders grounded explanation metadata without inventing impact', async () => {
-  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), explanation: { contractVersion: 'ibera-municipality-explanation-v1', municipalityId: 'corrientes', evidenceState: 'observed', relationLabel: 'source mapping / threshold comparison', threshold: { alertHeightM: 6.5, evacuationHeightM: 7 }, observed: { value: 3.2, comparison: 'below_alert', source: 'PNA', sourceUrl: 'https://example.com/pna', observedAt: '2026-06-23T10:30:00.000Z', freshness: 'fresh' }, tendency: { value: 'creciente', window: 'últimas 3 observaciones de PNA' }, forecast: { horizonDays: 20, confidence: 'speculative', label: 'planning_only', source: 'INA', sourceUrl: 'https://example.com/ina', observedAt: '2026-07-13T10:30:00.000Z' }, lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', runId: null }, timeline: { events: [], currentStatus: 'unavailable', nextCursor: null } }} />)
+   const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), explanation: { relationLabel: 'source mapping / threshold comparison', threshold: { alertHeightM: 6.5, evacuationHeightM: 7 }, observed: { value: 3.2, comparison: 'below_alert', source: 'PNA', sourceUrl: 'https://example.com/pna', observedAt: '2026-06-23T10:30:00.000Z', freshness: 'fresh' }, tendency: { value: 'creciente', window: 'últimas 3 observaciones de PNA' }, forecast: { horizonDays: 20, confidence: 'speculative', label: 'planning_only', source: 'INA', sourceUrl: 'https://example.com/ina', observedAt: '2026-07-13T10:30:00.000Z' } }, timeline: { events: [], currentStatus: 'unavailable', nextCursor: null } }} />)
   assert.ok(await view.findByText('Explicación verificable'))
   assert.match(view.container.textContent ?? '', /Umbral de evacuación\s*7\s*m/)
   assert.ok(view.getByText('creciente · últimas 3 observaciones de PNA'))
@@ -54,15 +84,20 @@ test('GovernmentDetail renders empty telemetry and parses SSE string tokens', as
 })
 
 test('GovernmentDetail renders mappings, observed/forecast/missing labels and Copilot metadata', async () => {
+  const payload = dashboardPayload()
+  const firstTelemetry = payload.telemetryCards[0]
+  const firstForecast = payload.inaPredictions30d[0]
+  if (!firstTelemetry || !firstForecast) throw new Error('Expected dashboard telemetry fixtures')
+
   const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{
-    ...dashboardPayload(),
+    ...payload,
     gaugeMappings: { primaryPnaPortId: 'corrientes', secondaryPnaPortIds: ['barranqueras'], inaStationIds: ['6764'], smnRegionIds: ['smn-corrientes'], inmetStationIds: ['inmet-corrientes'] },
     telemetryCards: [
-      { ...dashboardPayload().telemetryCards[0], freshness: 'fresh' },
-      { source: 'INA', stationId: 'ina-6764', metric: 'river_height_m', value: 3.8, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', label: 'Pronóstico INA', freshness: 'degraded', forecastHorizonDays: 20, confidence: 'speculative' },
+       { ...firstTelemetry, freshness: 'fresh' },
+       { source: 'INA', stationId: 'ina-6764', metric: 'river_height_m', value: 3.8, unit: 'm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', label: 'Pronóstico INA', freshness: 'degraded', forecastHorizonDays: 20 },
       { source: 'SMN', stationId: 'smn-corrientes', metric: 'rain_mm', value: null, unit: 'mm', observedAt: '2026-06-23T10:30:00.000Z', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z', label: 'Lluvia no disponible', freshness: 'missing' },
     ],
-    inaPredictions30d: [{ ...dashboardPayload().inaPredictions30d[0], freshness: 'degraded' }],
+    inaPredictions30d: [{ ...firstForecast, freshness: 'degraded' }],
   }} />)
 
   assert.ok(await view.findByText('Mapeos de estaciones'))
@@ -76,6 +111,48 @@ test('GovernmentDetail renders mappings, observed/forecast/missing labels and Co
   assert.match(evidenceStates.textContent ?? '', /forecast/i)
   assert.match(evidenceStates.textContent ?? '', /degraded/i)
   assert.match(evidenceStates.textContent ?? '', /missing/i)
+})
+
+test('GovernmentDetail puts status, freshness, threshold, confidence and safe action above details', async () => {
+  const payload = dashboardPayload()
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...payload, provenance: payload.provenance.map((item) => ({ ...item, freshness: 'fresh' as const })) }} />)
+  const summary = view.getByRole('region', { name: 'Resumen operativo municipal' })
+  assert.match(summary.textContent ?? '', /Estado:\s*Observado/)
+  assert.match(summary.textContent ?? '', /Frescura:\s*Vigente/)
+  assert.match(summary.textContent ?? '', /Umbral:\s*Por debajo del umbral de alerta/)
+  assert.match(summary.textContent ?? '', /Confianza:\s*Evidencia observada/)
+  assert.match(summary.textContent ?? '', /Próxima acción segura:\s*Continuar monitoreo/)
+  assert.ok(Boolean(summary.compareDocumentPosition(view.getByRole('heading', { name: 'Telemetría oficial' })) & 4))
+})
+
+test('GovernmentDetail resolves registered source plus missing telemetry as missing evidence', async () => {
+  const payload = dashboardPayload()
+  const firstTelemetry = payload.telemetryCards[0]
+  if (!firstTelemetry) throw new Error('Expected dashboard telemetry fixture')
+
+  const conflicting: DashboardPayload = {
+    ...payload,
+    telemetryCards: [{ ...firstTelemetry, value: null, observedAt: null, freshness: 'missing' as const }],
+    provenance: [{ source: 'PNA', freshness: 'fresh', label: 'PNA vigente', lastSuccessfulObservedAt: '2026-06-23T10:30:00.000Z' }],
+    municipality: { ...payload.municipality, sourceRegistry: [{ source: 'PNA', stationId: 'corrientes', coverageKey: 'pna-corrientes', sourceUrl: 'https://example.com/pna', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed', reviewedAt: '2026-06-23T10:30:00.000Z' }] },
+  }
+
+  const summary = createMunicipalityOperatorSummary(conflicting)
+  assert.equal(summary.status, 'Sin datos verificables')
+  assert.equal(summary.freshness, 'Sin datos')
+  assert.equal(summary.confidence, 'Insuficiente por conflicto de evidencia')
+  assert.equal(summary.nextSafeAction, 'Confirmar la última lectura en la fuente oficial antes de decidir')
+
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={conflicting} />)
+  const evidenceStates = view.getByRole('region', { name: 'Estados de evidencia municipal' })
+  assert.match(evidenceStates.textContent ?? '', /Source provenance.*missing/i)
+})
+
+test('GovernmentDetail makes an empty forecast prominently unavailable without planning guidance', async () => {
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), inaPredictions30d: [], explanation: undefined }} />)
+  assert.ok(view.getByText('No hay pronóstico INA disponible'))
+  assert.match(view.getByRole('region', { name: 'Predicción INA a 30 días' }).textContent ?? '', /No hay pronóstico INA disponible/)
+  assert.doesNotMatch(view.container.textContent ?? '', /planificación especulativa|baja confianza/i)
 })
 
 test('GovernmentDetail preserves partial Copilot tokens, metadata and retry after stream error', async () => {
@@ -108,6 +185,34 @@ test('GovernmentDetail preserves partial Copilot tokens, metadata and retry afte
   }
 })
 
+test('GovernmentDetail exposes one landmark and announces an invalid keyboard submission', async () => {
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={dashboardPayload()} />)
+  const input = view.getByLabelText('Consulta para Copilot Advisor') as HTMLInputElement
+  const form = input.closest('form')
+
+  assert.ok(form)
+  assert.equal(view.container.querySelectorAll('main').length, 1)
+  assert.equal(view.container.querySelectorAll('main main').length, 0)
+  const skipLink = view.getByRole('link', { name: 'Saltar a telemetría' })
+  assert.equal(skipLink.getAttribute('href'), '#telemetry')
+  const skipTarget = view.container.querySelector('#telemetry')
+  assert.ok(skipTarget)
+  assert.equal(skipTarget?.getAttribute('tabindex'), '-1')
+  assert.equal(view.getAllByRole('heading', { level: 1 }).length, 1)
+  assert.ok(view.getByRole('heading', { level: 2, name: 'Telemetría oficial' }))
+  assert.equal(input.getAttribute('name'), 'governmentMessage')
+  assert.equal(input.getAttribute('autocomplete'), 'off')
+
+  fireEvent.submit(form)
+
+  const error = await view.findByRole('alert')
+  assert.match(error.textContent ?? '', /Escribí una consulta antes de enviarla/)
+  assert.equal(error.getAttribute('aria-live'), 'assertive')
+  assert.equal(input.getAttribute('aria-invalid'), 'true')
+  assert.equal(input.getAttribute('aria-describedby'), 'government-copilot-message-error')
+  assert.equal(document.activeElement, input)
+})
+
 test('GovernmentDetail renders citation unavailable without inventing a source', async () => {
   const previousFetch = globalThis.fetch
   globalThis.fetch = (async () => new Response([
@@ -121,12 +226,105 @@ test('GovernmentDetail renders citation unavailable without inventing a source',
     await waitFor(() => assert.ok(view.getByText('No hay una referencia oficial verificable para esta respuesta.')))
     assert.match(view.container.textContent ?? '', /No hay una referencia oficial verificable/)
     assert.match(view.container.textContent ?? '', /Citación:\s*No disponible/)
+    assert.ok(view.getByRole('alert').textContent?.includes('Resultado no es accionable.'))
+    assert.equal(view.queryByText('Copilot fundamentado'), null)
   } finally {
     globalThis.fetch = previousFetch
   }
 })
 
-function dashboardPayload() {
+test('GovernmentDetail provides a compact section index after the operator summary', async () => {
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={dashboardPayload()} />)
+
+  const index = view.getByRole('navigation', { name: 'Índice del tablero municipal' })
+  const links = Array.from(index.querySelectorAll('a')).map((link) => link.getAttribute('href'))
+  assert.deepEqual(links, ['#telemetry', '#municipal-evidence', '#municipal-explanation', '#municipal-coverage', '#municipal-mappings', '#municipal-alerts', '#municipal-forecast', '#municipal-provenance'])
+
+  for (const id of links.map((href) => href?.slice(1)).filter((value): value is string => Boolean(value))) {
+    const target = view.container.querySelector(`#${id}`)
+    assert.ok(target, `missing section target: ${id}`)
+    assert.equal(target?.getAttribute('tabindex'), '-1')
+  }
+
+  const summary = view.getByRole('region', { name: 'Resumen operativo municipal' })
+  assert.ok(Boolean(summary.compareDocumentPosition(index) & 4))
+})
+
+test('GovernmentDetail keeps the section index and focus targets on an empty forecast path', async () => {
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), telemetryCards: [], inaPredictions30d: [], alerts: [], provenance: [] }} />)
+
+  assert.ok(view.getByText('No hay pronóstico INA disponible'))
+  const stickySummary = view.getByRole('region', { name: 'Estado resumido municipal' })
+  assert.match(stickySummary.textContent ?? '', /Estado:\s*Sin datos verificables/)
+  assert.match(stickySummary.textContent ?? '', /Frescura:\s*Sin datos/)
+  assert.match(stickySummary.textContent ?? '', /Próxima acción segura:\s*Confirmar la última lectura/)
+  const index = view.getByRole('navigation', { name: 'Índice del tablero municipal' })
+  assert.equal(index.querySelectorAll('a[href^="#"]').length, 8)
+  assert.equal(view.container.querySelector('#municipal-forecast')?.getAttribute('tabindex'), '-1')
+  assert.equal(view.container.querySelector('#municipal-evidence')?.getAttribute('tabindex'), '-1')
+})
+
+test('GovernmentDetail keeps a keyboard-readable sticky status summary before the section index', async () => {
+  const payload = dashboardPayload()
+  const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...payload, provenance: payload.provenance.map((item) => ({ ...item, freshness: 'fresh' as const })) }} />)
+
+  const stickySummary = view.getByRole('region', { name: 'Estado resumido municipal' })
+  assert.match(stickySummary.textContent ?? '', /Estado:\s*Observado/)
+  assert.match(stickySummary.textContent ?? '', /Frescura:\s*Vigente/)
+  assert.match(stickySummary.textContent ?? '', /Umbral:\s*Por debajo del umbral de alerta/)
+  assert.match(stickySummary.textContent ?? '', /Confianza:\s*Evidencia observada/)
+  assert.match(stickySummary.textContent ?? '', /Próxima acción segura:\s*Continuar monitoreo/)
+  assert.equal(stickySummary.querySelectorAll('a, button, input, select').length, 0)
+
+  const index = view.getByRole('navigation', { name: 'Índice del tablero municipal' })
+  assert.ok(Boolean(stickySummary.compareDocumentPosition(index) & 4))
+  assert.equal(index.querySelectorAll('a[href^="#"]').length, 8)
+})
+
+test('GovernmentDetail preserves an authorization boundary without offering an unsafe retry', async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ code: 'FORBIDDEN' }), { status: 403 })) as typeof fetch
+
+  try {
+    const view = render(<GovernmentDetail municipalityId="restricted" />)
+    const error = await view.findByText('No tenés permisos para consultar este tablero.')
+    const alert = error.closest('[role="alert"]')
+    assert.ok(alert)
+    assert.match(alert?.textContent ?? '', /permisos|acceso/i)
+    assert.equal(alert?.getAttribute('aria-live'), 'assertive')
+    assert.equal(view.queryByRole('button', { name: 'Reintentar tablero' }), null)
+    assert.doesNotMatch(view.container.textContent ?? '', /Corrientes Capital|Altura PNA/)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('GovernmentDetail retries a failed dashboard request and restores the meaningful result focus boundary', async () => {
+  const previousFetch = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = (async () => {
+    calls += 1
+    return calls === 1
+      ? new Response(JSON.stringify({ code: 'UPSTREAM_UNAVAILABLE' }), { status: 503 })
+      : new Response(JSON.stringify(dashboardPayload()), { headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+
+  try {
+    const view = render(<GovernmentDetail municipalityId="corrientes" />)
+    await view.findByText('El tablero municipal no está disponible. Intentá nuevamente más tarde.')
+    const retry = view.getByRole('button', { name: 'Reintentar tablero' })
+    assert.equal(document.activeElement, retry)
+    fireEvent.click(retry)
+
+    await waitFor(() => assert.equal(calls, 2))
+    assert.ok(await view.findByText('Corrientes Capital'))
+    assert.equal(view.queryByRole('button', { name: 'Reintentar tablero' }), null)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+function dashboardPayload(): DashboardPayload {
   return {
     municipality: { id: 'corrientes', localityId: 'corrientes-capital', name: 'Corrientes Capital', alertHeightM: 6.5, evacuationHeightM: 7, officialAlerts: [{ source: 'SMN', coverageKey: 'smn-corrientes', message: 'Tormentas fuertes', observedAt: '2026-06-23T09:00:00.000Z', lastSuccessfulObservedAt: '2026-06-23T09:00:00.000Z', freshness: 'fresh', sourceUrl: 'https://example.com/smn' }] },
     gaugeMappings: { primaryPnaPortId: 'corrientes', secondaryPnaPortIds: [], inaStationIds: [], smnRegionIds: [], inmetStationIds: [] },
@@ -140,6 +338,7 @@ function dashboardPayload() {
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
+  activeDoms.push(dom)
   globalThis.window = dom.window as unknown as Window & typeof globalThis
   globalThis.self = dom.window as unknown as typeof globalThis.self
   globalThis.document = dom.window.document

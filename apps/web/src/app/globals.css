@@ -19,6 +19,7 @@
   --destructive: #b91c1c;
   --destructive-foreground: #fff7f7;
   --ring: rgba(16, 185, 129, 0.35);
+  --focus-ring: #b8e36b;
 }
 
 * {
@@ -27,6 +28,7 @@
 
 html {
   scroll-behavior: smooth;
+  scroll-padding-top: 6rem;
 }
 
 body {
@@ -44,7 +46,7 @@ h3 {
 }
 
 :focus-visible {
-  outline: 3px solid #b8e36b;
+  outline: 3px solid var(--focus-ring);
   outline-offset: 3px;
 }
 
@@ -77,6 +79,52 @@ img {
 
 @theme inline {
   --breakpoint-desktop: 100rem;
+}
+
+.responsive-shell,
+.responsive-main,
+.responsive-nav,
+.evidence-surface {
+  min-width: 0;
+}
+
+.responsive-nav {
+  scrollbar-width: thin;
+  overscroll-behavior-inline: contain;
+}
+
+.evidence-surface {
+  overflow-wrap: anywhere;
+}
+
+.evidence-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.evidence-table {
+  min-width: 34rem;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.focus-safe-target {
+  min-width: 0;
+  scroll-margin-block-start: 6rem;
+}
+
+.bg-surface-secondary {
+  background-color: var(--secondary);
+}
+
+.text-surface-secondary-foreground {
+  color: var(--secondary-foreground);
+}
+
+.border-surface {
+  border-color: var(--border);
 }
 
 @keyframes shimmer {
@@ -113,7 +161,15 @@ img {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agronautas-canvas > * { animation: none; }
+  html { scroll-behavior: auto; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .bg-grid-pattern {

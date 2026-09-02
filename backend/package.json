@@ -1,0 +1,9 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin local development wrapper for apps/api. Start local:up first.",
+  "scripts": {
+    "dev": "pnpm --dir ../apps/api run dev"
+  }
+}

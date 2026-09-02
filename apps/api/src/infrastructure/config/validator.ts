@@ -49,10 +49,42 @@ export function validateProductionEnv(env: NodeJS.ProcessEnv = process.env): Val
     checkRequired('SENTINEL_CLIENT_SECRET', 'Sentinel Client Secret')
   }
 
+  validateProductionOrigin(env, errors)
+  validateProductionProxy(env, errors)
+
   return {
     isValid: errors.length === 0,
     errors,
   }
+}
+
+function validateProductionOrigin(env: NodeJS.ProcessEnv, errors: string[]): void {
+  const configuredOrigin = env['AGRONAUTAS_API_INTERNAL_URL']?.trim()
+  if (!configuredOrigin) return
+
+  try {
+    const origin = new URL(configuredOrigin)
+    if (isLocalHostname(origin.hostname)) {
+      errors.push('AGRONAUTAS_API_INTERNAL_URL must not resolve to a local origin in production')
+    }
+  } catch {
+    errors.push('AGRONAUTAS_API_INTERNAL_URL is invalid for production')
+  }
+}
+
+function validateProductionProxy(env: NodeJS.ProcessEnv, errors: string[]): void {
+  const trustProxy = env['TRUST_PROXY']?.trim().toLowerCase()
+  if (trustProxy === 'false' || trustProxy === '0') {
+    errors.push('TRUST_PROXY must not disable proxy trust in production')
+  }
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  return normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '0.0.0.0'
+    || normalized === '::1'
 }
 
 export const ProductionEnvValidatorPort = {

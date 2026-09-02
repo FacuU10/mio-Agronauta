@@ -30,7 +30,6 @@ test('ProductShell identifies Agronautas and keeps workspace navigation keyboard
   assert.equal(view.getByRole('banner').getAttribute('data-product'), 'agronautas')
   assert.ok(view.getByRole('link', { name: 'Workspace' }))
   assert.ok(view.getByRole('link', { name: 'Lote activo' }))
-  assert.ok(view.getByRole('link', { name: /Saltar al contenido/i }))
   assert.equal(view.getByText('Contenido de prueba').textContent, 'Contenido de prueba')
 })
 
@@ -47,4 +46,41 @@ test('ProductShell preserves Iberá identity as a separate product configuration
   assert.equal(view.getByRole('banner').getAttribute('data-product'), 'ibera')
   assert.ok(view.getAllByText('Iberá-Alerta').length >= 1)
   assert.equal(view.queryByText('Riesgo agrícola'), null)
+})
+
+test('ProductShell keeps the root-owned skip link singular with one stable main focus boundary', () => {
+  setupDom()
+  cleanup()
+
+  const view = render(
+    <>
+      <a href="#main-content">Saltar al contenido principal</a>
+      <ProductShell product="agronautas" title="Workspace de lotes" navItems={[]}>
+        <p>Contenido enfocable</p>
+      </ProductShell>
+    </>,
+  )
+
+  assert.equal(view.container.querySelectorAll('main').length, 1)
+  const main = view.container.querySelector('main')
+  assert.equal(main?.id, 'main-content')
+  assert.equal(main?.getAttribute('tabindex'), '-1')
+  assert.equal(view.getAllByRole('link', { name: /Saltar al contenido/i }).length, 1)
+  assert.equal(view.getByRole('link', { name: /Saltar al contenido/i }).getAttribute('href'), '#main-content')
+  assert.ok(main?.textContent?.includes('Contenido enfocable'))
+})
+
+test('ProductShell exposes responsive shell hooks for bounded navigation and focus-safe content', () => {
+  setupDom()
+  cleanup()
+
+  const view = render(
+    <ProductShell product="ibera" title="Centro provincial" navItems={[{ href: '/municipalities', label: 'Localidades' }]}>
+      <p>Contenido responsive</p>
+    </ProductShell>,
+  )
+
+  assert.ok(view.container.querySelector('.responsive-shell'))
+  assert.ok(view.container.querySelector('.responsive-nav'))
+  assert.ok(view.container.querySelector('main.responsive-main'))
 })

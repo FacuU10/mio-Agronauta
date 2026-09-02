@@ -1,0 +1,9 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin local development wrapper for apps/web. Start local:up first.",
+  "scripts": {
+    "dev": "pnpm --dir ../apps/web run dev"
+  }
+}

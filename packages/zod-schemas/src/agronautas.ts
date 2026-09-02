@@ -110,6 +110,9 @@ export const hydrologyIberaCoverageStatusSchema = z.enum(hydrologyIberaCoverageS
 export const hydrologyIberaGeometryStatusSchema = z.enum(hydrologyIberaGeometryStatuses)
 const hydrologyIberaRegistryReviewStatusSchema = z.enum(hydrologyIberaRegistryReviewStatuses)
 const hydrologyGovernmentIngestFailureKindSchema = z.enum(hydrologyGovernmentIngestFailureKinds)
+const hydrologyOperatorReceiptIdSchema = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
+const hydrologyOperatorReceiptScopeSchema = z.enum(hydrologyOperatorReceiptScopes)
+const hydrologyOperatorReceiptTerminalStatusSchema = z.enum(['completed', 'partial', 'failed'])
 
 export const hydrologyExcludedSourceSchema = z.enum(hydrologyExcludedSources)
 export const hydrologyExcludedInputSchema = z.enum(hydrologyExcludedInputs)
@@ -948,6 +951,14 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
     errorMessage: z.string().min(1).max(240).optional(),
   })).default([]),
   coverageGaps: z.array(z.string().trim().min(1).max(160)).max(8).default([]),
+}).superRefine((value, ctx) => {
+  if (value.status === 'completed' && !value.runId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Completed hydrology ingest responses require a durable runId',
+      path: ['runId'],
+    })
+  }
 })
 
 export const hydrologyIberaSourceResultSchema = z.object({
@@ -1017,11 +1028,14 @@ export const hydrologyIberaCopilotMetadataSchema = z.object({
 
 export const hydrologyOperatorReceiptSchema = z.object({
   verifier: z.literal('ibera-alerta-operator-v1'),
-  evidenceScope: z.enum(hydrologyOperatorReceiptScopes),
+  evidenceScope: hydrologyOperatorReceiptScopeSchema,
   capturedAt: z.string().datetime(),
+  runId: hydrologyOperatorReceiptIdSchema.optional(),
+  jobId: hydrologyOperatorReceiptIdSchema.optional(),
   runtime: z.object({
-    service: z.string().trim().min(1).max(80),
-    revision: z.string().trim().min(1).max(160),
+    service: hydrologyOperatorReceiptIdSchema,
+    revision: hydrologyOperatorReceiptIdSchema,
+    scope: hydrologyOperatorReceiptScopeSchema.optional(),
     config: z.object({
       schedulerEnabled: z.boolean(),
       secretNames: z.array(z.string().trim().regex(/^[A-Z][A-Z0-9_]*$/)).max(20),
@@ -1032,16 +1046,18 @@ export const hydrologyOperatorReceiptSchema = z.object({
     }).strict(),
   }).strict(),
   request: z.object({
-    requestId: z.string().trim().min(1).max(120),
+    requestId: hydrologyOperatorReceiptIdSchema,
+    runId: hydrologyOperatorReceiptIdSchema.optional(),
+    jobId: hydrologyOperatorReceiptIdSchema.optional(),
     method: z.literal('POST'),
     path: z.literal('/api/hydrology/ingest'),
     acknowledgementStatus: z.literal(202),
     responseShape: z.object({
       contractVersion: z.literal('hydrology-government-ingest-v1'),
-      status: z.enum(['queued', 'started', 'completed', 'partial', 'failed']).refine((value) => value !== 'queued', 'Receipt requires a terminal ingest status'),
-      proofRunId: z.string().trim().min(1).max(120),
-      hasStatusPath: z.boolean(),
-      resultCount: z.number().int().nonnegative().max(4),
+      status: hydrologyOperatorReceiptTerminalStatusSchema,
+      proofRunId: hydrologyOperatorReceiptIdSchema,
+      hasStatusPath: z.literal(true),
+      resultCount: z.number().int().positive().max(4),
     }).strict(),
   }).strict(),
   sourceOutcomes: z.array(z.object({
@@ -1049,23 +1065,50 @@ export const hydrologyOperatorReceiptSchema = z.object({
     status: z.enum(['success', 'failed', 'empty', 'skipped']),
     recordsIngested: z.number().int().nonnegative(),
     attempts: z.literal(1),
+    scope: hydrologyOperatorReceiptScopeSchema.optional(),
   }).strict()).min(1).max(4),
   rowCorrelation: z.array(z.object({
-    rowId: z.string().trim().min(1).max(120),
+    rowId: hydrologyOperatorReceiptIdSchema,
     source: hydrologySourceSchema,
-    proofRunId: z.string().trim().min(1).max(120),
+    proofRunId: hydrologyOperatorReceiptIdSchema,
     status: z.enum(['success', 'failed', 'empty', 'skipped']),
     recordsIngested: z.number().int().nonnegative(),
     correlated: z.literal(true),
+    scope: hydrologyOperatorReceiptScopeSchema.optional(),
   }).strict()).min(1).max(4),
   chat: z.object({
     mode: z.enum(hydrologyOperatorReceiptChatModes),
     status: z.enum(['completed', 'degraded', 'not_run']),
     eventTypes: z.array(z.enum(['metadata', 'token', 'done', 'error'])).max(4),
     rawContentIncluded: z.literal(false),
+    scope: hydrologyOperatorReceiptScopeSchema.optional(),
   }).strict(),
   passed: z.boolean(),
 }).strict().superRefine((value, ctx) => {
+  const runId = value.runId ?? value.request.runId
+  const jobId = value.jobId ?? value.request.jobId
+  if (value.runId && value.request.runId && value.runId !== value.request.runId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Run correlation identifiers must match', path: ['request', 'runId'] })
+  }
+  if (value.jobId && value.request.jobId && value.jobId !== value.request.jobId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Job correlation identifiers must match', path: ['request', 'jobId'] })
+  }
+  if (value.evidenceScope === 'local' && (!runId || !jobId)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Local receipts require run and job correlation identifiers', path: ['evidenceScope'] })
+  }
+
+  const scopedValues = [
+    { scope: value.runtime.scope, path: ['runtime', 'scope'] as const },
+    ...value.sourceOutcomes.map((item, index) => ({ scope: item.scope, path: ['sourceOutcomes', index, 'scope'] as const })),
+    ...value.rowCorrelation.map((item, index) => ({ scope: item.scope, path: ['rowCorrelation', index, 'scope'] as const })),
+    { scope: value.chat.scope, path: ['chat', 'scope'] as const },
+  ]
+  for (const scopedValue of scopedValues) {
+    if (scopedValue.scope && scopedValue.scope !== value.evidenceScope) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'All receipt evidence must use one explicit evidence scope', path: [...scopedValue.path] })
+    }
+  }
+
   if (value.request.responseShape.proofRunId !== value.rowCorrelation[0]?.proofRunId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Row correlation must use the request proofRunId', path: ['rowCorrelation'] })
   }

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createAgronautasApiService, createAgronautasMockService } from './service'
+import { createAgronautasApiService, createAgronautasMockService, normalizeAgronautasServiceError } from './service'
 import { fieldGeometryResponseSchema, fieldGeometryUpdateSchema, runtimeInfoSchema } from './schemas'
 
 test('canonical Agronautas demo service adds mode=demo to field detail requests', async () => {
@@ -48,8 +48,12 @@ test('geometry service reads and updates the authenticated field contract withou
 
   try {
     const service = createAgronautasApiService({ mode: 'demo' })
-    assert.deepEqual(await service.getFieldGeometry('field-demo-1'), fieldGeometryResponseSchema.parse(savedGeometry))
-    assert.deepEqual(await service.updateFieldGeometry('field-demo-1', { polygonWkt: savedGeometry.polygonWkt, expectedUpdatedAt: savedGeometry.updatedAt }), savedGeometry)
+    const getFieldGeometry = service.getFieldGeometry
+    const updateFieldGeometry = service.updateFieldGeometry
+    assert.ok(getFieldGeometry)
+    assert.ok(updateFieldGeometry)
+    assert.deepEqual(await getFieldGeometry('field-demo-1'), fieldGeometryResponseSchema.parse(savedGeometry))
+    assert.deepEqual(await updateFieldGeometry('field-demo-1', { polygonWkt: savedGeometry.polygonWkt, expectedUpdatedAt: savedGeometry.updatedAt }), savedGeometry)
     assert.equal(calls[0]?.url, '/api/agronautas/v1/fields/field-demo-1/geometry?mode=demo')
     assert.equal(calls[1]?.method, 'PATCH')
     assert.deepEqual(JSON.parse(calls[1]?.body ?? '{}'), fieldGeometryUpdateSchema.parse({ polygonWkt: savedGeometry.polygonWkt, expectedUpdatedAt: savedGeometry.updatedAt }))
@@ -61,17 +65,21 @@ test('geometry service reads and updates the authenticated field contract withou
 
 test('mock geometry service preserves a point-only fallback and updates deterministic polygon metrics', async () => {
   const service = createAgronautasMockService()
-  const initial = await service.getFieldGeometry('field-demo-1')
+  const getFieldGeometry = service.getFieldGeometry
+  const updateFieldGeometry = service.updateFieldGeometry
+  assert.ok(getFieldGeometry)
+  assert.ok(updateFieldGeometry)
+  const initial = await getFieldGeometry('field-demo-1')
   assert.equal(initial.status, 'point_only')
   assert.equal(initial.source, 'fallback')
 
-  const updated = await service.updateFieldGeometry('field-demo-1', {
+  const updated = await updateFieldGeometry('field-demo-1', {
     polygonWkt: 'POLYGON((-58.08 -29.18,-58.07 -29.18,-58.07 -29.19,-58.08 -29.18))',
   })
   assert.equal(updated.status, 'saved')
   assert.equal(updated.source, 'operator')
   assert.equal(updated.hectares, 1)
-  assert.equal((await service.getFieldGeometry('field-demo-1')).polygonWkt, updated.polygonWkt)
+  assert.equal((await getFieldGeometry('field-demo-1')).polygonWkt, updated.polygonWkt)
 })
 
 test('management service reads workspace context, cursor fields, and source-backed activity', async () => {
@@ -124,6 +132,36 @@ test('web runtime validator accepts unavailable scheduler status only with its t
       ...runtime,
       scheduler: { enabled: false, status: 'unavailable' },
     }).success, false)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('Agronautas service adapter preserves explicit auth, capability and unavailable outcomes', () => {
+  for (const [status, outcome] of [[401, 'unauthorized'], [403, 'forbidden'], [404, 'unavailable'], [503, 'unavailable']] as const) {
+    const result = normalizeAgronautasServiceError(new Error(`HTTP ${status}`), status)
+    assert.equal(result.outcome, outcome)
+    assert.equal(result.httpStatus, status)
+  }
+})
+
+test('Agronautas service keeps an aborted transport retryable for existing consumers', async () => {
+  const previousFetch = globalThis.fetch
+  const abortError = Object.assign(new Error('request was aborted'), { name: 'AbortError', code: 'ERR_ABORTED' })
+  globalThis.fetch = (async () => { throw abortError }) as typeof fetch
+
+  try {
+    await assert.rejects(
+      () => createAgronautasApiService().getField('field-1'),
+      (error: unknown) => {
+        const result = normalizeAgronautasServiceError(error)
+        assert.equal(result.outcome, 'retryable')
+        assert.equal(result.retryable, true)
+        assert.equal(result.reason, 'request_aborted')
+        assert.equal(result.code, 'ERR_ABORTED')
+        return true
+      },
+    )
   } finally {
     globalThis.fetch = previousFetch
   }

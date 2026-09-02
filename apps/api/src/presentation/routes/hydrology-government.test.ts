@@ -81,6 +81,34 @@ test('GET /api/hydrology/municipalities/:id/dashboard truncates long official al
   assert.match(timelineAlert?.detail ?? '', /^INMET: alerta útil/)
 })
 
+test('hydrology route returns a correlated retryable unavailable contract for dashboard and timeline failures', async () => {
+  const response = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { throw new Error('dashboard unavailable') },
+    async getIberaEvidenceTimeline() { throw new Error('timeline unavailable') },
+  } }), '/api/hydrology/municipalities/mercedes/dashboard', { headers: { 'x-request-id': 'hydrology-dashboard-503' } })
+
+  assert.equal(response.status, 503)
+  assert.equal(response.headers.get('x-request-id'), 'hydrology-dashboard-503')
+  const dashboard = await response.json() as { code: string; retryable: boolean; details: { requestId: string; phase: string } }
+  assert.equal(dashboard.code, 'HYDROLOGY_MUNICIPALITIES_UNAVAILABLE')
+  assert.equal(dashboard.retryable, true)
+  assert.deepEqual(dashboard.details, { requestId: 'hydrology-dashboard-503', phase: 'dashboard_query' })
+
+  const timeline = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getIberaEvidenceTimeline() { throw new Error('timeline unavailable') },
+  } }), '/api/hydrology/municipalities/mercedes/timeline', { headers: { 'x-request-id': 'hydrology-timeline-503' } })
+
+  assert.equal(timeline.status, 503)
+  assert.equal(timeline.headers.get('x-request-id'), 'hydrology-timeline-503')
+  const timelineJson = await timeline.json() as { code: string; retryable: boolean; details: { requestId: string; phase: string } }
+  assert.equal(timelineJson.code, 'HYDROLOGY_MUNICIPALITIES_UNAVAILABLE')
+  assert.equal(timelineJson.retryable, true)
+  assert.deepEqual(timelineJson.details, { requestId: 'hydrology-timeline-503', phase: 'timeline_query' })
+})
+
 test('GET /api/hydrology/municipalities returns classified error when repository query fails', async () => {
   const response = await request(createTestApp({
     hydrologyRepository: {
@@ -1378,15 +1406,20 @@ function telemetryRecord(source: 'INA' | 'INMET' | 'SMN') {
 
 async function request(app: express.Express, path: string, init: RequestInit = {}, options: { authenticateIngest?: boolean } = {}) {
   const server = createServer(app)
-  await new Promise<void>((resolve) => server.listen(0, resolve))
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('address not available')
+  const controller = new AbortController()
+  const watchdog = setTimeout(() => controller.abort(), 10_000)
   try {
+    await new Promise<void>((resolve) => server.listen(0, resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('address not available')
     const headers = new Headers(init.headers)
     if (options.authenticateIngest !== false && path === '/api/hydrology/ingest' && init.method === 'POST') headers.set('x-hydrology-ingest-token', TEST_INGEST_TOKEN)
-    return await fetch(`http://127.0.0.1:${address.port}${path}`, { ...init, headers })
+    return await fetch(`http://127.0.0.1:${address.port}${path}`, { ...init, headers, signal: controller.signal })
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    clearTimeout(watchdog)
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    }
   }
 }
 
