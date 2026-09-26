@@ -7,11 +7,15 @@ test('validateProductionEnv returns isValid=true for correct production environm
     NODE_ENV: 'production',
     DATABASE_URL: 'postgresql://real_user:real_secure_password_123@prod-db.internal:5432/prod_db',
     REDIS_URL: 'redis://prod-redis.internal:6379/0',
-    HYDROLOGY_INGEST_TOKEN: 'super-secret-ingest-token-abc',
+    HYDROLOGY_INGEST_TOKEN: 'super-ingest-token-abc',
     AGRONAUTAS_RUNTIME_REQUIRED: 'true',
     NASA_FIRMS_API_KEY: 'nasa-firms-real-key-456',
     SENTINEL_CLIENT_ID: 'sentinel-client-id-xyz',
-    SENTINEL_CLIENT_SECRET: 'sentinel-client-secret-999',
+    SENTINEL_CLIENT_SECRET: 'sentinel-client-credential-999',
+    AGRONAUTAS_AUTH_ACCESS_SECRET: 'agronautas-access-value-1234567890',
+    AGRONAUTAS_AUTH_REFRESH_SECRET: 'agronautas-refresh-value-1234567890',
+    AGRONAUTAS_AUTH_BOOTSTRAP_SECRET: 'agronautas-bootstrap-value-1234567890',
+    AGRONAUTAS_BFF_BEARER_TOKEN: 'agronautas-bff-value-1234567890',
   }
 
   const result = validateProductionEnv(env)

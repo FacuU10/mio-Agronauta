@@ -6,6 +6,9 @@ export interface SourceWindow {
   windowStart: Date
   windowEnd: Date
   runId: string
+  locationId?: string
+  workspaceId?: string
+  fieldId?: string
 }
 
 export interface RetryBackoffDecision {

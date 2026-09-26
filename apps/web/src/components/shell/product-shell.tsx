@@ -7,6 +7,7 @@ export type ProductKey = 'agronautas' | 'ibera'
 export interface ProductNavItem {
   href: string
   label: string
+  active?: boolean
 }
 
 interface ProductShellProps {
@@ -32,6 +33,9 @@ const productCopy: Record<ProductKey, { name: string; kicker: string; accent: st
 
 export function ProductShell({ product, title, description, navItems, children }: ProductShellProps) {
   const copy = productCopy[product]
+  const resolvedNavItems = product === 'agronautas' && !navItems.some((item) => item.href === '/agronautas/marketplace')
+    ? [...navItems, { href: '/agronautas/marketplace', label: 'Marketplace' }]
+    : navItems
 
   return (
     <div className="responsive-shell min-h-screen bg-stone-100 text-stone-950" data-product={product}>
@@ -47,8 +51,8 @@ export function ProductShell({ product, title, description, navItems, children }
         </div>
         <nav aria-label={`Navegación de ${copy.name}`} className="border-t border-white/10">
           <div className="responsive-nav mx-auto flex max-w-[90rem] gap-1 overflow-x-auto px-4 py-2 sm:px-8">
-            {navItems.map((item) => (
-              <a className="whitespace-nowrap rounded-full px-3 py-2 text-sm text-stone-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200" href={item.href} key={item.href}>
+            {resolvedNavItems.map((item) => (
+              <a aria-current={item.active ? 'page' : undefined} className={`min-h-11 whitespace-nowrap rounded-full px-3 py-2 text-sm transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 ${item.active ? 'bg-white/15 text-white' : 'text-stone-300'}`} href={item.href} key={item.href}>
                 {item.label}
               </a>
             ))}

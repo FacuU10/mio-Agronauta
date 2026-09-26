@@ -8,13 +8,13 @@ export class UpdateFieldGeometryUseCase {
     private readonly geometryRepository: FieldGeometryRepository,
   ) {}
 
-  async get(fieldId: string): Promise<FieldGeometry | null> {
-    return this.geometryRepository.getGeometry(fieldId)
+  async get(fieldId: string, workspaceId: string): Promise<FieldGeometry | null> {
+    return this.geometryRepository.getGeometry(fieldId, workspaceId)
   }
 
-  async execute(fieldId: string, input: FieldGeometryUpdate): Promise<FieldGeometry> {
+  async execute(fieldId: string, workspaceId: string, input: FieldGeometryUpdate): Promise<FieldGeometry> {
     const parsed = fieldGeometryUpdateSchema.parse(input)
-    const field = await this.fieldRepository.findById(fieldId)
+    const field = await this.fieldRepository.findById(fieldId, workspaceId)
     if (!field) throw new Error('FIELD_NOT_FOUND')
 
     const normalized = normalizeFieldGeometryInput(parsed)
@@ -24,7 +24,7 @@ export class UpdateFieldGeometryUseCase {
       throw new Error(coverage.staleCause ?? 'outside_supported_area')
     }
 
-    return this.geometryRepository.updateGeometry(fieldId, {
+    return this.geometryRepository.updateGeometry(fieldId, workspaceId, {
       polygonWkt: normalized.polygonWkt,
       source: 'operator',
       expectedUpdatedAt: parsed.expectedUpdatedAt,

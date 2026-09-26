@@ -91,6 +91,11 @@ export interface CopilotResponseInput {
   sources?: unknown
   citationMode?: unknown
   citationUnavailable?: unknown
+  citationLineage?: unknown
+  readiness?: unknown
+  actionable?: unknown
+  sourceRunIds?: unknown
+  providerModes?: unknown
   unverifiedClaims?: unknown
   degraded?: unknown
   unavailableReason?: unknown
@@ -202,7 +207,8 @@ export function normalizeCopilotResponse(input: CopilotResponseInput): CopilotVi
   const answer = normalizeAnswer(input.answer, tokens)
   const citations = normalizeStrings(input.citations)
   const sources = normalizeStrings(input.sources)
-  const citationMode = isCitationMode(input.citationMode) ? input.citationMode : citations.length > 0 ? CITATION_MODE.VALIDATED_CONTEXT : CITATION_MODE.NONE
+  const hasValidatedLineage = input.readiness === 'ready' && Array.isArray(input.citationLineage) && input.citationLineage.length > 0
+  const citationMode = isCitationMode(input.citationMode) ? input.citationMode : citations.length > 0 && hasValidatedLineage ? CITATION_MODE.VALIDATED_CONTEXT : citations.length > 0 ? CITATION_MODE.VALIDATED_CONTEXT : CITATION_MODE.NONE
   const unverifiedClaims = input.unverifiedClaims === true
   const citationUnavailable = input.citationUnavailable === true || citationMode !== CITATION_MODE.VALIDATED_CONTEXT || citations.length === 0 || unverifiedClaims
   const degraded = input.degraded === true || input.error !== undefined && input.error !== null
@@ -210,7 +216,8 @@ export function normalizeCopilotResponse(input: CopilotResponseInput): CopilotVi
   const transport = normalizeCopilotTransport(input.transport, status, done, degraded)
   const streamLoading = done === false || transport === COPILOT_TRANSPORT.STREAMING
   const hasTokens = tokens.some((token) => token.trim().length > 0)
-  const actionable = hasTokens && Boolean(answer.trim()) && !citationUnavailable && !degraded && !streamLoading
+  const computedActionable = hasTokens && Boolean(answer.trim()) && !citationUnavailable && !degraded && !streamLoading
+  const actionable = typeof input.actionable === 'boolean' ? input.actionable && computedActionable : computedActionable
   const retryable = degraded || Boolean(input.error)
 
   let outcome: Outcome = OUTCOME.READY

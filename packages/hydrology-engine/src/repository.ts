@@ -366,13 +366,13 @@ export class HydrologyRepository {
 
   async getIberaSourceRegistry(municipalityId: string): Promise<HydrologyIberaSourceProvenance[]> {
     const result = await this.db.query(
-      `SELECT source, station_id, coverage_key, source_url, freshness_policy, registry_version, review_status, reviewed_at
-         FROM ibera_source_registry
+      `SELECT source, station_id, coverage_key, source_url, freshness_policy, registry_version, review_status, reviewed_at, geometry_status
+          FROM ibera_source_registry
         WHERE municipality_id = $1 AND review_status = 'reviewed'
         ORDER BY source, station_id, coverage_key`,
       [municipalityId],
-    ) as QueryResult<{ source: HydrologySource; station_id: string | null; coverage_key: string | null; source_url: string; freshness_policy: string; registry_version: string; review_status: 'reviewed' | 'pending' | 'blocked'; reviewed_at: Date | string | null }>
-    return result.rows.map((row) => ({ source: row.source, stationId: row.station_id, coverageKey: row.coverage_key, sourceUrl: row.source_url, freshnessPolicy: row.freshness_policy, registryVersion: row.registry_version, reviewStatus: row.review_status, reviewedAt: row.reviewed_at ? new Date(row.reviewed_at).toISOString() : null }))
+    ) as QueryResult<{ source: HydrologySource; station_id: string | null; coverage_key: string | null; source_url: string; freshness_policy: string; registry_version: string; review_status: 'reviewed' | 'pending' | 'blocked'; reviewed_at: Date | string | null; geometry_status: 'verified' | 'unverified' | 'partial' | 'unavailable' }>
+    return result.rows.map((row) => ({ source: row.source, stationId: row.station_id, coverageKey: row.coverage_key, sourceUrl: row.source_url, freshnessPolicy: row.freshness_policy, registryVersion: row.registry_version, reviewStatus: row.review_status, reviewedAt: row.reviewed_at ? new Date(row.reviewed_at).toISOString() : null, geometryStatus: row.geometry_status }))
   }
 
   async pruneOldData(retentionDays = 30, now = new Date()): Promise<{ telemetryDeleted: number; snapshotsDeleted: number; ledgerDeleted: number }> {

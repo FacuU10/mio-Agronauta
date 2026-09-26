@@ -1,7 +1,7 @@
 'use client'
 
-import { createElement } from 'react'
-import { useMutation, useQueries } from '@tanstack/react-query'
+import { createElement, useEffect, useState } from 'react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, FieldGeometryResponse, FieldOverview, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse } from '@/lib/agronautas/schemas'
 import { createAgronautasMockService, resolveAgronautasService, type AgronautasService } from '@/lib/agronautas/service'
 import { ApiError } from '@/lib/api-client'
@@ -14,6 +14,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { FieldGeometryEditor } from './field-geometry-editor'
 import type { AgronautasCapabilityState } from './workspace'
+import { createAgronautasAuthClient, type AgronautasAuthClient } from '@/lib/agronautas/auth-client'
+import { clearAgronautasProtectedState, createAgronautasQueryKey, createAgronautasQueryMeta, type AgronautasAuthScope } from '@/lib/query-client'
+import { isAgronautasAuthBoundaryFailure } from '@/lib/agronautas/auth-recovery'
 
 const React = { createElement }
 const CANONICAL_DEMO_FIELD_ID = 'field-demo-1'
@@ -43,9 +46,11 @@ export interface AgronautasFieldDetailProps {
   recomputeStatus?: RecomputeRequestResult
   isRecomputePending: boolean
   onRequestRecompute: () => Promise<unknown>
+  workspaceHref?: string
 }
 
 export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
+  const workspaceHref = props.workspaceHref ?? '/demo'
   const nextAction = props.risk.snapshot.level === 'high'
     ? 'Revisar drivers de lluvia y estrés antes de operar el lote.'
     : 'Confirmar la próxima lectura con evidencia vigente.'
@@ -56,7 +61,7 @@ export function AgronautasFieldDetail(props: AgronautasFieldDetailProps) {
       product="agronautas"
       title="Detalle del lote"
       description="Evidencia, evolución y acciones contratadas para un lote Agronautas."
-      navItems={[{ href: '/demo', label: 'Workspace' }, { href: '#field-decision', label: 'Decisión' }, { href: '#field-timelines', label: 'Timelines' }, { href: '/demo#agronautas-chat-card', label: 'Chat existente' }]}
+       navItems={[{ href: workspaceHref, label: 'Workspace' }, { href: '#field-decision', label: 'Decisión' }, { href: '#field-timelines', label: 'Timelines' }, { href: `${workspaceHref}#agronautas-chat-card`, label: 'Chat existente' }]}
     >
       <div className="agronautas-canvas mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 rounded-[2rem] px-4 py-8 md:px-8">
         <header className="grid gap-5 rounded-[2rem] border border-emerald-950/20 bg-stone-950 p-6 text-white shadow-lg md:grid-cols-[1.2fr,0.8fr] md:p-8">
@@ -169,18 +174,38 @@ function GeometryCapabilityState({ outcome }: { outcome: AgronautasCapabilitySta
   return <VisibilityState state="missing" title="Geometría no disponible" description="La geometría opcional no está disponible. Se conserva la evidencia disponible, sin fabricar un polígono." retryAllowed={false} />
 }
 
-export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId: string; service?: AgronautasService }) {
+export function AgronautasFieldDetailPageClient({ fieldId, service, authClient, workspaceHref }: { fieldId: string; service?: AgronautasService; authClient?: AgronautasAuthClient; workspaceHref?: string }) {
   const resolvedService = service ?? resolveAgronautasService({ mode: fieldId === CANONICAL_DEMO_FIELD_ID ? 'demo' : undefined })
+  const isDemo = resolvedService.isDemo === true
+  const queryClient = useQueryClient()
+  const [defaultAuthClient] = useState(() => createAgronautasAuthClient())
+  const resolvedAuthClient = authClient ?? defaultAuthClient
+  const authQuery = useQuery({
+    queryKey: ['agronautas', 'auth-status'],
+    queryFn: async () => {
+      if (!resolvedAuthClient) throw new Error('No se pudo inicializar la autenticación Agronautas')
+      return resolvedAuthClient.status()
+    },
+    enabled: !isDemo,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    retry: false,
+  })
+  const authScope: AgronautasAuthScope | null = authQuery.data?.principal ?? null
+  const queryAccess = isDemo ? 'public' : 'protected'
+  const queryMeta = createAgronautasQueryMeta(queryAccess)
+  const queryKey = (resource: string) => createAgronautasQueryKey(queryAccess, authScope, resource, fieldId)
+  const authReady = isDemo || Boolean(authQuery.data && !authQuery.isFetching && !authQuery.error)
   const queries = useQueries({ queries: [
-    { queryKey: ['agronautas', 'detail-field', fieldId], queryFn: () => resolvedService.getField(fieldId), retry: false },
-    { queryKey: ['agronautas', 'detail-risk', fieldId], queryFn: () => resolvedService.getCurrentRisk(fieldId), retry: false },
-    { queryKey: ['agronautas', 'detail-alerts', fieldId], queryFn: () => resolvedService.getCurrentAlerts(fieldId), retry: false },
-    { queryKey: ['agronautas', 'detail-status', fieldId], queryFn: () => resolvedService.getMonitoringStatus(fieldId), retry: false },
-    { queryKey: ['agronautas', 'detail-risk-timeline', fieldId], queryFn: () => resolvedService.getRiskTimeline(fieldId), retry: false },
-    { queryKey: ['agronautas', 'detail-weather-timeline', fieldId], queryFn: () => resolvedService.getWeatherTimeline(fieldId), retry: false },
-    { queryKey: ['agronautas', 'detail-dashboard', fieldId], queryFn: () => resolvedService.getDashboard(fieldId), retry: false },
-     { queryKey: ['agronautas', 'detail-alerts-timeline', fieldId], queryFn: () => resolvedService.getAlertsTimeline(fieldId), retry: false },
-     { queryKey: ['agronautas', 'detail-geometry', fieldId], queryFn: () => resolvedService.getFieldGeometry?.(fieldId), enabled: Boolean(resolvedService.getFieldGeometry), retry: false },
+    { queryKey: queryKey('detail-field'), queryFn: () => resolvedService.getField(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+    { queryKey: queryKey('detail-risk'), queryFn: () => resolvedService.getCurrentRisk(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+    { queryKey: queryKey('detail-alerts'), queryFn: () => resolvedService.getCurrentAlerts(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+    { queryKey: queryKey('detail-status'), queryFn: () => resolvedService.getMonitoringStatus(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+    { queryKey: queryKey('detail-risk-timeline'), queryFn: () => resolvedService.getRiskTimeline(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+    { queryKey: queryKey('detail-weather-timeline'), queryFn: () => resolvedService.getWeatherTimeline(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+    { queryKey: queryKey('detail-dashboard'), queryFn: () => resolvedService.getDashboard(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+     { queryKey: queryKey('detail-alerts-timeline'), queryFn: () => resolvedService.getAlertsTimeline(fieldId), enabled: authReady, retry: false, meta: queryMeta },
+     { queryKey: queryKey('detail-geometry'), queryFn: () => resolvedService.getFieldGeometry?.(fieldId), enabled: authReady && Boolean(resolvedService.getFieldGeometry), retry: false, meta: queryMeta },
   ] })
   const recompute = useMutation({ mutationFn: () => resolvedService.requestRecompute(fieldId) })
   // Geometry is an optional provider-neutral enhancement; its absence must not
@@ -198,14 +223,22 @@ export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId:
   const alertsTimeline = queries[7]?.data as AlertsTimelineResponse | undefined
   const geometry = queries[8]?.data as FieldGeometryResponse | undefined
   const geometryOutcome = resolveCapabilityState(queries[8])
+  const boundaryError = authQuery.error ?? hasError?.error
+  useEffect(() => {
+    if (isDemo || !boundaryError) return
+    const outcome = normalizeRequestError(boundaryError)
+    const status = boundaryError instanceof ApiError ? boundaryError.status : outcome.httpStatus
+    if (isAgronautasAuthBoundaryFailure({ status, code: outcome.code })) clearAgronautasProtectedState(queryClient)
+  }, [boundaryError, isDemo, queryClient])
 
-  if (hasError) {
-    const outcome = normalizeRequestError(hasError.error)
-    const status = hasError.error instanceof ApiError ? hasError.error.status : outcome.httpStatus
+  if (boundaryError) {
+    const outcome = normalizeRequestError(boundaryError)
+    const status = boundaryError instanceof ApiError ? boundaryError.status : outcome.httpStatus
     const boundary = status === 401 ? { state: 'unauthorized' as const, title: 'Acceso al detalle no autorizado', description: 'Este lote requiere una sesión autorizada (HTTP 401). No se muestran datos de producción sin identidad verificada.' } : status === 403 ? { state: 'forbidden' as const, title: 'Detalle del lote restringido', description: 'Tu sesión no tiene permisos para consultar este lote (HTTP 403). Consultá al administrador.' } : status === 404 ? { state: 'unavailable' as const, title: 'Lote no encontrado', description: 'El contrato devolvió HTTP 404 para este lote o capacidad. No se sustituye con un registro inventado.' } : undefined
-    return <ProductShell product="agronautas" title="Detalle del lote" description="No se pudo leer el contrato del lote." navItems={[{ href: '/demo', label: 'Workspace' }]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state={boundary?.state ?? 'error'} title={boundary?.title ?? 'No se pudo cargar el lote'} description={boundary?.description ?? 'El endpoint existente devolvió un error. Podés reintentar sin perder el contexto de la ruta.'} retryAllowed={!boundary} onRetry={boundary ? undefined : () => void Promise.all(queries.map((query) => query.refetch()))} /></div></ProductShell>
+    return <ProductShell product="agronautas" title="Detalle del lote" description="No se pudo leer el contrato del lote." navItems={[{ href: workspaceHref ?? '/demo', label: 'Workspace' }]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state={boundary?.state ?? 'error'} title={boundary?.title ?? 'No se pudo cargar el lote'} description={boundary?.description ?? 'El endpoint existente devolvió un error. Podés reintentar sin perder el contexto de la ruta.'} retryAllowed={!boundary} onRetry={boundary ? undefined : () => void Promise.all(queries.map((query) => query.refetch()))} /></div></ProductShell>
   }
-  if (isLoading || !field || !risk || !alerts || !status || !riskTimeline || !weatherTimeline || !dashboard || !alertsTimeline) return <ProductShell product="agronautas" title="Detalle del lote" description="Cargando datos contratados." navItems={[{ href: '/demo', label: 'Workspace' }]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="loading" title="Cargando detalle del lote" description="Sincronizando riesgo, alertas, timelines y procedencia." /></div></ProductShell>
+  if (!authReady) return <ProductShell product="agronautas" title="Detalle del lote" description="Verificando el acceso controlado al lote." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="loading" title="Verificando autenticación Agronautas" description="Confirmando la sesión antes de mostrar datos protegidos." /></div></ProductShell>
+  if (isLoading || !field || !risk || !alerts || !status || !riskTimeline || !weatherTimeline || !dashboard || !alertsTimeline) return <ProductShell product="agronautas" title="Detalle del lote" description="Cargando datos contratados." navItems={[{ href: workspaceHref ?? '/demo', label: 'Workspace' }]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="loading" title="Cargando detalle del lote" description="Sincronizando riesgo, alertas, timelines y procedencia." /></div></ProductShell>
 
   const saveGeometry = async (input: { polygonWkt: string; expectedUpdatedAt?: string }) => {
     if (!resolvedService.updateFieldGeometry) throw new Error('La edición de geometría no está disponible')
@@ -213,7 +246,7 @@ export function AgronautasFieldDetailPageClient({ fieldId, service }: { fieldId:
     await queries[8]?.refetch()
     return result
   }
-  return <AgronautasFieldDetail field={field} risk={risk} alerts={alerts} status={status} riskTimeline={riskTimeline} weatherTimeline={weatherTimeline} dashboard={dashboard} alertsTimeline={alertsTimeline} geometry={geometry} geometryOutcome={geometryOutcome} onSaveGeometry={saveGeometry} recomputeStatus={recompute.data} isRecomputePending={recompute.isPending} onRequestRecompute={() => recompute.mutateAsync()} />
+  return <AgronautasFieldDetail field={field} risk={risk} alerts={alerts} status={status} riskTimeline={riskTimeline} weatherTimeline={weatherTimeline} dashboard={dashboard} alertsTimeline={alertsTimeline} geometry={geometry} geometryOutcome={geometryOutcome} onSaveGeometry={saveGeometry} recomputeStatus={recompute.data} isRecomputePending={recompute.isPending} onRequestRecompute={() => recompute.mutateAsync()} workspaceHref={workspaceHref} />
 }
 
 export function AgronautasFieldDetailPageClientForTests() {

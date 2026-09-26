@@ -12,6 +12,7 @@
     "verify-local": "pnpm --dir apps/api verify-local",
     "verify:agronautas:runtime": "pnpm --dir apps/api verify:agronautas:runtime",
     "verify:agronautas:browser": "pnpm --dir apps/web test:e2e:agronautas-runtime",
+    "demo:local": "pnpm --dir apps/web dev",
     "backend": "pnpm --dir backend run dev",
     "frontend": "pnpm --dir frontend run dev",
     "local:up": "docker compose up -d postgres redis worker",

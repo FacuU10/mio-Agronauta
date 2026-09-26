@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -69,7 +69,7 @@ class WorkflowQueueConsumer:
     def __init__(self, queue_name: str = "agronautas-runtime") -> None:
         self.settings = get_settings()
         self.logger = build_logger(self.settings)
-        self.redis = Redis.from_url(self.settings.redis_url, decode_responses=True)
+        self.redis: Any = Redis.from_url(self.settings.redis_url, decode_responses=True)
         self.validator = build_contract_validator("workflow-job.schema.json", self.settings.resolved_contracts_root)
         self.v2_validator = build_contract_validator("agronautas-runtime.v2.schema.json", self.settings.resolved_contracts_root)
         self.queue_name = f"bull:{queue_name}:wait"
@@ -275,10 +275,10 @@ if __name__ == "__main__":
 def validate_scheduled_window_job(job: dict[str, Any]) -> None:
     source_window = job.get("payload", {}).get("sourceWindow")
     if not isinstance(source_window, dict):
-        raise ValueError("scheduled_window_payload_missing")
+        raise TypeError("scheduled_window_payload_missing")
     if source_window.get("runId") != job.get("runId"):
         raise ValueError("scheduled_window_run_id_mismatch")
-    start = datetime.fromisoformat(str(source_window["windowStart"]).replace("Z", "+00:00"))
-    end = datetime.fromisoformat(str(source_window["windowEnd"]).replace("Z", "+00:00"))
+    start = datetime.fromisoformat(str(source_window["windowStart"]))
+    end = datetime.fromisoformat(str(source_window["windowEnd"]))
     if end <= start:
         raise ValueError("scheduled_window_end_must_follow_start")

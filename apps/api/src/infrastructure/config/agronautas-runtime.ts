@@ -12,6 +12,7 @@ export interface AgronautasRuntimeConfig {
   routePrefix: string
   trustProxy: boolean | number | string
   runtimeV2Enabled?: boolean
+  maintenanceMode?: boolean
   schedulerEnabled: boolean
   optionalReadinessServices: string[]
   runtimeRequired: boolean
@@ -26,6 +27,7 @@ export function getAgronautasRuntimeConfig(env: NodeJS.ProcessEnv = process.env)
     routePrefix: normalizeRoutePrefix(env['AGRONAUTAS_ROUTE_PREFIX']),
     trustProxy: parseTrustProxy(env['TRUST_PROXY'], env['RENDER']),
     runtimeV2Enabled: parseBoolean(env['AGRONAUTAS_RUNTIME_V2_ENABLED'], false),
+    maintenanceMode: parseBoolean(env['AGRONAUTAS_MAINTENANCE_MODE'], false),
     schedulerEnabled: parseBoolean(env['AGRONAUTAS_SCHEDULER_ENABLED'], false),
     optionalReadinessServices: parseOptionalReadinessServices(env['READINESS_OPTIONAL_SERVICES']),
     runtimeRequired: parseBoolean(env['AGRONAUTAS_RUNTIME_REQUIRED'], false),

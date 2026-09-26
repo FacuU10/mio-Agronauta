@@ -1,4 +1,6 @@
 import type { SatelliteSummary } from '../../domain/entities/agronautas'
+export { createSatelliteProvider } from './agronautas-signal-provider'
+export type { ProviderPort, ProviderPortOptions, ProviderRequest, ProviderScope } from './agronautas-signal-provider'
 
 export interface SatelliteAdapterResult {
   observedAt: Date

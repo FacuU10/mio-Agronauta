@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, TypedDict
 from urllib.error import HTTPError, URLError
@@ -8,12 +9,11 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 import psycopg
-from jsonschema.exceptions import ValidationError
-from redis.asyncio import Redis
+from jsonschema.exceptions import ValidationError  # type: ignore[import-untyped]
 
 from worker.contracts import build_contract_validator
 from worker.core.config import get_settings
-
+from worker.providers.agronautas_evidence import normalize_open_meteo
 
 _settings = get_settings()
 _contracts_root = _settings.resolved_contracts_root
@@ -72,7 +72,7 @@ def build_scheduled_window_unavailable_result(
     run_id: str,
     provider: str,
     retrieved_at: str,
-) -> ScheduledWindowUnavailableResult:
+) -> dict[str, Any]:
     lineage: ScheduledWindowLineage = {
         "sourceRunIds": [run_id],
         "providerRunIds": [f"{provider}:{run_id}"],
@@ -166,17 +166,18 @@ class PostgresAgronautasJobStore:
             ("postgis", "SELECT PostGIS_Full_Version()"),
             (
                 "migrations",
-                'SELECT migration_name FROM "_prisma_migrations" '
-                "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+                (
+                    'SELECT migration_name FROM "_prisma_migrations" '
+                    "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1"
+                ),
             ),
         )
 
         for name, query in probes:
             try:
-                async with await psycopg.AsyncConnection.connect(self._require_dsn()) as connection:
-                    async with connection.cursor() as cursor:
-                        await cursor.execute(query)
-                        row = await cursor.fetchone()
+                async with await psycopg.AsyncConnection.connect(self._require_dsn()) as connection, connection.cursor() as cursor:
+                    await cursor.execute(query)
+                    row = await cursor.fetchone()
                 readiness[name] = "ready" if row is not None else "blocked"
             except Exception:  # noqa: BLE001 - readiness must fail closed per boundary
                 readiness[name] = "blocked"
@@ -232,7 +233,7 @@ class PostgresAgronautasJobStore:
 class RuntimeOutcomeCoordinator:
     """Owns the single durable outcome transition before Redis can be ACKed."""
 
-    def __init__(self, job_store: PostgresAgronautasJobStore | None, redis: Redis | None = None) -> None:
+    def __init__(self, job_store: PostgresAgronautasJobStore | None, redis: Any | None = None) -> None:
         self.job_store = job_store
         self.redis = redis
         self._terminal_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
@@ -250,11 +251,12 @@ class RuntimeOutcomeCoordinator:
         except Exception as error:
             raise DurableOutcomeError("failed to claim durable job") from error
 
-    async def heartbeat(self, job: dict[str, Any]) -> None:
+    async def heartbeat(self, job: dict[str, Any]) -> bool:
         if self.job_store is not None:
             heartbeat_ok = await self.job_store.heartbeat(str(job["jobId"]), str(job["runId"]), datetime.now(UTC))
             if heartbeat_ok is False:
                 raise DurableOutcomeError("durable heartbeat ownership was lost")
+        return True
 
     async def resolve_failure(
         self,
@@ -345,7 +347,7 @@ def _job_max_attempts(job: dict[str, Any]) -> int:
 
 async def handle_agronautas_job(
     job: dict[str, Any],
-    redis: Redis,
+    redis: Any,
     logger: Any,
     job_store: PostgresAgronautasJobStore | None = None,
     worker_id: str | None = None,
@@ -405,7 +407,7 @@ async def handle_agronautas_job(
         if field is None:
             raise ValueError("missing_field_coordinates")
 
-        weather = fetch_open_meteo_snapshot(field["lat"], field["lng"])
+        weather = fetch_open_meteo_snapshot(float(field["lat"]), float(field["lng"]))
         snapshot = compute_risk_snapshot(
             field_id=field_id,
             run_id=run_id,
@@ -513,22 +515,18 @@ async def handle_agronautas_job(
 
 async def handle_scheduled_window_job(
     job: dict[str, Any],
-    redis: Redis,
+    redis: Any,
     logger: Any,
     job_store: PostgresAgronautasJobStore | None = None,
     worker_id: str | None = None,
     outcome_coordinator: RuntimeOutcomeCoordinator | None = None,
+    provider_processor: Callable[[dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """Validate a scheduled source window without pretending a provider ran.
-
-    Provider execution belongs to the next phase. Until an explicit processor is
-    wired, the queue records an unavailable terminal outcome rather than a false
-    success or a fabricated observation.
-    """
+    """Validate and process a scoped source window without fabricating provider success."""
 
     payload = job.get("payload")
     if not isinstance(payload, dict):
-        raise ValueError("scheduled_window_payload_missing")
+        raise TypeError("scheduled_window_payload_missing")
     SCHEDULED_WINDOW_VALIDATOR.validate(payload)
     source_window = payload["sourceWindow"]
     if source_window["runId"] != job["runId"]:
@@ -551,12 +549,8 @@ async def handle_scheduled_window_job(
             await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
             return result
 
-    result = build_scheduled_window_unavailable_result(
-        job_id=job["jobId"],
-        run_id=job["runId"],
-        provider=source_window["provider"],
-        retrieved_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-    )
+    processor = provider_processor or process_scheduled_signal_window
+    result = await processor(job, source_window)
     await coordinator.persist_outcome_before_ack(job, result)
     await redis.hset("bull:agronautas-runtime:results", job["jobId"], json.dumps(result))
     logger.info(
@@ -566,19 +560,96 @@ async def handle_scheduled_window_job(
     return result
 
 
-async def claim_run_once(redis: Redis, run_id: str, job_id: str) -> bool:
+async def process_scheduled_signal_window(job: dict[str, Any], source_window: dict[str, Any]) -> dict[str, Any]:
+    """Run only configured provider paths; unsupported sources remain unavailable."""
+    location_id = source_window.get("locationId")
+    workspace_id = source_window.get("workspaceId")
+    field_id = source_window.get("fieldId") or job.get("fieldId")
+    provider = source_window["provider"]
+    if provider != "open-meteo" or not all(isinstance(value, str) and value for value in (location_id, workspace_id, field_id)) or not _settings.postgres_dsn:
+        return build_scheduled_window_unavailable_result(
+            job_id=job["jobId"],
+            run_id=job["runId"],
+            provider=provider,
+            retrieved_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+
+    assert isinstance(location_id, str)
+    assert isinstance(workspace_id, str)
+    assert isinstance(field_id, str)
+    scope = {"location_id": location_id, "workspace_id": workspace_id, "field_id": field_id}
+
+    field = await fetch_field_coordinates(_settings.postgres_dsn, str(scope["field_id"]))
+    if field is None:
+        return build_scheduled_window_unavailable_result(
+            job_id=job["jobId"],
+            run_id=job["runId"],
+            provider=provider,
+            retrieved_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+
+    weather = fetch_open_meteo_snapshot(float(field["lat"]), float(field["lng"]))
+    evidence = normalize_open_meteo(
+        weather["raw"],
+        source_url=str(weather["source_url"]),
+        retrieved_at=str(weather["acquired_at"]),
+        run_id=str(job["runId"]),
+        forecast_horizon_days=6,
+        location_id=str(scope["location_id"]),
+        workspace_id=str(scope["workspace_id"]),
+        field_id=str(scope["field_id"]),
+        provider_mode="live",
+    )
+    await persist_provider_evidence(
+        postgres_dsn=_settings.postgres_dsn,
+        run_key=f"{provider}:{source_window['signalType']}:{scope['location_id']}:{source_window['windowStart']}",
+        run_id=str(job["runId"]),
+        request_id=str(job.get("trace", {}).get("traceId", job["runId"])),
+        scope=scope,
+        provider=provider,
+        signal_type=str(source_window["signalType"]),
+        window_start=_parse_timestamp(str(source_window["windowStart"])),
+        window_end=_parse_timestamp(str(source_window["windowEnd"])),
+        evidence=evidence,
+    )
+    lineage = {
+        "sourceRunIds": [str(job["runId"])],
+        "providerRunIds": [str(weather.get("source_run_id") or job["runId"])],
+        "retrievedAt": evidence.retrieved_at,
+        "observedAt": evidence.observed_at,
+        "forecastAt": evidence.forecast_at,
+        "providerMode": evidence.provider_mode,
+        "units": evidence.units,
+        "httpStatus": 200,
+        "schemaStatus": evidence.schema_status,
+        "lastSuccessfulObservedAt": evidence.observed_at,
+    }
+    return {
+        "accepted": True,
+        "status": "succeeded",
+        "jobId": job["jobId"],
+        "runId": job["runId"],
+        "locationId": scope["location_id"],
+        "workspaceId": scope["workspace_id"],
+        "fieldId": scope["field_id"],
+        "evidence": evidence.value,
+        "lineage": lineage,
+        "result": {"status": "available", "freshness": evidence.freshness, "degradationReasons": list(evidence.degradation_reasons), "lineage": lineage},
+    }
+
+
+async def claim_run_once(redis: Any, run_id: str, job_id: str) -> bool:
     hset_result = await redis.hset("agronautas:job-runs:claims", run_id, job_id)
     return hset_result in (1, True, None)
 
 
 async def fetch_field_coordinates(postgres_dsn: str, field_id: str) -> dict[str, float | str] | None:
-    async with await psycopg.AsyncConnection.connect(postgres_dsn) as connection:
-        async with connection.cursor() as cursor:
-            await cursor.execute(
-                'SELECT id, "centroidLat", "centroidLng" FROM fields WHERE id = %s LIMIT 1',
-                (field_id,),
-            )
-            row = await cursor.fetchone()
+    async with await psycopg.AsyncConnection.connect(postgres_dsn) as connection, connection.cursor() as cursor:
+        await cursor.execute(
+            'SELECT id, "centroidLat", "centroidLng" FROM fields WHERE id = %s LIMIT 1',
+            (field_id,),
+        )
+        row = await cursor.fetchone()
 
     if row is None or row[1] is None or row[2] is None:
         return None
@@ -850,5 +921,48 @@ async def persist_failed_ingestion(
         await connection.commit()
 
 
+async def persist_provider_evidence(
+    *,
+    postgres_dsn: str,
+    run_key: str,
+    run_id: str,
+    request_id: str,
+    scope: dict[str, Any],
+    provider: str,
+    signal_type: str,
+    window_start: datetime,
+    window_end: datetime,
+    evidence: Any,
+) -> None:
+    async with await psycopg.AsyncConnection.connect(postgres_dsn) as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                INSERT INTO agronautas_provider_runs (
+                    id, run_key, run_id, request_id, location_id, workspace_id, field_id,
+                    provider, signal_type, window_start, window_end, status
+                ) VALUES (gen_random_uuid()::text, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_key) DO NOTHING
+                """,
+                (run_key, run_id, request_id, scope["location_id"], scope["workspace_id"], scope["field_id"], provider, signal_type, window_start, window_end, evidence.status),
+            )
+            await cursor.execute(
+                """
+                INSERT INTO agronautas_provider_evidence (
+                    id, run_id, evidence_id, location_id, workspace_id, field_id,
+                    provider, signal_type, status, provider_mode, observed_at, acquired_at,
+                    forecast_at, retrieved_at, evidence_payload
+                ) VALUES (gen_random_uuid()::text, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (evidence_id) DO NOTHING
+                """,
+                (run_id, evidence.evidence_id or f"{provider}:{run_id}", scope["location_id"], scope["workspace_id"], scope["field_id"], provider, signal_type, evidence.status, evidence.provider_mode, _parse_optional_timestamp(evidence.observed_at), _parse_optional_timestamp(evidence.acquired_at), _parse_optional_timestamp(evidence.forecast_at), _parse_timestamp(evidence.retrieved_at), json.dumps(evidence.__dict__, default=str)),
+            )
+        await connection.commit()
+
+
 def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def _parse_optional_timestamp(value: str | None) -> datetime | None:
+    return _parse_timestamp(value) if value else None

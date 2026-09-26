@@ -1,4 +1,5 @@
 import { createMapProviderAdapter, type CoveragePreview, type MapPoint, type MapProviderAdapter, type LocalityOption } from '@/lib/visibility/map'
+import type { AgronautasLocationSelectionRequest } from '@repo/zod-schemas'
 
 const GOOGLE_MAPS_REASONS = {
   MISSING_PUBLIC_KEY: 'missing_public_key',
@@ -99,6 +100,27 @@ export interface PolygonDraft {
   areaM2: number
   hectares: number
   perimeterM: number
+}
+
+export function buildFallbackLocationSelection(point: MapPoint, sourceReference: string): Pick<AgronautasLocationSelectionRequest, 'geometry' | 'selection'> {
+  return {
+    geometry: { type: 'point', coordinates: { latitude: point.lat, longitude: point.lng } },
+    selection: { source: 'locality-fallback', sourceReference },
+  }
+}
+
+export function buildPolygonLocationSelection(polygonWkt: string, sourceReference: string): Pick<AgronautasLocationSelectionRequest, 'geometry' | 'selection'> | null {
+  const body = /POLYGON\s*\(\((.+)\)\)/i.exec(polygonWkt)?.[1]
+  if (!body) return null
+  const coordinates = body.split(',').map((pair): [number, number] | null => {
+    const values = pair.trim().split(/\s+/)
+    if (values.length < 2) return null
+    const lng = Number(values[0])
+    const lat = Number(values[1])
+    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null
+  }).filter((coordinate): coordinate is [number, number] => coordinate !== null)
+  if (coordinates.length < 4) return null
+  return { geometry: { type: 'polygon', coordinates: [coordinates] }, selection: { source: 'reviewed-polygon', sourceReference } }
 }
 
 export function createPolygonDraft(points: readonly MapPoint[]): PolygonDraft {

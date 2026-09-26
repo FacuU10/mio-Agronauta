@@ -10,6 +10,7 @@ import type {
   SignalFreshness,
   DegradationReason,
 } from '../entities/agronautas'
+import type { AgronautasManagementKind, AgronautasManagementStatus } from '@repo/zod-schemas'
 import type { FieldGeometry, FieldGeometryInput } from '../geometry/field-geometry'
 
 export interface SupportedCoverageResult {
@@ -22,11 +23,11 @@ export interface SupportedCoverageResult {
 }
 
 export interface FieldRepository {
-  save(field: Field): Promise<void>
-  findById(fieldId: string): Promise<Field | null>
-  findByExternalFieldId(fieldId: string): Promise<Field | null>
+  save(field: Field, workspaceId: string): Promise<void>
+  findById(fieldId: string, workspaceId: string): Promise<Field | null>
+  findByExternalFieldId(fieldId: string, workspaceId: string): Promise<Field | null>
   resolveCoverage(point: GeoPoint): Promise<SupportedCoverageResult>
-  list?(input: { limit: number; cursor?: string; workspaceId?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
+  list?(input: { limit: number; cursor?: string; workspaceId: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
 }
 
 export const DEFAULT_AGRONAUTAS_WORKSPACE_ID = 'agronautas-default-workspace'
@@ -34,7 +35,7 @@ export const DEFAULT_AGRONAUTAS_WORKSPACE_ID = 'agronautas-default-workspace'
 export interface AgronautasWorkspaceContextRecord {
   workspaceId: string
   name: string
-  status: 'active'
+  status: 'active' | 'disabled'
   fieldCount: number
   createdAt: Date
   updatedAt: Date
@@ -44,7 +45,60 @@ export interface AgronautasWorkspaceRepository {
   ensureDefaultWorkspace(): Promise<AgronautasWorkspaceContextRecord>
   getWorkspace(workspaceId: string): Promise<AgronautasWorkspaceContextRecord | null>
   listWorkspaceFields(input: { workspaceId: string; limit: number; cursor?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }>
-  listFieldActivity(fieldId: string): Promise<AgronautasActivitySourceRecord[]>
+  listFieldActivity(fieldId: string, workspaceId: string): Promise<AgronautasActivitySourceRecord[]>
+}
+
+export interface ManagementItemRecord {
+  id: string
+  kind: AgronautasManagementKind
+  workspaceId: string
+  fieldId: string | null
+  parentId: string | null
+  name: string
+  status: AgronautasManagementStatus
+  revision: number
+  responsibleActorId: string | null
+  createdByActorId: string
+  idempotencyKey: string
+  sourceLocationIds: string[]
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface ManagementAuditRecord {
+  auditId: string
+  actorId: string
+  action: 'create' | 'transition' | 'retry' | 'assign'
+  targetId: string
+  outcome: 'accepted' | 'duplicate' | 'conflict' | 'forbidden' | 'unavailable'
+  revisionBefore: number | null
+  revisionAfter: number | null
+  occurredAt: Date
+  requestId: string
+}
+
+export type ManagementAuditInput = Omit<ManagementAuditRecord, 'auditId' | 'occurredAt'> & { workspaceId: string }
+
+export interface ManagementCreateInput {
+  kind: AgronautasManagementKind
+  workspaceId: string
+  fieldId?: string
+  parentId?: string
+  name: string
+  status: AgronautasManagementStatus
+  responsibleActorId?: string | null
+  idempotencyKey: string
+  sourceLocationIds: string[]
+  actorId: string
+  requestId: string
+}
+
+export interface AgronautasManagementRepository {
+  listManagement(input: { workspaceId: string; fieldId?: string }): Promise<{ items: ManagementItemRecord[]; audit: ManagementAuditRecord[] }>
+  getManagementItem?(input: { workspaceId: string; itemId: string }): Promise<ManagementItemRecord | null>
+  recordManagementAudit?(input: ManagementAuditInput): Promise<ManagementAuditRecord>
+  createManagement(input: ManagementCreateInput): Promise<{ status: 'created' | 'duplicate' | 'conflict'; resource: ManagementItemRecord; audit: ManagementAuditRecord }>
+  transitionManagement(input: { workspaceId: string; itemId: string; expectedRevision: number; status: AgronautasManagementStatus; actorId: string; requestId: string }): Promise<{ status: 'transitioned' | 'stale' | 'not_found'; resource?: ManagementItemRecord; audit: ManagementAuditRecord }>
 }
 
 export type AgronautasActivitySourceType = 'field' | 'risk_snapshot' | 'alert_snapshot' | 'ingestion_run' | 'recompute_run'
@@ -101,7 +155,7 @@ export interface SignalIngestionRepository {
   getLastSuccessfulObservedAtBySource?(): Promise<Map<string, Date>>
 }
 
-export type AgronautasSignalType = 'climate' | 'satellite' | 'weather_alert' | 'fire' | 'soil'
+export type AgronautasSignalType = 'climate' | 'weather' | 'satellite' | 'weather_alert' | 'fire' | 'soil'
 
 export interface SourceCadenceRecord {
   provider: string
@@ -143,8 +197,8 @@ export interface AlertSnapshotRecord {
 }
 
 export interface FieldGeometryRepository {
-  getGeometry(fieldId: string): Promise<FieldGeometry | null>
-  updateGeometry(fieldId: string, geometry: FieldGeometryInput & { source: 'operator' | 'google' | 'fallback'; expectedUpdatedAt?: string }): Promise<FieldGeometry>
+  getGeometry(fieldId: string, workspaceId: string): Promise<FieldGeometry | null>
+  updateGeometry(fieldId: string, workspaceId: string, geometry: FieldGeometryInput & { source: 'operator' | 'google' | 'fallback'; expectedUpdatedAt?: string }): Promise<FieldGeometry>
 }
 
 export interface AlertSnapshotRepository {

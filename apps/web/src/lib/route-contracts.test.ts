@@ -8,10 +8,10 @@ import {
   getRouteContract,
 } from './route-contracts'
 
-test('declares the seven existing routes with typed landmark and visibility contracts', () => {
+test('declares the existing routes with typed landmark and visibility contracts', () => {
   deepStrictEqual(
     ROUTE_CONTRACTS.map((route) => route.path),
-    ['/', '/probar-demo', '/demo', '/demo/fields/[fieldId]', '/municipalities', '/municipalities/[id]', '/municipalities/ingest'],
+    ['/', '/probar-demo', '/demo', '/login', '/agronautas', '/agronautas/marketplace', '/agronautas/fields/[fieldId]', '/agronautas/maintenance', '/demo/fields/[fieldId]', '/municipalities', '/municipalities/[id]', '/municipalities/ingest'],
   )
 
   for (const route of ROUTE_CONTRACTS) {
@@ -23,6 +23,7 @@ test('declares the seven existing routes with typed landmark and visibility cont
   }
 
   strictEqual(getRouteContract('/demo')?.visibility, 'demo')
+  strictEqual(getRouteContract('/agronautas/marketplace')?.visibility, 'protected')
   strictEqual(getRouteContract('/municipalities/ingest')?.visibility, 'protected')
 })
 
@@ -48,14 +49,19 @@ test('builds truthful metadata and absolute public URLs without inventing an ori
   strictEqual(protectedMetadata.alternates, undefined)
   deepStrictEqual(protectedMetadata.robots, { index: false, follow: false })
 
+  const marketplaceMetadata = buildRouteMetadata('/agronautas/marketplace', { NEXT_PUBLIC_SITE_URL: 'https://app.example.test/' })
+  strictEqual(marketplaceMetadata.title, 'Marketplace Agronautas')
+  strictEqual(marketplaceMetadata.alternates?.canonical, 'https://app.example.test/agronautas/marketplace')
+  deepStrictEqual(marketplaceMetadata.robots, { index: false, follow: false })
+
   const unconfiguredMetadata = buildRouteMetadata('/probar-demo', {})
   strictEqual(unconfiguredMetadata.alternates, undefined)
   strictEqual(unconfiguredMetadata.openGraph?.url, undefined)
 })
 
-test('limits discovery to the two public, non-parameterized routes', () => {
+test('limits discovery to the public, non-parameterized routes', () => {
   deepStrictEqual(
     getPublicRouteContracts().map((route) => route.path),
-    ['/', '/probar-demo'],
+    ['/', '/probar-demo', '/login', '/agronautas/maintenance'],
   )
 })

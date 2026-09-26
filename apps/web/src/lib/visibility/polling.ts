@@ -1,6 +1,6 @@
 import { normalizeRequestError, normalizeRequestResponse, type RequestOutcome } from './view-models'
 
-export type IngestStatus = 'queued' | 'started' | 'completed' | 'partial' | 'failed'
+export type IngestStatus = 'queued' | 'started' | 'completed' | 'partial' | 'failed' | 'unavailable' | 'maintenance'
 export type IngestSourceStatus = 'success' | 'failed' | 'empty' | 'skipped'
 export type HydrologySource = 'PNA' | 'INA' | 'INMET' | 'SMN'
 
@@ -38,7 +38,7 @@ export class PollingError extends Error {
   }
 }
 
-const TERMINAL_STATUSES = new Set<IngestStatus>(['completed', 'partial', 'failed'])
+const TERMINAL_STATUSES = new Set<IngestStatus>(['completed', 'partial', 'failed', 'unavailable', 'maintenance'])
 const SOURCES = new Set<HydrologySource>(['PNA', 'INA', 'INMET', 'SMN'])
 
 export async function pollStatusPath(statusPath: string, options: PollOptions = {}): Promise<SafeIngestView> {
@@ -198,7 +198,7 @@ function isSourceStatus(value: unknown): value is IngestSourceStatus {
 }
 
 function isIngestStatus(value: unknown): value is IngestStatus {
-  return value === 'queued' || value === 'started' || value === 'completed' || value === 'partial' || value === 'failed'
+  return value === 'queued' || value === 'started' || value === 'completed' || value === 'partial' || value === 'failed' || value === 'unavailable' || value === 'maintenance'
 }
 
 function clampInteger(value: number, min: number, max: number) {

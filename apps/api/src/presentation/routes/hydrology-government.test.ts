@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
 import type { IberaIngestRunInput, IberaIngestRunRecord } from '@repo/hydrology-engine'
-import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, coverageGapsFor, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, runnerTimeoutFor, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
+import { AGRICULTURAL_CENTERS, PNA_FLOOD_RISK_PORTS, buildMunicipalCopilotContext, coverageGapsFor, createGovernmentIngestionRunner, createHydrologyGovernmentRouter, createHydrologyIngestionCoordinator, describeHydrologyStartupFailure, resolveIberaGeometryStatus, runnerTimeoutFor, seedGovernmentMunicipalitiesIfEmpty, waitForObservation } from './hydrology-government'
 import {
   hydrologyGovernmentDashboardResponseSchema,
   hydrologyGovernmentIngestResponseSchema,
@@ -227,6 +227,25 @@ test('GET /api/hydrology/municipalities/:id/dashboard publishes the complete rev
     reviewStatus: 'reviewed',
     reviewedAt: '2026-08-13T10:00:00.000Z',
   }])
+})
+
+test('Iberá dashboard derives geometry truth from reviewed registry and never promotes seeded boundaries', async () => {
+  const response = await request(createTestApp({ hydrologyRepository: {
+    async getMunicipalityTelemetryOverview() { return [municipalityView()] },
+    async getMunicipalityTelemetryDashboard() { return municipalityDashboard() },
+    async getIberaSourceRegistry() {
+      return [
+        { source: 'PNA' as const, stationId: 'pna-mercedes', coverageKey: 'pna-mercedes', sourceUrl: 'https://example.com/pna', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed' as const, reviewedAt: '2026-08-13T10:00:00.000Z', geometryStatus: 'verified' as const },
+        { source: 'SMN' as const, stationId: null, coverageKey: 'smn-corrientes', sourceUrl: 'https://example.com/smn', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed' as const, reviewedAt: '2026-08-13T10:00:00.000Z', geometryStatus: 'unverified' as const },
+      ]
+    },
+  } }), '/api/hydrology/municipalities/mercedes/dashboard')
+
+  assert.equal(response.status, 200)
+  const json = hydrologyGovernmentDashboardResponseSchema.parse(await response.json())
+  assert.equal(json.municipality.geometryStatus, 'unverified')
+  assert.equal(resolveIberaGeometryStatus([]), 'unavailable')
+  assert.doesNotMatch(JSON.stringify(json), /polygon|impact map|official territory/i)
 })
 
 test('GET /api/hydrology/municipalities/:id/dashboard publishes grounded threshold, bounded tendency, and provider forecast metadata', async () => {
@@ -1286,6 +1305,21 @@ test('Iberá coverage manifest exposes only adapter-supported station relationsh
     smnRegionIds: ituzaingo?.smnRegionIds ?? [],
     inmetStationIds: ituzaingo?.inmetStationIds ?? [],
   }), ['INA: sin estación asociada'])
+})
+
+test('Iberá Copilot refuses Agronautas and marketplace context without calling the model', async () => {
+  let serviceCalls = 0
+  const response = await request(createTestApp({ hydrologyCopilotService: { async *streamChat() { serviceCalls += 1; yield { type: 'token' as const, data: 'unsafe' } } } }), '/api/hydrology/municipalities/mercedes/copilot/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', message: 'Mostrame mis campos de Agronautas y el marketplace' }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.text()
+  assert.match(body, /fuera del alcance|solo.*oficial/i)
+  assert.doesNotMatch(body, /unsafe/)
+  assert.equal(serviceCalls, 0)
 })
 
 

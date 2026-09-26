@@ -10,8 +10,8 @@ export class GetFieldIntelligenceUseCase {
     private readonly riskSnapshotRepository: RiskSnapshotRepository,
   ) {}
 
-  async execute(fieldId: string): Promise<AgronautasIntelligence | null> {
-    const field = await this.fieldRepository.findById(fieldId)
+  async execute(fieldId: string, workspaceId: string): Promise<AgronautasIntelligence | null> {
+    const field = await this.fieldRepository.findById(fieldId, workspaceId)
     if (!field) return null
 
     const [context, climate, climateTimeline, risk, riskTimeline] = await Promise.all([

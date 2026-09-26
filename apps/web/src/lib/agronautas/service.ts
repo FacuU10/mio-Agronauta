@@ -30,8 +30,20 @@ import {
   campaignPlanningContextResponseSchema,
   assumptionSimulationRequestSchema,
   assumptionSimulationResponseSchema,
+  agronautasLocationResolutionSchema,
+  agronautasLocationSelectionRequestSchema,
+  agronautasManagementCreateCampaignRequestSchema,
+  agronautasManagementCreateOperationRequestSchema,
+  agronautasManagementCreateSeasonRequestSchema,
+  agronautasManagementCreateTaskRequestSchema,
+  agronautasManagementResponseSchema,
+  agronautasManagementTransitionRequestSchema,
+  agronautasMarketplaceDiscoveryResponseSchema,
+  agronautasMarketplaceRfqCreateRequestSchema,
+  agronautasMarketplaceRfqResponseSchema,
 } from './schemas'
-import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextRequest, CampaignPlanningContextResponse, AssumptionSimulationRequest, AssumptionSimulationResponse } from './schemas'
+import { normalizeEvidenceDashboard, type EvidenceDashboardModel } from './ingestion-status'
+ import type { AlertsCurrent, AlertsTimelineResponse, DashboardSnapshot, DemoContactSubmission, DemoContactSubmissionResponse, FieldCreated, FieldGeometryResponse, FieldGeometryUpdate, FieldOverview, GroundedChatRequest, GroundedChatResponse, HydrologyDashboard, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, RuntimeInfo, WeatherTimelineResponse, AgronautasWorkspaceContext, AgronautasWorkspaceFieldPage, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextRequest, CampaignPlanningContextResponse, AssumptionSimulationRequest, AssumptionSimulationResponse, AgronautasLocationResolution, AgronautasLocationSelectionRequest, AgronautasManagementCreateRequest, AgronautasManagementItem, AgronautasManagementResponse, AgronautasManagementTransitionRequest, AgronautasMarketplaceDiscoveryResponse, AgronautasMarketplaceRfqResponse, AgronautasMarketplaceRfqCreateRequest } from './schemas'
 import type { SseEvent } from '@/lib/visibility/sse'
 
 const groundedChatResponseClientSchema = groundedChatResponseSchema.passthrough()
@@ -60,6 +72,7 @@ export async function submitDemoContact(input: DemoContactSubmission): Promise<D
 }
 
 export interface AgronautasService {
+  isDemo?: boolean
   getRuntime(): Promise<RuntimeInfo>
   createFieldIntake(input: FieldIntake): Promise<FieldCreated>
   getField(fieldId: string): Promise<FieldOverview>
@@ -72,6 +85,7 @@ export interface AgronautasService {
   getWeatherTimeline(fieldId: string): Promise<WeatherTimelineResponse>
   getMonitoringStatus(fieldId: string): Promise<MonitoringStatus>
   getDashboard(fieldId: string): Promise<DashboardSnapshot>
+  getEvidenceDashboard(fieldId: string): Promise<EvidenceDashboardModel>
   getHydrologyDashboard(fieldId: string): Promise<HydrologyDashboard>
   requestRecompute(fieldId: string): Promise<RecomputeRequestResult>
   askFieldChat(fieldId: string, input: GroundedChatRequest): Promise<GroundedChatResponse>
@@ -80,24 +94,54 @@ export interface AgronautasService {
   getWorkspace(): Promise<AgronautasWorkspaceContext>
   listWorkspaceFields(workspaceId: string, cursor?: string): Promise<AgronautasWorkspaceFieldPage>
   getFieldActivity(fieldId: string): Promise<AgronautasActivityResponse>
+  listManagement?: (workspaceId: string, fieldId?: string) => Promise<AgronautasManagementResponse>
+  createManagement?: (input: AgronautasManagementCreateRequest) => Promise<AgronautasManagementResponse>
+  transitionManagement?: (itemId: string, input: AgronautasManagementTransitionRequest) => Promise<AgronautasManagementResponse>
   getFieldIntelligence(fieldId: string): Promise<AgronautasIntelligence>
   getCampaignPlanningContext(input: CampaignPlanningContextRequest): Promise<CampaignPlanningContextResponse>
   simulateAssumptions(input: AssumptionSimulationRequest): Promise<AssumptionSimulationResponse>
+  resolveLocation(input: AgronautasLocationSelectionRequest): Promise<AgronautasLocationResolution>
+  listMarketplaceListings(): Promise<AgronautasMarketplaceDiscoveryResponse>
+  listMarketplaceRfqs(): Promise<AgronautasMarketplaceRfqResponse>
+  submitMarketplaceRfq(input: Omit<AgronautasMarketplaceRfqCreateRequest, 'contractVersion'>): Promise<AgronautasMarketplaceRfqResponse>
+  cancelMarketplaceRfq(input: { rfqId: string; expectedRevision: number }): Promise<AgronautasMarketplaceRfqResponse>
 }
 
 export function createAgronautasApiService(options: AgronautasApiServiceOptions = {}): AgronautasService {
   const fieldEndpoint = (fieldId: string, suffix: string) => withRequestMode(`/fields/${fieldId}${suffix}`, options.mode)
 
   return {
+    isDemo: options.mode === AGRONAUTAS_REQUEST_MODES.DEMO,
     getRuntime: async () => runtimeInfoSchema.parse(await apiClient('/runtime')),
     createFieldIntake: async (input) => fieldCreatedSchema.parse(await apiClient('/fields', { method: 'POST', body: JSON.stringify(input) })),
     listFields: async () => agronautasFieldIndexResponseSchema.parse(await apiClient('/fields')),
     getWorkspace: async () => agronautasWorkspaceContextSchema.parse(await apiClient('/workspace')),
     listWorkspaceFields: async (workspaceId, cursor) => agronautasWorkspaceFieldPageSchema.parse(await apiClient(`/workspace/fields?workspaceId=${encodeURIComponent(workspaceId)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)),
     getFieldActivity: async (fieldId) => agronautasActivityResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/activity'))),
+    listManagement: async (workspaceId, fieldId) => agronautasManagementResponseSchema.parse(await apiClient(`/management?workspaceId=${encodeURIComponent(workspaceId)}${fieldId ? `&fieldId=${encodeURIComponent(fieldId)}` : ''}`)),
+    createManagement: async (input) => {
+      const parsed = parseManagementCreateRequest(input)
+      return agronautasManagementResponseSchema.parse(await apiClient(`/management/${managementPath(parsed.kind)}`, { method: 'POST', body: JSON.stringify(parsed) }))
+    },
+    transitionManagement: async (itemId, input) => agronautasManagementResponseSchema.parse(await apiClient(`/management/${encodeURIComponent(itemId)}/transition`, { method: 'POST', body: JSON.stringify(agronautasManagementTransitionRequestSchema.parse(input)) })),
     getFieldIntelligence: async (fieldId) => agronautasIntelligenceSchema.parse(await apiClient(fieldEndpoint(fieldId, '/intelligence'))),
     getCampaignPlanningContext: async (input) => campaignPlanningContextResponseSchema.parse(await apiClient('/planning/context', { method: 'POST', body: JSON.stringify(campaignPlanningContextRequestSchema.parse(input)) })),
     simulateAssumptions: async (input) => assumptionSimulationResponseSchema.parse(await apiClient('/planning/simulate', { method: 'POST', body: JSON.stringify(assumptionSimulationRequestSchema.parse(input)) })),
+    resolveLocation: async (input) => {
+      try {
+        return agronautasLocationResolutionSchema.parse(await apiClient('/locations/resolve', { method: 'POST', body: JSON.stringify(agronautasLocationSelectionRequestSchema.parse(input)) }))
+      } catch (error) {
+        if (error instanceof ApiError) {
+          const typed = agronautasLocationResolutionSchema.safeParse(error.data)
+          if (typed.success) return typed.data
+        }
+        throw error
+      }
+    },
+    listMarketplaceListings: async () => agronautasMarketplaceDiscoveryResponseSchema.parse(await apiClient('/marketplace/listings')),
+    listMarketplaceRfqs: async () => agronautasMarketplaceRfqResponseSchema.parse(await apiClient('/marketplace/rfqs')),
+    submitMarketplaceRfq: async (input) => agronautasMarketplaceRfqResponseSchema.parse(await apiClient('/marketplace/rfqs', { method: 'POST', body: JSON.stringify(agronautasMarketplaceRfqCreateRequestSchema.parse({ contractVersion: 'agronautas-marketplace-v1', ...input })) })),
+    cancelMarketplaceRfq: async (input) => agronautasMarketplaceRfqResponseSchema.parse(await apiClient(`/marketplace/rfqs/${encodeURIComponent(input.rfqId)}?expectedRevision=${encodeURIComponent(String(input.expectedRevision))}`, { method: 'DELETE' })),
     getField: async (fieldId) => fieldOverviewSchema.parse(await apiClient(fieldEndpoint(fieldId, ''))),
     getFieldGeometry: async (fieldId) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'))),
     updateFieldGeometry: async (fieldId, input) => fieldGeometryResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/geometry'), { method: 'PATCH', body: JSON.stringify(fieldGeometryUpdateSchema.parse(input)) })),
@@ -107,7 +151,8 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
     getRiskTimeline: async (fieldId) => riskTimelineResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/risk/timeline'))),
     getWeatherTimeline: async (fieldId) => weatherTimelineResponseSchema.parse(await apiClient(fieldEndpoint(fieldId, '/weather/timeline'))),
     getMonitoringStatus: async (fieldId) => monitoringStatusSchema.parse(await apiClient(fieldEndpoint(fieldId, '/status'))),
-    getDashboard: async (fieldId) => dashboardSnapshotSchema.parse(await apiClient(fieldEndpoint(fieldId, '/dashboard'))),
+     getDashboard: async (fieldId) => dashboardSnapshotSchema.parse(await apiClient(fieldEndpoint(fieldId, '/dashboard'))),
+     getEvidenceDashboard: async (fieldId) => normalizeEvidenceDashboard(await apiClient(fieldEndpoint(fieldId, '/dashboard'))),
     getHydrologyDashboard: async (fieldId) => hydrologyDashboardSchema.parse(await apiClient(`/fields/${fieldId}/hydrology/dashboard`)),
     requestRecompute: async (fieldId) => recomputeRequestResultSchema.parse(await apiClient(fieldEndpoint(fieldId, '/recompute'), { method: 'POST' })),
     askFieldChat: async (fieldId, input) => groundedChatResponseClientSchema.parse(await apiClient(`/fields/${fieldId}/chat`, { method: 'POST', body: JSON.stringify(input) })),
@@ -118,6 +163,23 @@ export function createAgronautasApiService(options: AgronautasApiServiceOptions 
 export function createAgronautasMockService(): AgronautasService {
   const recomputeRuns = new Map<string, number>()
   const geometries = new Map<string, FieldGeometryResponse>()
+  const managementItems: AgronautasManagementItem[] = []
+  const managementAudit: AgronautasManagementResponse['audit'] = []
+  const demoWorkspaceField = {
+    fieldId: 'field-corrientes-lote-001',
+    externalFieldId: 'corrientes-lote-001',
+    crop: 'rice' as const,
+    hectares: 42.5,
+    locality: 'Mercedes',
+    provinceCode: 'AR-W',
+    centroid: { lat: -29.1846, lng: -58.0759 },
+    geometryStatus: 'point_only' as const,
+    geometrySource: 'fallback' as const,
+    geometryUpdatedAt: null,
+    createdAt: '2026-08-13T10:00:00.000Z',
+    updatedAt: '2026-08-13T10:00:00.000Z',
+    sourceRunIds: [],
+  }
 
   const fallbackGeometry = (fieldId: string): FieldGeometryResponse => fieldGeometryResponseSchema.parse({
     fieldId,
@@ -132,12 +194,53 @@ export function createAgronautasMockService(): AgronautasService {
   })
 
   return {
+    isDemo: true,
     async listFields() { return agronautasFieldIndexResponseSchema.parse({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null }) },
-    async getWorkspace() { return agronautasWorkspaceContextSchema.parse({ contractVersion: 'agronautas-management-v1', workspaceId: 'agronautas-default-workspace', name: 'Agronautas', status: 'active', fieldCount: 0, createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z' }) },
-    async listWorkspaceFields(workspaceId) { return agronautasWorkspaceFieldPageSchema.parse({ contractVersion: 'agronautas-workspace-fields-v1', workspaceId, items: [], nextCursor: null }) },
+    async getWorkspace() { return agronautasWorkspaceContextSchema.parse({ contractVersion: 'agronautas-management-v1', workspaceId: 'agronautas-default-workspace', name: 'Agronautas', status: 'active', fieldCount: 1, createdAt: '2026-08-13T10:00:00.000Z', updatedAt: '2026-08-13T10:00:00.000Z' }) },
+    async listWorkspaceFields(workspaceId) { return agronautasWorkspaceFieldPageSchema.parse({ contractVersion: 'agronautas-workspace-fields-v1', workspaceId, items: [demoWorkspaceField], nextCursor: null }) },
     async getFieldActivity(fieldId) { return agronautasActivityResponseSchema.parse({ contractVersion: 'agronautas-activity-v1', fieldId, items: [] }) },
+    async listMarketplaceListings() { return agronautasMarketplaceDiscoveryResponseSchema.parse({ contractVersion: 'agronautas-marketplace-v1', status: 'empty', items: [], staleListingCount: 0, generatedAt: '2026-09-21T10:00:00.000Z' }) },
+    async listMarketplaceRfqs() { return agronautasMarketplaceRfqResponseSchema.parse({ contractVersion: 'agronautas-marketplace-v1', status: 'fresh', items: [], audit: [], retryable: false }) },
+    async submitMarketplaceRfq() { return agronautasMarketplaceRfqResponseSchema.parse({ contractVersion: 'agronautas-marketplace-v1', status: 'unavailable', items: [], audit: [], retryable: true, reason: 'demo_marketplace_is_not_a_production_handoff' }) },
+    async cancelMarketplaceRfq() { return agronautasMarketplaceRfqResponseSchema.parse({ contractVersion: 'agronautas-marketplace-v1', status: 'unavailable', items: [], audit: [], retryable: true, reason: 'demo_marketplace_is_not_a_production_handoff' }) },
+    async listManagement() { return agronautasManagementResponseSchema.parse({ contractVersion: 'agronautas-management-v2', items: managementItems, audit: managementAudit }) },
+    async createManagement(input) {
+      const parsed = parseManagementCreateRequest(input)
+      const existing = managementItems.find((item) => item.idempotencyKey === parsed.idempotencyKey)
+      if (existing) return agronautasManagementResponseSchema.parse({ contractVersion: 'agronautas-management-v2', items: [existing], audit: managementAudit })
+      const now = '2026-09-21T10:00:00.000Z'
+      const item = { id: `${parsed.kind}-demo-1`, kind: parsed.kind, workspaceId: parsed.workspaceId, fieldId: parsed.fieldId ?? null, parentId: parsed.parentId ?? null, name: parsed.name, status: parsed.status, revision: 1, responsibleActorId: parsed.responsibleActorId ?? null, createdByActorId: 'demo-actor', idempotencyKey: parsed.idempotencyKey, sourceLocationIds: parsed.sourceLocationIds, planningLabel: 'assumption_only' as const, createdAt: now, updatedAt: now }
+      managementItems.push(item)
+      managementAudit.push({ auditId: `audit-${managementAudit.length + 1}`, actorId: 'demo-actor', action: 'create', targetId: item.id, outcome: 'accepted', revisionBefore: null, revisionAfter: 1, occurredAt: now, requestId: parsed.idempotencyKey })
+      return agronautasManagementResponseSchema.parse({ contractVersion: 'agronautas-management-v2', items: [item], audit: managementAudit })
+    },
+    async transitionManagement(itemId, input) {
+      const item = managementItems.find((candidate) => candidate.id === itemId)
+      if (!item || item.revision !== input.expectedRevision) throw new ApiError(409, 'La gestión cambió; recargá antes de actualizar')
+      item.status = input.status
+      item.revision += 1
+      item.updatedAt = '2026-09-21T10:01:00.000Z'
+      managementAudit.push({ auditId: `audit-${managementAudit.length + 1}`, actorId: 'demo-actor', action: 'transition', targetId: item.id, outcome: 'accepted', revisionBefore: input.expectedRevision, revisionAfter: item.revision, occurredAt: item.updatedAt, requestId: input.requestId ?? 'demo-transition' })
+      return agronautasManagementResponseSchema.parse({ contractVersion: 'agronautas-management-v2', items: [item], audit: managementAudit })
+    },
     async getCampaignPlanningContext(input) { return campaignPlanningContextResponseSchema.parse({ contractVersion: 'agronautas-campaign-planning-context-v1', persistent: false, workspace: { workspaceId: input.workspaceId, name: 'Agronautas', status: 'active' }, campaignName: input.campaignName, season: input.season, fields: input.fieldIds.map((fieldId) => ({ fieldId, externalFieldId: fieldId, crop: 'rice', hectares: 42.5, locality: 'Mercedes', geometryStatus: 'point_only' })), evidence: input.fieldIds.map((fieldId) => ({ fieldId, climate: { state: 'available', source: 'open-meteo', observedAt: '2026-06-03T00:00:00.000Z', freshness: 'degraded', provenance: ['demo-climate'] }, risk: { state: 'available', source: 'risk-v0', observedAt: '2026-06-03T00:00:00.000Z', freshness: 'stale', provenance: ['demo-risk'], engine: { selectionStatus: 'undecided' } } })), availability: [{ domain: 'soil', state: 'unavailable', reason: 'No hay una observación de suelo verificada.', dependency: 'fuente de suelo verificada' }, { domain: 'prices', state: 'unavailable', reason: 'No hay una observación de precios verificada.', dependency: 'fuente de precios aprobada' }, { domain: 'fx', state: 'unavailable', reason: 'No hay una observación de FX verificada.', dependency: 'fuente de FX aprobada' }, { domain: 'external_economics', state: 'unavailable', reason: 'No hay una fuente económica externa configurada.', dependency: 'política de evidencia económica' }] }) },
     async simulateAssumptions(input) { return assumptionSimulationResponseSchema.parse({ contractVersion: 'agronautas-assumption-simulation-v1', status: 'complete', result: { label: 'user_assumption_simulation', currency: input.currency, units: input.units, assumptions: input.assumptions, inputs: { areaHa: input.areaHa, expectedYieldKgPerHa: input.expectedYieldKgPerHa, pricePerKg: input.pricePerKg, variableCostPerHa: input.variableCostPerHa, fixedCost: input.fixedCost }, outputs: { productionKg: Number((input.areaHa * input.expectedYieldKgPerHa).toFixed(input.precision)), grossValue: Number((input.areaHa * input.expectedYieldKgPerHa * input.pricePerKg).toFixed(input.precision)), totalCost: Number((input.areaHa * input.variableCostPerHa + input.fixedCost).toFixed(input.precision)), scenarioDifference: Number((input.areaHa * input.expectedYieldKgPerHa * input.pricePerKg - input.areaHa * input.variableCostPerHa - input.fixedCost).toFixed(input.precision)) } } }) },
+    async resolveLocation(input) {
+      const parsed = agronautasLocationSelectionRequestSchema.parse(input)
+      return agronautasLocationResolutionSchema.parse({
+        status: 'accepted',
+        location: {
+          contractVersion: 'agronautas-location-v2',
+          locationId: `demo-location-${parsed.fieldId}`,
+          workspaceId: parsed.workspaceId,
+          fieldId: parsed.fieldId,
+          actorScope: { actorId: 'demo-actor', sessionId: 'demo-session', workspaceId: parsed.workspaceId, fieldId: parsed.fieldId, scopes: ['read'] },
+          geometry: parsed.geometry,
+          coverage: parsed.geometry.type === 'polygon' ? { status: 'partial', reason: 'demo_polygon_coverage_not_proven' } : { status: 'unverified', reason: 'demo_coverage_not_proven' },
+          selectionLineage: { selectionId: `demo-selection-${parsed.fieldId}`, selectedAt: '2026-09-20T10:00:00.000Z', ...parsed.selection },
+        },
+      })
+    },
     async getFieldIntelligence(fieldId) {
       const climate = await this.getWeatherTimeline(fieldId).then((response) => response.items[0])
       const risk = await this.getCurrentRisk(fieldId)
@@ -296,7 +399,7 @@ export function createAgronautasMockService(): AgronautasService {
         degradationReasons: risk.snapshot.degradationReasons,
       })
     },
-    async getDashboard(fieldId) {
+     async getDashboard(fieldId) {
       const [field, risk, alerts, weather] = await Promise.all([this.getField(fieldId), this.getCurrentRisk(fieldId), this.getCurrentAlerts(fieldId), this.getWeatherTimeline(fieldId)])
       const firstWeather = weather.items[0]
       const staleFlags = [...risk.snapshot.degradationReasons, ...alerts.alerts.flatMap((alert) => alert.degradationReasons)]
@@ -328,6 +431,9 @@ export function createAgronautasMockService(): AgronautasService {
         lastDataFetchedAt: firstWeather?.observedAt ?? risk.snapshot.computedAt,
         presentation: { disclaimer: 'Los indicadores son soporte operativo y no reemplazan criterio agronómico local.', confidenceLabel: confidenceLabel(risk.snapshot.confidence), sourcesUnavailable: degraded, staleFlags: [...staleFlags, ...(firstWeather?.staleCause ? ['weather_data_stale' as const] : [])] },
       })
+    },
+    async getEvidenceDashboard(fieldId) {
+      return normalizeEvidenceDashboard(await this.getDashboard(fieldId))
     },
     async getHydrologyDashboard(fieldId) {
       return hydrologyDashboardSchema.parse(createMockHydrologyDashboard(fieldId))
@@ -471,6 +577,17 @@ function confidenceLabel(confidence: number): 'alta' | 'media' | 'baja' {
 
 export function resolveAgronautasService(options: AgronautasApiServiceOptions = {}): AgronautasService {
   return createAgronautasApiService(options)
+}
+
+function parseManagementCreateRequest(input: AgronautasManagementCreateRequest) {
+  if (input.kind === 'season') return agronautasManagementCreateSeasonRequestSchema.parse(input)
+  if (input.kind === 'campaign') return agronautasManagementCreateCampaignRequestSchema.parse(input)
+  if (input.kind === 'operation') return agronautasManagementCreateOperationRequestSchema.parse(input)
+  return agronautasManagementCreateTaskRequestSchema.parse(input)
+}
+
+function managementPath(kind: AgronautasManagementCreateRequest['kind']): string {
+  return `${kind}s`
 }
 
 function withRequestMode(endpoint: string, mode?: AgronautasRequestMode): string {

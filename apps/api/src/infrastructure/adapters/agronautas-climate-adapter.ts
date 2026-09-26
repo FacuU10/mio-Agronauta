@@ -1,4 +1,6 @@
 import type { ClimateSummary } from '../../domain/entities/agronautas'
+export { createClimateProvider } from './agronautas-signal-provider'
+export type { ProviderPort, ProviderPortOptions, ProviderRequest, ProviderScope } from './agronautas-signal-provider'
 
 export interface ClimateAdapterResult {
   observedAt: Date

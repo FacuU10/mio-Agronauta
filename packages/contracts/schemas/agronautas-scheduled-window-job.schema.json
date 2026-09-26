@@ -10,10 +10,13 @@
       "required": ["provider", "signalType", "windowStart", "windowEnd", "runId"],
       "properties": {
         "provider": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "signalType": { "enum": ["climate", "satellite", "weather_alert", "fire", "soil"] },
+        "signalType": { "enum": ["climate", "weather", "satellite", "weather_alert", "fire", "soil"] },
         "windowStart": { "type": "string", "format": "date-time" },
         "windowEnd": { "type": "string", "format": "date-time" },
-        "runId": { "type": "string", "minLength": 1, "maxLength": 160 }
+        "runId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "locationId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "fieldId": { "type": "string", "minLength": 1, "maxLength": 160 }
       },
       "additionalProperties": false
     }

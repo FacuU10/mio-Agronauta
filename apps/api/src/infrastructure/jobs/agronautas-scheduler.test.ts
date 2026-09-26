@@ -165,6 +165,39 @@ test('scheduled-window dispatcher publishes the v2 envelope when runtime v2 is e
   }
 })
 
+test('scheduled-window dispatcher carries the complete location scope into the v2 queue envelope', async () => {
+  const lists: Record<string, string[]> = {}
+  const redis = {
+    async set() { return 'OK' as const },
+    async del() { return 1 },
+    async lpush(key: string, value: string) {
+      lists[key] ??= []
+      lists[key].unshift(value)
+      return lists[key].length
+    },
+  }
+  const previous = process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+  process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = 'true'
+  try {
+    const dispatcher = new RedisAgronautasRuntimeDispatcher(redis)
+    await dispatcher.enqueue({
+      provider: 'open-meteo', signalType: 'climate',
+      windowStart: new Date('2026-07-04T19:00:00.000Z'), windowEnd: new Date('2026-07-04T20:00:00.000Z'),
+      runId: 'scoped-run-1', locationId: 'location-1', workspaceId: 'workspace-1', fieldId: 'field-1',
+    })
+
+    const parsed = runtimeJobEnvelopeSchema.parse(JSON.parse(lists['bull:agronautas-runtime:wait']?.[0] ?? '{}'))
+    assert.deepEqual(parsed.sourceWindow && {
+      locationId: parsed.sourceWindow.locationId,
+      workspaceId: parsed.sourceWindow.workspaceId,
+      fieldId: parsed.sourceWindow.fieldId,
+    }, { locationId: 'location-1', workspaceId: 'workspace-1', fieldId: 'field-1' })
+  } finally {
+    if (previous === undefined) delete process.env['AGRONAUTAS_RUNTIME_V2_ENABLED']
+    else process.env['AGRONAUTAS_RUNTIME_V2_ENABLED'] = previous
+  }
+})
+
 test('scheduled-window schema rejects malformed windows and contract drift before queue publication', () => {
   const malformed = {
     contractVersion: '0.9.0',

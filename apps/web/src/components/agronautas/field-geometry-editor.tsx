@@ -11,9 +11,10 @@ interface FieldGeometryEditorProps {
   fieldId: string
   initialGeometry: FieldGeometryResponse
   onSave: (input: FieldGeometryUpdate) => Promise<FieldGeometryResponse>
+  onSelectPolygon?: (polygonWkt: string) => Promise<void>
 }
 
-export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEditorProps) {
+export function FieldGeometryEditor({ initialGeometry, onSave, onSelectPolygon }: FieldGeometryEditorProps) {
   const adapter = createAgronautasMapAdapter()
   const [points, setPoints] = useState<MapPoint[]>(parseWktPoints(initialGeometry.polygonWkt))
   const [savedGeometry, setSavedGeometry] = useState(initialGeometry)
@@ -52,7 +53,8 @@ export function FieldGeometryEditor({ initialGeometry, onSave }: FieldGeometryEd
     setError(null)
     setSaveMessage(null)
     try {
-      const result = await onSave({ polygonWkt: draft.polygonWkt, expectedUpdatedAt: savedGeometry.updatedAt ?? undefined })
+       const result = await onSave({ polygonWkt: draft.polygonWkt, expectedUpdatedAt: savedGeometry.updatedAt ?? undefined })
+       if (onSelectPolygon && draft.polygonWkt) await onSelectPolygon(draft.polygonWkt)
       setSavedGeometry(result)
       setSaveMessage('Guardado por el backend. El área confirmada queda bajo autoridad del servidor.')
     } catch (cause) {

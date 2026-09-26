@@ -1,0 +1,20 @@
+{
+  "verifier": "agronautas-browser-runtime-evidence-v1",
+  "runId": "browser-20260910T122537Z",
+  "outcome": "blocked",
+  "productionProven": false,
+  "topology": "configured-browser-target",
+  "fullDatabaseRedisWorkerCronRender": "unproven",
+  "pageUrl": "about:blank",
+  "snapshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\test-results\\apps-web-tests-e2e-agronau-8231b-vidence-without-route-stubs\\agronautas-reality-runtime-browser-20260910T122537Z/snapshot.html",
+  "screenshotPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\test-results\\apps-web-tests-e2e-agronau-8231b-vidence-without-route-stubs\\agronautas-reality-runtime-browser-20260910T122537Z/screenshot.png",
+  "networkPath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\test-results\\apps-web-tests-e2e-agronau-8231b-vidence-without-route-stubs\\agronautas-reality-runtime-browser-20260910T122537Z/network.json",
+  "consolePath": "C:\\Users\\mmmau\\Agronautas\\monorepo-js-baseline\\test-results\\apps-web-tests-e2e-agronau-8231b-vidence-without-route-stubs\\agronautas-reality-runtime-browser-20260910T122537Z/console.json",
+  "consoleStatus": "captured",
+  "runtimeWarnings": [],
+  "bffRuntime": {
+    "status": null,
+    "body": null
+  },
+  "blockedReason": "page.goto: Protocol error (Page.navigate): Cannot navigate to invalid URL\nCall log:\n\u001b[2m  - navigating to \"/demo\", waiting until \"domcontentloaded\"\u001b[22m\n"
+}

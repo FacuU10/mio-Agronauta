@@ -84,3 +84,25 @@ test('ProductShell exposes responsive shell hooks for bounded navigation and foc
   assert.ok(view.container.querySelector('.responsive-nav'))
   assert.ok(view.container.querySelector('main.responsive-main'))
 })
+
+test('ProductShell announces the active destination without replacing browser links', () => {
+  setupDom()
+  cleanup()
+
+  const view = render(
+    <ProductShell
+      product="agronautas"
+      title="Marketplace Agronautas"
+      navItems={[
+        { href: '/agronautas', label: 'Workspace' },
+        { href: '/agronautas/marketplace', label: 'Marketplace', active: true },
+      ]}
+    >
+      <p>Catálogo</p>
+    </ProductShell>,
+  )
+
+  assert.equal(view.getByRole('link', { name: 'Marketplace' }).getAttribute('aria-current'), 'page')
+  assert.equal(view.getByRole('link', { name: 'Workspace' }).getAttribute('aria-current'), null)
+  assert.equal(view.getByRole('link', { name: 'Marketplace' }).getAttribute('href'), '/agronautas/marketplace')
+})

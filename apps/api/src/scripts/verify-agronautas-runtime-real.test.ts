@@ -3,9 +3,13 @@ import test from 'node:test'
 import {
   buildRuntimeManifest,
   classifyAuthEvidence,
+  classifyEvidenceSeparation,
+  classifyProviderEvidence,
+  classifyScopeEvidence,
   evaluateHydrologyWriteGate,
   extractWorkerReadiness,
   resolveRuntimeVerificationConfig,
+  resolveRuntimeExitCode,
   type RuntimeEvidenceCell,
 } from './verify-agronautas-runtime-real'
 import * as runtimeVerifier from './verify-agronautas-runtime-real'
@@ -60,13 +64,18 @@ test('runtime verification defaults to local API/web endpoints and keeps writes 
     webBaseUrl: 'http://127.0.0.1:3000',
     artifactRoot: 'artifacts/agronautas-runtime',
     fieldId: null,
-    bearerToken: null,
+    accessToken: null,
+    bffAssertionConfigured: false,
     queueProofEnabled: false,
     chatProofEnabled: false,
     hydrologyWriteEnabled: false,
     openMeteoCommercialUseApproved: false,
     renderServiceId: null,
     renderApiToken: null,
+    environment: 'local',
+    firmsApiKeyConfigured: false,
+    satelliteCredentialsConfigured: false,
+    unauthorizedFieldId: null,
   })
 })
 
@@ -75,7 +84,8 @@ test('runtime verification trims configured values without turning a fixture int
     PLAYWRIGHT_API_BASE_URL: ' https://api.example.test/ ',
     PLAYWRIGHT_BASE_URL: ' https://web.example.test/ ',
     AGRONAUTAS_RUNTIME_FIELD_ID: ' field-42 ',
-    AGRONAUTAS_BFF_BEARER_TOKEN: ' reader-secret ',
+    AGRONAUTAS_RUNTIME_ACCESS_TOKEN: ' reader-access-token ',
+    AGRONAUTAS_BFF_BEARER_TOKEN: ' bff-assertion-secret ',
     AGRONAUTAS_RUNTIME_QUEUE_PROOF: 'true',
     AGRONAUTAS_RUNTIME_CHAT_PROOF: 'true',
     AGRONAUTAS_RUNTIME_HYDROLOGY_WRITE: 'true',
@@ -87,13 +97,17 @@ test('runtime verification trims configured values without turning a fixture int
   assert.equal(config.apiBaseUrl, 'https://api.example.test')
   assert.equal(config.webBaseUrl, 'https://web.example.test')
   assert.equal(config.fieldId, 'field-42')
-  assert.equal(config.bearerToken, 'reader-secret')
+  assert.equal(config.accessToken, 'reader-access-token')
+  assert.equal(config.bffAssertionConfigured, true)
   assert.equal(config.queueProofEnabled, true)
   assert.equal(config.chatProofEnabled, true)
   assert.equal(config.hydrologyWriteEnabled, true)
   assert.equal(config.openMeteoCommercialUseApproved, true)
   assert.equal(config.renderServiceId, 'srv-1')
   assert.equal(config.renderApiToken, 'render-secret')
+  assert.equal(config.environment, 'local')
+  assert.equal(config.firmsApiKeyConfigured, false)
+  assert.equal(config.satelliteCredentialsConfigured, false)
 })
 
 test('hydrology writes are unavailable without both existing cron credentials', () => {
@@ -135,6 +149,12 @@ test('runtime manifest preserves blocked and unavailable states instead of colla
   assert.deepEqual(manifest.blockedCapabilities, ['api', 'worker', 'render'])
   assert.equal(manifest.productionProven, false)
   assert.equal(manifest.providerLiveEvidence, false)
+})
+
+test('runtime verifier exits non-zero when prerequisites leave the matrix incomplete or blocked', () => {
+  assert.equal(resolveRuntimeExitCode({ status: 'blocked' }), 1)
+  assert.equal(resolveRuntimeExitCode({ status: 'incomplete' }), 1)
+  assert.equal(resolveRuntimeExitCode({ status: 'complete' }), 0)
 })
 
 test('runtime manifest records worker pytest unavailability without a historical pass', () => {
@@ -338,4 +358,107 @@ test('runtime receipt rejects credentialed URLs, tokens, database strings, raw p
   }).map(([name]) => name)
 
   assert.deepEqual(leaked, [])
+})
+
+test('provider evidence fails closed for missing prerequisites and never promotes unavailable data', () => {
+  const result = classifyProviderEvidence({
+    provider: 'nasa-firms',
+    configured: false,
+    providerMode: 'unavailable',
+    freshness: 'missing',
+    schemaStatus: 'unavailable',
+    degradationReasons: ['credential_unavailable'],
+  })
+
+  assert.equal(result.status, 'unavailable')
+  assert.match(result.detail, /prerequisite|credential/i)
+  assert.doesNotMatch(JSON.stringify(result), /live|fresh|ready/i)
+})
+
+test('provider evidence preserves stale and blocked outcomes as non-ready', () => {
+  const stale = classifyProviderEvidence({
+    provider: 'open-meteo',
+    configured: true,
+    providerMode: 'live',
+    freshness: 'stale',
+    schemaStatus: 'valid',
+    degradationReasons: ['last_success_is_stale'],
+  })
+  const blocked = classifyProviderEvidence({
+    provider: 'sentinel-stac',
+    configured: true,
+    providerMode: 'seam',
+    freshness: 'degraded',
+    schemaStatus: 'invalid',
+    degradationReasons: ['satellite_proof_incomplete'],
+  })
+
+  assert.equal(stale.status, 'blocked')
+  assert.equal(blocked.status, 'blocked')
+  assert.doesNotMatch(JSON.stringify({ stale, blocked }), /status":"pass"|ready/i)
+})
+
+test('local and production evidence are explicit and cannot be merged into a readiness claim', () => {
+  const separation = classifyEvidenceSeparation({
+    environment: 'local',
+    productionEvidenceObserved: false,
+  })
+
+  assert.deepEqual(separation, {
+    environment: 'local',
+    localEvidence: 'recorded',
+    productionEvidence: 'unverified',
+    productionReady: false,
+  })
+})
+
+test('scope evidence requires a real authorized field and an explicit forbidden response for an unauthorized field', () => {
+  const denied = classifyScopeEvidence({
+    tokenConfigured: true,
+    authorizedFieldId: 'field-authorized',
+    authorizedStatus: 200,
+    unauthorizedFieldId: 'field-other-workspace',
+    unauthorizedStatus: 403,
+  })
+  const leaked = classifyScopeEvidence({
+    tokenConfigured: true,
+    authorizedFieldId: 'field-authorized',
+    authorizedStatus: 200,
+    unauthorizedFieldId: 'field-other-workspace',
+    unauthorizedStatus: 200,
+  })
+
+  assert.equal(denied.scope, 'available')
+  assert.equal(denied.claims.unauthorizedScope403, true)
+  assert.equal(leaked.scope, 'blocked')
+  assert.equal(leaked.claims.unauthorizedScope403, false)
+  assert.doesNotMatch(JSON.stringify(leaked), /ready|productionReady.*true/i)
+})
+
+test('scope evidence remains unavailable when the unauthorized field proof is not configured', () => {
+  const result = classifyScopeEvidence({
+    tokenConfigured: true,
+    authorizedFieldId: 'field-authorized',
+    authorizedStatus: 200,
+    unauthorizedFieldId: null,
+    unauthorizedStatus: null,
+  })
+
+  assert.equal(result.scope, 'unavailable')
+  assert.equal(result.claims.authorizedField200, true)
+  assert.equal(result.claims.unauthorizedScope403, false)
+})
+
+test('production evidence stays unverified even when the verifier is run with production configuration', () => {
+  const separation = classifyEvidenceSeparation({
+    environment: 'production',
+    productionEvidenceObserved: false,
+  })
+
+  assert.deepEqual(separation, {
+    environment: 'production',
+    localEvidence: 'unverified',
+    productionEvidence: 'unverified',
+    productionReady: false,
+  })
 })

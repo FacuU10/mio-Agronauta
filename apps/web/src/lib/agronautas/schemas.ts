@@ -29,6 +29,22 @@ import {
   assumptionSimulationResponseSchema,
   runtimeInfoSchema,
   evidenceEnvelopeSchema,
+  agronautasEvidenceV2Schema,
+  agronautasReadinessV2Schema,
+  agronautasLocationResolutionSchema,
+  agronautasLocationSelectionRequestSchema,
+  agronautasManagementCreateCampaignRequestSchema,
+  agronautasManagementCreateOperationRequestSchema,
+  agronautasManagementCreateSeasonRequestSchema,
+  agronautasManagementCreateTaskRequestSchema,
+  agronautasManagementResponseSchema,
+  agronautasManagementTransitionRequestSchema,
+  agronautasMarketplaceDiscoveryResponseSchema,
+  agronautasMarketplaceRfqCreateRequestSchema,
+  agronautasMarketplaceRfqResponseSchema,
+  type AgronautasCanonicalLocation,
+  type AgronautasLocationResolution,
+  type AgronautasLocationSelectionRequest,
   type EvidenceEnvelope as SharedEvidenceEnvelope,
   type RuntimeInfo as SharedRuntimeInfo,
 } from '@repo/zod-schemas'
@@ -62,6 +78,19 @@ export {
   assumptionSimulationResponseSchema,
   runtimeInfoSchema,
   evidenceEnvelopeSchema,
+  agronautasEvidenceV2Schema,
+  agronautasReadinessV2Schema,
+  agronautasLocationResolutionSchema,
+  agronautasLocationSelectionRequestSchema,
+  agronautasManagementCreateCampaignRequestSchema,
+  agronautasManagementCreateOperationRequestSchema,
+  agronautasManagementCreateSeasonRequestSchema,
+  agronautasManagementCreateTaskRequestSchema,
+  agronautasManagementResponseSchema,
+  agronautasManagementTransitionRequestSchema,
+  agronautasMarketplaceDiscoveryResponseSchema,
+  agronautasMarketplaceRfqCreateRequestSchema,
+  agronautasMarketplaceRfqResponseSchema,
 }
 
 export const fieldCreatedSchema = z.object({
@@ -173,6 +202,8 @@ export type AlertsTimelineResponse = z.infer<typeof alertsTimelineResponseSchema
 export type ContractError = z.infer<typeof contractErrorSchema>
 export type RuntimeInfo = SharedRuntimeInfo
 export type EvidenceEnvelope = SharedEvidenceEnvelope
+export type AgronautasEvidenceV2 = import('@repo/zod-schemas').AgronautasEvidenceV2
+export type AgronautasReadinessV2 = import('@repo/zod-schemas').AgronautasReadinessV2
 export type HydrologyDashboard = z.infer<typeof hydrologyDashboardSchema>
 export type HydrologyItem = z.infer<typeof hydrologyItemSchema>
 export type DemoContactSubmission = z.infer<typeof demoContactSubmissionSchema>
@@ -190,9 +221,16 @@ export type AgronautasWorkspaceContext = z.infer<typeof agronautasWorkspaceConte
 export type AgronautasWorkspaceFieldPage = z.infer<typeof agronautasWorkspaceFieldPageSchema>
 export type AgronautasActivityResponse = z.infer<typeof agronautasActivityResponseSchema>
 export type AgronautasIntelligence = z.infer<typeof agronautasIntelligenceSchema>
+export type AgronautasManagementResponse = z.infer<typeof agronautasManagementResponseSchema>
+export type AgronautasMarketplaceDiscoveryResponse = z.infer<typeof agronautasMarketplaceDiscoveryResponseSchema>
+export type AgronautasMarketplaceRfqResponse = z.infer<typeof agronautasMarketplaceRfqResponseSchema>
+export type AgronautasMarketplaceRfqCreateRequest = z.infer<typeof agronautasMarketplaceRfqCreateRequestSchema>
 export type CampaignPlanningContextRequest = z.infer<typeof campaignPlanningContextRequestSchema>
 export type CampaignPlanningContextResponse = z.infer<typeof campaignPlanningContextResponseSchema>
 export type AssumptionSimulationRequest = z.infer<typeof assumptionSimulationRequestSchema>
 export type AssumptionSimulationResponse = z.infer<typeof assumptionSimulationResponseSchema>
 export type GroundedChatRequest = z.infer<typeof groundedChatRequestSchema>
 export type GroundedChatResponse = z.infer<typeof groundedChatResponseSchema>
+export type { AgronautasCanonicalLocation, AgronautasLocationResolution, AgronautasLocationSelectionRequest }
+export type { AgronautasManagementCreateRequest, AgronautasManagementItem, AgronautasManagementAuditItem, AgronautasManagementTransitionRequest } from '@repo/zod-schemas'
+export type { AgronautasMarketplaceListing, AgronautasMarketplaceRfq, AgronautasMarketplaceAuditItem } from '@repo/zod-schemas'

@@ -89,6 +89,9 @@ export class RedisAgronautasRuntimeDispatcher implements AgronautasRuntimeDispat
         runId: window.runId,
         requestId: `scheduler:${window.runId}`,
         correlationId: window.runId,
+        locationId: window.locationId,
+        workspaceId: window.workspaceId,
+        fieldId: window.fieldId,
       })
       : createAgronautasScheduledWindowJob({
         window,

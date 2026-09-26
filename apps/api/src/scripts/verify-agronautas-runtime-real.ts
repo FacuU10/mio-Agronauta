@@ -5,7 +5,8 @@ import { execFile } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { createGeorefAdapter, createNasaPowerDailyAdapter, createOpenMeteoAdapter, type ProviderEvidenceResult } from '../infrastructure/adapters/agronautas-provider-adapters'
+import { createNasaFirmsAdapter, type ProviderEvidenceResult } from '../infrastructure/adapters/agronautas-provider-adapters'
+import { createClimateProvider, createSatelliteProvider, createSmnProvider, type ProviderPort } from '../infrastructure/adapters/agronautas-signal-provider'
 import { RedisAgronautasRuntimeDispatcher } from '../infrastructure/queue/agronautas-runtime-dispatcher'
 import type { SourceWindow } from '../infrastructure/jobs/agronautas-scheduler'
 
@@ -30,6 +31,13 @@ const RUNTIME_CHECK = {
   HYDROLOGY: 'hydrology',
   RENDER: 'render',
   WORKER_TESTS: 'worker_tests',
+  PROVIDER_OPEN_METEO: 'provider_open_meteo',
+  PROVIDER_SMN: 'provider_smn',
+  PROVIDER_SATELLITE: 'provider_satellite',
+  PROVIDER_FIRMS: 'provider_firms',
+  PROVIDER_HYDROLOGY: 'provider_hydrology',
+  PROVIDER_COPILOT: 'provider_copilot',
+  SCOPE: 'scope',
 } as const
 
 type RuntimeCheckName = (typeof RUNTIME_CHECK)[keyof typeof RUNTIME_CHECK]
@@ -45,13 +53,18 @@ export interface RuntimeVerificationConfig {
   webBaseUrl: string
   artifactRoot: string
   fieldId: string | null
-  bearerToken: string | null
+  accessToken: string | null
+  bffAssertionConfigured: boolean
   queueProofEnabled: boolean
   chatProofEnabled: boolean
   hydrologyWriteEnabled: boolean
   openMeteoCommercialUseApproved: boolean
   renderServiceId: string | null
   renderApiToken: string | null
+  environment: 'local' | 'production'
+  firmsApiKeyConfigured: boolean
+  satelliteCredentialsConfigured: boolean
+  unauthorizedFieldId: string | null
 }
 
 export interface RuntimeVerificationManifest {
@@ -77,6 +90,12 @@ export interface RuntimeVerificationManifest {
     fullDatabaseRedisWorkerCronRender: 'unproven'
   }
   checks: Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>>
+  evidenceSeparation: {
+    environment: 'local' | 'production'
+    localEvidence: 'recorded' | 'unverified'
+    productionEvidence: 'recorded' | 'unverified'
+    productionReady: false
+  }
 }
 
 export interface WorkerReadinessEvidence {
@@ -125,6 +144,23 @@ export interface AuthEvidenceClassification {
     authenticatedRuntime200: boolean
     authenticatedStatus200: boolean
     authenticatedChat200: boolean
+  }
+}
+
+export interface ScopeEvidenceInput {
+  tokenConfigured: boolean
+  authorizedFieldId: string | null
+  authorizedStatus: number | null
+  unauthorizedFieldId: string | null
+  unauthorizedStatus: number | null
+}
+
+export interface ScopeEvidenceClassification {
+  scope: 'available' | 'unavailable' | 'blocked'
+  detail: string
+  claims: {
+    authorizedField200: boolean
+    unauthorizedScope403: boolean
   }
 }
 
@@ -192,13 +228,18 @@ export function resolveRuntimeVerificationConfig(env: NodeJS.ProcessEnv = proces
     webBaseUrl: normalizeUrl(env['PLAYWRIGHT_BASE_URL'] ?? env['AGRONAUTAS_RUNTIME_WEB_URL'] ?? DEFAULT_WEB_BASE_URL),
     artifactRoot: normalizeValue(env['AGRONAUTAS_RUNTIME_ARTIFACT_ROOT']) ?? DEFAULT_ARTIFACT_ROOT,
     fieldId: normalizeValue(env['AGRONAUTAS_RUNTIME_FIELD_ID']) ?? null,
-    bearerToken: normalizeValue(env['AGRONAUTAS_BFF_BEARER_TOKEN'] ?? env['AGRONAUTAS_AUTH_TOKEN_OPERATOR'] ?? env['AGRONAUTAS_AUTH_TOKEN_READER']) ?? null,
+    accessToken: normalizeValue(env['AGRONAUTAS_RUNTIME_ACCESS_TOKEN']) ?? null,
+    bffAssertionConfigured: Boolean(normalizeValue(env['AGRONAUTAS_BFF_BEARER_TOKEN'])),
     queueProofEnabled: parseBoolean(env['AGRONAUTAS_RUNTIME_QUEUE_PROOF']),
     chatProofEnabled: parseBoolean(env['AGRONAUTAS_RUNTIME_CHAT_PROOF']),
     hydrologyWriteEnabled: parseBoolean(env['AGRONAUTAS_RUNTIME_HYDROLOGY_WRITE']),
     openMeteoCommercialUseApproved: parseBoolean(env['AGRONAUTAS_OPEN_METEO_COMMERCIAL_APPROVED']),
     renderServiceId: normalizeValue(env['RENDER_SERVICE_ID']) ?? null,
     renderApiToken: normalizeValue(env['RENDER_API_TOKEN']) ?? null,
+    environment: env['AGRONAUTAS_RUNTIME_ENVIRONMENT']?.trim().toLowerCase() === 'production' ? 'production' : 'local',
+    firmsApiKeyConfigured: Boolean(normalizeValue(env['FIRMS_API_KEY'] ?? env['NASA_FIRMS_API_KEY'])),
+    satelliteCredentialsConfigured: Boolean(normalizeValue(env['SENTINEL_CLIENT_ID']) && normalizeValue(env['SENTINEL_CLIENT_SECRET'])),
+    unauthorizedFieldId: normalizeValue(env['AGRONAUTAS_RUNTIME_UNAUTHORIZED_FIELD_ID']) ?? null,
   }
 }
 
@@ -255,6 +296,37 @@ export function buildRuntimeManifest(input: ManifestInput): RuntimeVerificationM
       fullDatabaseRedisWorkerCronRender: 'unproven',
     },
     checks,
+    evidenceSeparation: classifyEvidenceSeparation({ environment: 'local', productionEvidenceObserved: false }),
+  }
+}
+
+export function resolveRuntimeExitCode(input: Pick<RuntimeVerificationManifest, 'status'>): 0 | 1 {
+  return input.status === 'complete' ? 0 : 1
+}
+
+export interface ProviderEvidenceClassificationInput {
+  provider: string
+  configured: boolean
+  providerMode: string
+  freshness: string
+  schemaStatus: string
+  degradationReasons: string[]
+}
+
+export function classifyProviderEvidence(input: ProviderEvidenceClassificationInput): RuntimeEvidenceCell {
+  if (!input.configured) return cell(EVIDENCE_STATUS.UNAVAILABLE, `${input.provider} prerequisite is unavailable; no provider request was attempted`, { provider: input.provider, prerequisite: 'unavailable', degradationReasons: input.degradationReasons })
+  if (input.providerMode === 'unavailable') return cell(EVIDENCE_STATUS.UNAVAILABLE, `${input.provider} returned an unavailable provider outcome`, { provider: input.provider, providerMode: input.providerMode, freshness: input.freshness, schemaStatus: input.schemaStatus, degradationReasons: input.degradationReasons })
+  if (input.freshness === 'stale') return cell(EVIDENCE_STATUS.BLOCKED, `${input.provider} evidence is stale; current readiness was not claimed`, { provider: input.provider, providerMode: input.providerMode, freshness: input.freshness, schemaStatus: input.schemaStatus, degradationReasons: input.degradationReasons })
+  if (input.providerMode !== 'live' || input.freshness !== 'fresh' || input.schemaStatus !== 'valid') return cell(EVIDENCE_STATUS.BLOCKED, `${input.provider} evidence is blocked by provider mode, freshness, or schema state`, { provider: input.provider, providerMode: input.providerMode, freshness: input.freshness, schemaStatus: input.schemaStatus, degradationReasons: input.degradationReasons })
+  return cell(EVIDENCE_STATUS.PASS, `${input.provider} returned live, fresh, schema-valid evidence`, { provider: input.provider, providerMode: input.providerMode, freshness: input.freshness, schemaStatus: input.schemaStatus, degradationReasons: input.degradationReasons })
+}
+
+export function classifyEvidenceSeparation(input: { environment: 'local' | 'production'; productionEvidenceObserved: boolean }): RuntimeVerificationManifest['evidenceSeparation'] {
+  return {
+    environment: input.environment,
+    localEvidence: input.environment === 'local' ? 'recorded' : 'unverified',
+    productionEvidence: input.productionEvidenceObserved ? 'recorded' : 'unverified',
+    productionReady: false,
   }
 }
 
@@ -267,7 +339,9 @@ async function main(): Promise<void> {
   const startedAt = new Date().toISOString()
   const checks: Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>> = {}
 
-  checks[RUNTIME_CHECK.API] = await checkApi(config)
+  const api = await checkApi(config)
+  checks[RUNTIME_CHECK.API] = api.cell
+  checks[RUNTIME_CHECK.SCOPE] = api.scope
   checks[RUNTIME_CHECK.WEB] = await checkWeb(config)
 
   const database = await checkDatabase()
@@ -282,6 +356,7 @@ async function main(): Promise<void> {
   checks[RUNTIME_CHECK.WORKER_TESTS] = await checkWorkerPytest()
   const providers = await checkProviders(config, runId)
   checks[RUNTIME_CHECK.PROVIDERS] = providers.cell
+  Object.assign(checks, providers.sourceChecks)
   checks[RUNTIME_CHECK.HYDROLOGY] = await checkHydrology(config, runId)
   checks[RUNTIME_CHECK.RENDER] = await checkRenderWiring(config)
 
@@ -300,35 +375,39 @@ async function main(): Promise<void> {
   await mkdir(dirname(outPath), { recursive: true })
   await writeFile(outPath, `${JSON.stringify({ ...manifest, configuration: safeConfiguration(config) }, null, 2)}\n`, 'utf8')
   console.log(JSON.stringify({ outPath, runId, status: manifest.status, blockedCapabilities: manifest.blockedCapabilities, notRunCapabilities: manifest.notRunCapabilities, unavailableCapabilities: manifest.unavailableCapabilities, productionProven: false }, null, 2))
+  process.exitCode = resolveRuntimeExitCode(manifest)
 }
 
-async function checkApi(config: RuntimeVerificationConfig): Promise<RuntimeEvidenceCell> {
+async function checkApi(config: RuntimeVerificationConfig): Promise<{ cell: RuntimeEvidenceCell; scope: RuntimeEvidenceCell }> {
   const health = await requestJson(`${config.apiBaseUrl}/health`)
   const readiness = await requestJson(`${config.apiBaseUrl}/ready`)
   const unauthenticatedRuntime = await requestJson(`${config.apiBaseUrl}/agronautas/runtime`)
-  const authenticatedRuntime = config.bearerToken
-    ? await requestJson(`${config.apiBaseUrl}/agronautas/runtime`, { authorization: `Bearer ${config.bearerToken}` })
+  const authenticatedRuntime = config.accessToken
+    ? await requestJson(`${config.apiBaseUrl}/agronautas/runtime`, { authorization: `Bearer ${config.accessToken}` })
     : null
-  const fields = config.bearerToken
-    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields`, { authorization: `Bearer ${config.bearerToken}` })
+  const fields = config.accessToken
+    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields`, { authorization: `Bearer ${config.accessToken}` })
     : null
   const candidateFieldId = config.fieldId ?? readFirstFieldId(fields?.body)
-  const authenticatedField = config.bearerToken && candidateFieldId
-    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(candidateFieldId)}`, { authorization: `Bearer ${config.bearerToken}` })
+  const authenticatedField = config.accessToken && candidateFieldId
+    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(candidateFieldId)}`, { authorization: `Bearer ${config.accessToken}` })
     : null
   const realFieldId = authenticatedField?.status === 200 ? candidateFieldId : null
   const probeFieldId = realFieldId ?? candidateFieldId ?? 'runtime-verification'
   const unauthenticatedStatus = await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(probeFieldId)}/status`)
   const unauthenticatedChat = await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(probeFieldId)}/chat`, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ message: 'runtime verification auth boundary' }))
-  const authenticatedStatus = config.bearerToken && realFieldId
-    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(realFieldId)}/status`, { authorization: `Bearer ${config.bearerToken}` })
+  const authenticatedStatus = config.accessToken && realFieldId
+    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(realFieldId)}/status`, { authorization: `Bearer ${config.accessToken}` })
     : null
-  const authenticatedChat = config.chatProofEnabled && config.bearerToken && realFieldId
-    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(realFieldId)}/chat`, { authorization: `Bearer ${config.bearerToken}`, 'content-type': 'application/json' }, 'POST', JSON.stringify({ message: 'runtime verification chat proof' }))
+  const unauthorizedScope = config.accessToken && config.unauthorizedFieldId
+    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(config.unauthorizedFieldId)}/status`, { authorization: `Bearer ${config.accessToken}` })
+    : null
+  const authenticatedChat = config.chatProofEnabled && config.accessToken && realFieldId
+    ? await requestJson(`${config.apiBaseUrl}/agronautas/fields/${encodeURIComponent(realFieldId)}/chat`, { authorization: `Bearer ${config.accessToken}`, 'content-type': 'application/json' }, 'POST', JSON.stringify({ message: 'runtime verification chat proof' }))
     : null
   const healthOk = health.status === 200
   const auth = classifyAuthEvidence({
-    tokenConfigured: Boolean(config.bearerToken),
+    tokenConfigured: Boolean(config.accessToken),
     fieldId: candidateFieldId,
     fieldLookupStatus: authenticatedField?.status ?? null,
     unauthenticatedStatus: unauthenticatedStatus.status,
@@ -338,16 +417,30 @@ async function checkApi(config: RuntimeVerificationConfig): Promise<RuntimeEvide
     authenticatedChat: authenticatedChat?.status ?? null,
     chatProofEnabled: config.chatProofEnabled,
   })
+  const scope = classifyScopeEvidence({
+    tokenConfigured: Boolean(config.accessToken),
+    authorizedFieldId: realFieldId,
+    authorizedStatus: authenticatedStatus?.status ?? null,
+    unauthorizedFieldId: config.unauthorizedFieldId,
+    unauthorizedStatus: unauthorizedScope?.status ?? null,
+  })
+  const scopeCell = scope.scope === 'available'
+    ? cell(EVIDENCE_STATUS.PASS, scope.detail, { claims: scope.claims })
+    : scope.scope === 'unavailable'
+      ? cell(EVIDENCE_STATUS.UNAVAILABLE, scope.detail, { claims: scope.claims })
+      : cell(EVIDENCE_STATUS.BLOCKED, scope.detail, { claims: scope.claims, unauthorizedScope })
   const unauthenticatedContract = {
     runtime: unauthenticatedRuntime.status === 200 || unauthenticatedRuntime.status === 401 ? 'observed' : 'blocked',
     status: realFieldId ? (unauthenticatedStatus.status === 401 ? '401' : 'unexpected') : 'not_proven_without_real_field',
     chat: realFieldId ? (unauthenticatedChat.status === 401 ? '401' : 'unexpected') : 'not_proven_without_real_field',
   } as const
-  const apiEvidence = { health, readiness, unauthenticatedRuntime, authenticatedRuntime, unauthenticatedStatus, unauthenticatedChat, fields, authenticatedField, authenticatedStatus, authenticatedChat, auth: auth.auth, authDetail: auth.detail, authClaims: auth.claims, unauthenticatedContract }
-  if (!healthOk) return cell(EVIDENCE_STATUS.BLOCKED, 'Local API health endpoint did not return HTTP 200', apiEvidence)
-  return auth.auth === 'available'
-    ? cell(EVIDENCE_STATUS.PASS, 'Real API health/readiness plus authenticated status/chat auth-boundary requests completed', apiEvidence)
-    : cell(EVIDENCE_STATUS.BLOCKED, `API auth evidence ${auth.auth}: ${auth.detail}; public unauthenticated contract checks remain explicit`, apiEvidence)
+  const apiEvidence = { health, readiness, unauthenticatedRuntime, authenticatedRuntime, unauthenticatedStatus, unauthenticatedChat, fields, authenticatedField, authenticatedStatus, authenticatedChat, unauthorizedScope, auth: auth.auth, authDetail: auth.detail, authClaims: auth.claims, scope: scope.scope, scopeDetail: scope.detail, unauthenticatedContract }
+  const apiCell = !healthOk
+    ? cell(EVIDENCE_STATUS.BLOCKED, 'Local API health endpoint did not return HTTP 200', apiEvidence)
+    : auth.auth === 'available'
+      ? cell(EVIDENCE_STATUS.PASS, 'Real API health/readiness plus authenticated status/chat auth-boundary requests completed', apiEvidence)
+      : cell(EVIDENCE_STATUS.BLOCKED, `API auth evidence ${auth.auth}: ${auth.detail}; public unauthenticated contract checks remain explicit`, apiEvidence)
+  return { cell: apiCell, scope: scopeCell }
 }
 
 async function checkWeb(config: RuntimeVerificationConfig): Promise<RuntimeEvidenceCell> {
@@ -536,6 +629,26 @@ export function classifyAuthEvidence(input: AuthEvidenceInput): AuthEvidenceClas
   return { auth: 'available', detail: 'configured bearer token and real field produced explicit unauthenticated 401 and authenticated 200 observations', claims }
 }
 
+export function classifyScopeEvidence(input: ScopeEvidenceInput): ScopeEvidenceClassification {
+  const claims = {
+    authorizedField200: Boolean(input.authorizedFieldId && input.authorizedStatus === 200),
+    unauthorizedScope403: Boolean(input.unauthorizedFieldId && input.unauthorizedStatus === 403),
+  }
+  if (!input.tokenConfigured || !input.authorizedFieldId) {
+    return { scope: 'unavailable', detail: 'bearer token and a real authorized field are required for scope evidence', claims }
+  }
+  if (!claims.authorizedField200) {
+    return { scope: 'blocked', detail: 'authorized field access did not return HTTP 200; scope isolation was not proven', claims }
+  }
+  if (!input.unauthorizedFieldId || input.unauthorizedStatus === null) {
+    return { scope: 'unavailable', detail: 'an explicitly configured unauthorized field is required; scope denial was not attempted', claims }
+  }
+  if (!claims.unauthorizedScope403) {
+    return { scope: 'blocked', detail: 'unauthorized field access did not return the explicit HTTP 403 contract', claims }
+  }
+  return { scope: 'available', detail: 'authorized field access returned HTTP 200 and unauthorized field access returned HTTP 403', claims }
+}
+
 export function extractWorkerReadiness(value: unknown): WorkerReadinessEvidence | null {
   if (!isRecord(value) || !isRecord(value['body']) || !isRecord(value['body']['worker'])) return null
   const worker = value['body']['worker']
@@ -580,22 +693,39 @@ export function classifyBoundaryEvidence(input: BoundaryEvidenceInput): Boundary
   return { ...input, overall }
 }
 
-async function checkProviders(config: RuntimeVerificationConfig, runId: string): Promise<{ cell: RuntimeEvidenceCell; liveEvidence: boolean }> {
+async function checkProviders(config: RuntimeVerificationConfig, runId: string): Promise<{ cell: RuntimeEvidenceCell; liveEvidence: boolean; sourceChecks: Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>> }> {
   const fieldId = config.fieldId ?? 'Mercedes'
-  const adapters = [
-    createGeorefAdapter(),
-    createNasaPowerDailyAdapter({ timeStandard: 'UTC' }),
-    createOpenMeteoAdapter({ commercialUseApproved: config.openMeteoCommercialUseApproved }),
+  const window = { start: new Date(Date.now() - 3_600_000).toISOString(), end: new Date().toISOString() }
+  const providerResults: Array<{ name: RuntimeCheckName; result: ProviderEvidenceResult | Record<string, unknown>; configured: boolean }> = []
+  const signalProviders: Array<{ name: RuntimeCheckName; provider: ProviderPort; configured: boolean }> = [
+    { name: RUNTIME_CHECK.PROVIDER_OPEN_METEO, provider: createClimateProvider({ commercialUseApproved: config.openMeteoCommercialUseApproved }), configured: config.openMeteoCommercialUseApproved },
+    { name: RUNTIME_CHECK.PROVIDER_SMN, provider: createSmnProvider(), configured: true },
+    { name: RUNTIME_CHECK.PROVIDER_SATELLITE, provider: createSatelliteProvider(), configured: config.satelliteCredentialsConfigured },
   ]
-  const results: ProviderEvidenceResult[] = []
-  for (const adapter of adapters) results.push(await adapter.fetch(fieldId))
-  const liveEvidence = results.some((result) => result.providerMode === 'live' && result.schemaStatus === 'valid')
-  const semanticallyRecorded = results.every((result) => Boolean(result.providerMode && result.runId && result.retrievedAt && result.schemaStatus))
+  for (const item of signalProviders) {
+    const result = await item.provider.fetch({ scope: { locationId: fieldId, workspaceId: 'runtime-verification', fieldId }, window, requestId: `${runId}:${item.provider.provider}` })
+    providerResults.push({ name: item.name, result, configured: item.configured })
+  }
+
+  const firmsKey = normalizeValue(process.env['FIRMS_API_KEY'] ?? process.env['NASA_FIRMS_API_KEY'])
+  const firmsResult = config.firmsApiKeyConfigured && firmsKey
+    ? await createNasaFirmsAdapter({ apiKey: firmsKey }).fetch(fieldId)
+    : { provider: 'nasa-firms', signalType: 'fire', providerMode: 'unavailable', status: 'missing', schemaStatus: 'unavailable', degradationReasons: ['firms_credential_unavailable'], runId: `${runId}:nasa-firms`, retrievedAt: new Date().toISOString(), sourceUrl: 'https://firms.modaps.eosdis.nasa.gov/' } as unknown as ProviderEvidenceResult
+  providerResults.push({ name: RUNTIME_CHECK.PROVIDER_FIRMS, result: firmsResult, configured: config.firmsApiKeyConfigured })
+
+  const sourceChecks = Object.fromEntries(providerResults.map(({ name, result, configured }) => [name, classifyProviderEvidence({ provider: String(result['provider'] ?? name), configured, providerMode: String(result['providerMode'] ?? 'unavailable'), freshness: String(result['status'] ?? result['freshness'] ?? 'missing'), schemaStatus: String(result['schemaStatus'] ?? 'unavailable'), degradationReasons: Array.isArray(result['degradationReasons']) ? result['degradationReasons'].filter((value): value is string => typeof value === 'string') : [] })])) as Partial<Record<RuntimeCheckName, RuntimeEvidenceCell>>
+  const results = providerResults.map(({ result }) => result)
+  const statuses = Object.values(sourceChecks).map((item) => item.status)
+  const aggregateStatus = statuses.includes(EVIDENCE_STATUS.BLOCKED)
+    ? EVIDENCE_STATUS.BLOCKED
+    : statuses.includes(EVIDENCE_STATUS.UNAVAILABLE)
+      ? EVIDENCE_STATUS.UNAVAILABLE
+      : statuses.every((status) => status === EVIDENCE_STATUS.PASS) ? EVIDENCE_STATUS.PASS : EVIDENCE_STATUS.NOT_RUN
+  const liveEvidence = statuses.some((status) => status === EVIDENCE_STATUS.PASS)
   return {
     liveEvidence,
-    cell: semanticallyRecorded
-      ? cell(EVIDENCE_STATUS.PASS, 'Real provider requests completed with explicit mode, timestamp, schema, HTTP, lineage, and run metadata', { runId, results: results.map(summarizeProviderResult) })
-      : cell(EVIDENCE_STATUS.BLOCKED, 'Provider response metadata was incomplete; no live claim was emitted', { runId, results: results.map(summarizeProviderResult) }),
+    sourceChecks,
+    cell: cell(aggregateStatus, aggregateStatus === EVIDENCE_STATUS.PASS ? 'All configured provider source checks returned live, fresh, schema-valid evidence' : 'Provider matrix contains blocked or unavailable source outcomes; no aggregate readiness was claimed', { runId, results: results.map((result) => 'provider' in result ? summarizeProviderResult(result as ProviderEvidenceResult) : result) }),
   }
 }
 
@@ -688,7 +818,12 @@ function safeConfiguration(config: RuntimeVerificationConfig): Record<string, un
     hydrologyWriteEnabled: config.hydrologyWriteEnabled,
     openMeteoCommercialUseApproved: config.openMeteoCommercialUseApproved,
     renderServiceConfigured: Boolean(config.renderServiceId && config.renderApiToken),
-    bearerTokenConfigured: Boolean(config.bearerToken),
+    accessTokenConfigured: Boolean(config.accessToken),
+    bffAssertionConfigured: config.bffAssertionConfigured,
+    environment: config.environment,
+    firmsApiKeyConfigured: config.firmsApiKeyConfigured,
+    satelliteCredentialsConfigured: config.satelliteCredentialsConfigured,
+    unauthorizedFieldIdConfigured: Boolean(config.unauthorizedFieldId),
     databaseConfigured: Boolean(process.env['DATABASE_URL']),
     redisConfigured: Boolean(process.env['REDIS_URL']),
   }

@@ -15,6 +15,14 @@ interface BrowserEvidence {
   consolePath: string
   consoleStatus: 'captured' | 'warnings-captured'
   runtimeWarnings: string[]
+  viewport: { width: number; height: number }
+  boundaryState: 'observed' | 'unauthorized' | 'forbidden' | 'degraded' | 'maintenance' | 'unavailable'
+  evidenceSeparation: {
+    environment: 'local' | 'production'
+    localEvidence: 'recorded' | 'unverified'
+    productionEvidence: 'recorded' | 'unverified'
+    productionReady: false
+  }
   bffRuntime: { status: number | null; body: unknown; error?: string }
   blockedReason?: string
 }
@@ -36,6 +44,7 @@ test.describe('Agronautas real runtime evidence', () => {
     let outcome: BrowserEvidence['outcome'] = 'complete'
     let blockedReason: string | undefined
     let bffRuntime: BrowserEvidence['bffRuntime'] = { status: null, body: null }
+    let boundaryState: BrowserEvidence['boundaryState'] = 'unavailable'
     let snapshotPath = `${outputDir}/snapshot.html`
     let screenshotPath = `${outputDir}/screenshot.png`
 
@@ -58,6 +67,7 @@ test.describe('Agronautas real runtime evidence', () => {
           return { status: null, body: null, error: error instanceof Error ? error.message : String(error) }
         }
       })
+      boundaryState = classifyBoundaryState(bffRuntime.status)
       if (bffRuntime.status === null) {
         outcome = 'blocked'
         blockedReason = bffRuntime.error ?? 'BFF runtime request did not return a response'
@@ -69,11 +79,13 @@ test.describe('Agronautas real runtime evidence', () => {
       await writeFile(snapshotPath, '<!-- browser navigation unavailable; no DOM snapshot was claimed -->\n', 'utf8')
     }
 
+    const safeNetworkEvents: Array<Record<string, unknown>> = networkEvents.map((event) => ({ ...event, url: typeof event['url'] === 'string' ? redactBrowserUrl(event['url']) : event['url'] }))
+    const safeConsoleEvents: Array<Record<string, unknown>> = consoleEvents.map((event) => ({ ...event, text: typeof event['text'] === 'string' ? redactBrowserText(event['text']) : event['text'] }))
     const networkPath = `${outputDir}/network.json`
     const consolePath = `${outputDir}/console.json`
-    await writeFile(networkPath, `${JSON.stringify(networkEvents, null, 2)}\n`, 'utf8')
-    await writeFile(consolePath, `${JSON.stringify(consoleEvents, null, 2)}\n`, 'utf8')
-    const runtimeWarnings = consoleEvents
+    await writeFile(networkPath, `${JSON.stringify(safeNetworkEvents, null, 2)}\n`, 'utf8')
+    await writeFile(consolePath, `${JSON.stringify(safeConsoleEvents, null, 2)}\n`, 'utf8')
+    const runtimeWarnings = safeConsoleEvents
        .filter((event) => event['type'] === 'warning' || event['type'] === 'error' || event['type'] === 'pageerror')
        .map((event) => typeof event['text'] === 'string' ? event['text'] : 'runtime browser warning')
     const evidence: BrowserEvidence = {
@@ -90,7 +102,15 @@ test.describe('Agronautas real runtime evidence', () => {
       consolePath,
       consoleStatus: runtimeWarnings.length > 0 ? 'warnings-captured' : 'captured',
       runtimeWarnings,
-      bffRuntime,
+      viewport: testInfo.project.use.viewport as { width: number; height: number },
+      boundaryState,
+      evidenceSeparation: {
+        environment: process.env['PLAYWRIGHT_RUNTIME_ENVIRONMENT']?.trim().toLowerCase() === 'production' ? 'production' : 'local',
+        localEvidence: process.env['PLAYWRIGHT_RUNTIME_ENVIRONMENT']?.trim().toLowerCase() === 'production' ? 'unverified' : 'recorded',
+        productionEvidence: 'unverified',
+        productionReady: false,
+      },
+      bffRuntime: { ...bffRuntime, body: sanitizeBrowserBody(bffRuntime.body) },
       ...(blockedReason ? { blockedReason } : {}),
     }
     const manifestPath = `${outputDir}/browser-evidence.json`
@@ -108,5 +128,45 @@ test.describe('Agronautas real runtime evidence', () => {
     expect(evidence.screenshotPath).toContain('screenshot.png')
     expect(evidence.networkPath).toContain('network.json')
     expect(evidence.consolePath).toContain('console.json')
+    expect([1440, 390]).toContain(evidence.viewport.width)
+    expect([900, 844]).toContain(evidence.viewport.height)
+    expect(evidence.evidenceSeparation.productionReady).toBe(false)
   })
 })
+
+function classifyBoundaryState(status: number | null): BrowserEvidence['boundaryState'] {
+  if (status === 401) return 'unauthorized'
+  if (status === 403) return 'forbidden'
+  if (status === 503) return 'maintenance'
+  if (status !== null && status >= 500) return 'degraded'
+  if (status === null) return 'unavailable'
+  return 'observed'
+}
+
+function sanitizeBrowserBody(value: unknown): unknown {
+  if (typeof value === 'string') return redactBrowserText(value)
+  if (isRecord(value)) return { keys: Object.keys(value).sort() }
+  return value
+}
+
+function redactBrowserUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    url.username = ''
+    url.password = ''
+    for (const key of [...url.searchParams.keys()]) {
+      if (/token|key|secret|password|auth/i.test(key)) url.searchParams.set(key, '[redacted]')
+    }
+    return url.toString()
+  } catch {
+    return redactBrowserText(value)
+  }
+}
+
+function redactBrowserText(value: string): string {
+  return /bearer\s+\S+|postgres(?:ql)?:\/\/|redis(?:s)?:\/\/|password|secret|token/i.test(value) ? '[redacted]' : value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}

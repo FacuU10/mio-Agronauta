@@ -19,12 +19,24 @@ import {
   campaignPlanningContextRequestSchema,
   assumptionSimulationRequestSchema,
   assumptionSimulationResponseSchema,
+  agronautasLocationResolutionSchema,
+  agronautasLocationSelectionRequestSchema,
+  agronautasManagementCreateCampaignRequestSchema,
+  agronautasManagementCreateOperationRequestSchema,
+  agronautasManagementCreateSeasonRequestSchema,
+  agronautasManagementCreateTaskRequestSchema,
+  agronautasManagementResponseSchema,
+  agronautasManagementTransitionRequestSchema,
+  agronautasMarketplaceDiscoveryResponseSchema,
+  agronautasMarketplaceRfqCreateRequestSchema,
+  agronautasMarketplaceRfqResponseSchema,
+  agronautasMarketplaceRfqReviewRequestSchema,
 } from '@repo/zod-schemas'
 import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository } from '@repo/hydrology-engine'
 import { CreateFieldIntakeUseCase } from '../../application/usecases/create-field-intake-usecase'
 import { GenerateAlertsUseCase, toAlertContracts, toStaleAlertContracts, toStoredAlertContracts } from '../../application/usecases/generate-alerts-usecase'
 import { RequestRiskRecomputeUseCase } from '../../application/usecases/request-risk-recompute-usecase'
-import { GroundedChatUseCase } from '../../application/usecases/grounded-chat-usecase'
+import { GroundedChatUseCase, type GroundedCopilotContext, type GroundedCopilotScope } from '../../application/usecases/grounded-chat-usecase'
 import type { GroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import type {
   AgronautasJobRunRepository,
@@ -48,7 +60,13 @@ import { AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON, getAgronautasRuntimeConfig } f
 import { createGroqChatProvider } from '../../infrastructure/integrations/groq/client'
 import { RedisAgronautasRuntimeDispatcher } from '../../infrastructure/queue/agronautas-runtime-dispatcher'
 import { createDemoAlerts, createDemoCopilotContext, createDemoDashboardSnapshot, createDemoFieldCreated, createDemoFieldOverview, createDemoRiskSnapshot, isSupportedDemoFieldIntake } from './agronautas-demo'
-import { requireAgronautasScope } from '../middleware/agronautas-auth'
+import { getAgronautasPrincipal, requireAgronautasPrincipal, requireAgronautasScope } from '../middleware/agronautas-auth'
+import { agronautasAuthLoginRequestSchema, agronautasAuthRefreshRequestSchema, agronautasAuthStatusSchema } from '@repo/zod-schemas'
+import { AgronautasAuthService, resolveAuthSecrets } from '../../application/auth/agronautas-auth-service'
+import { PostgresAgronautasAuthRepository } from '../../infrastructure/database/postgres/agronautas-auth-repository'
+import { AuthFailure, AUTH_FAILURE_CODES, AUTH_SCOPES } from '../../domain/auth/contracts'
+import type { AgronautasAuthServicePort } from '../../domain/auth/ports'
+import { RedisAgronautasAuthDenyStore } from '../../infrastructure/database/redis/agronautas-auth-deny-store'
 import { createChatRateLimitMiddleware } from '../middleware/rate-limit'
 import { WorkerUnavailableError } from '../../application/usecases/request-risk-recompute-usecase'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
@@ -58,12 +76,18 @@ import { createAgronautasTelemetry } from '../../infrastructure/observability/ag
 import { UpdateFieldGeometryUseCase } from '../../application/usecases/update-field-geometry-usecase'
 import type { FieldGeometryRepository } from '../../domain/repositories/agronautas'
 import { toAgronautasFieldIndexItem } from '../../application/viewmodels/agronautas-pilot'
-import { EnsureDefaultWorkspace, GetFieldActivity, GetWorkspaceContext, ListWorkspaceFields } from '../../application/usecases/agronautas-management'
-import type { AgronautasWorkspaceRepository } from '../../domain/repositories/agronautas'
+import { CreateManagementItem, EnsureDefaultWorkspace, GetFieldActivity, GetWorkspaceContext, ListManagementItems, ListWorkspaceFields, TransitionManagementItem } from '../../application/usecases/agronautas-management'
+import type { AgronautasManagementRepository, AgronautasWorkspaceRepository } from '../../domain/repositories/agronautas'
 import { PostgresAgronautasManagementRepository } from '../../infrastructure/database/postgres/agronautas-management-repository'
 import { GetFieldIntelligenceUseCase } from '../../application/usecases/get-field-intelligence-usecase'
 import { GetCampaignPlanningContext, UnsupportedPlanningFieldError } from '../../application/usecases/agronautas-planning'
 import { calculateAssumptionSimulation } from '../../domain/planning/agronautas-planning-simulator'
+import { logger } from '../../infrastructure/observability/logger'
+import { ResolveAgronautasLocationUseCase } from '../../application/usecases/agronautas-location'
+import { PostgresAgronautasLocationRepository, type AgronautasLocationRepository } from '../../domain/repositories/agronautas-product-flows'
+import { CancelMarketplaceRfq, DiscoverMarketplaceListings, ListMarketplaceRfqs, ReviewMarketplaceRfq, SubmitMarketplaceRfq } from '../../application/usecases/agronautas-marketplace'
+import type { MarketplaceRepository } from '../../domain/repositories/agronautas-marketplace'
+import { PostgresAgronautasMarketplaceRepository } from '../../infrastructure/database/postgres/agronautas-marketplace-repository'
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<HydrologyRepository['getDenseContextForField']>>
 type RequestWithField = Request & { field?: Field }
@@ -85,6 +109,10 @@ interface AgronautasRouterDeps {
   providerEvidencePort: ProviderEvidencePort
   geometryRepository: FieldGeometryRepository
   workspaceRepository: AgronautasWorkspaceRepository
+  authService: AgronautasAuthServicePort
+  locationRepository: AgronautasLocationRepository
+  managementRepository: AgronautasManagementRepository
+  marketplaceRepository: MarketplaceRepository
 }
 
 export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {}): Router {
@@ -106,9 +134,14 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     providerEvidencePort: deps.providerEvidencePort ?? createRealProviderEvidencePort(createAgronautasTelemetry()),
     geometryRepository: deps.geometryRepository ?? (fieldRepository as unknown as FieldGeometryRepository),
     workspaceRepository: deps.workspaceRepository ?? new PostgresAgronautasManagementRepository(),
+    authService: deps.authService ?? createConfiguredAuthService(),
+    locationRepository: deps.locationRepository ?? new PostgresAgronautasLocationRepository(fieldRepository),
+    managementRepository: deps.managementRepository ?? new PostgresAgronautasManagementRepository(),
+    marketplaceRepository: deps.marketplaceRepository ?? new PostgresAgronautasMarketplaceRepository(),
   }
 
   const router = Router()
+  const copilotLocationBindings = new Map<string, string>()
   const createFieldIntake = new CreateFieldIntakeUseCase(resolved.fieldRepository, resolved.fieldContextRepository)
   const updateFieldGeometry = new UpdateFieldGeometryUseCase(resolved.fieldRepository, resolved.geometryRepository)
   const generateAlerts = new GenerateAlertsUseCase(resolved.riskSnapshotRepository, resolved.alertSnapshotRepository)
@@ -118,12 +151,60 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     riskSnapshotRepository: resolved.riskSnapshotRepository,
     alertSnapshotRepository: resolved.alertSnapshotRepository,
     groqProvider: resolved.groqProvider,
+    copilotContextProvider: {
+      authorizeScope: async (scope) => copilotLocationBindings.get(copilotLocationBindingKey(scope)) === scope.locationId,
+      load: async (scope) => buildGroundedCopilotContext(scope, resolved),
+    },
   })
   const runtimeConfig = getAgronautasRuntimeConfig()
   const chatRateLimitMiddleware = createChatRateLimitMiddleware()
-  const requireRead = requireAgronautasScope('read')
-  const requireWrite = requireAgronautasScope('write')
-  const requireRecompute = requireAgronautasScope('recompute')
+  const authScopeOptions = { service: resolved.authService, workspaceId: resolveRequestWorkspaceId, fieldId: resolveRequestFieldId }
+  const requireRead = requireAgronautasScope('read', authScopeOptions)
+  const requireWrite = requireAgronautasScope('write', authScopeOptions)
+  const requireRecompute = requireAgronautasScope('recompute', authScopeOptions)
+  const requireAuth = requireAgronautasPrincipal({ service: resolved.authService })
+  const resolveLocation = new ResolveAgronautasLocationUseCase(resolved.locationRepository)
+
+  router.post('/auth/login', async (req, res) => {
+    const parsed = agronautasAuthLoginRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    try {
+      return res.status(200).json(await resolved.authService.login(parsed.data))
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
+  })
+
+  router.post('/auth/refresh', async (req, res) => {
+    const parsed = agronautasAuthRefreshRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    try {
+      return res.status(200).json(await resolved.authService.refresh(parsed.data.refreshToken))
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
+  })
+
+  router.post('/auth/logout', requireAuth, async (req, res) => {
+    const token = readBearer(req)
+    if (!token) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      await resolved.authService.logout(token)
+      return res.status(204).send()
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
+  })
+
+  router.get('/auth/status', requireAuth, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      return res.status(200).json(agronautasAuthStatusSchema.parse(await resolved.authService.status(readBearer(req) ?? '')))
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
+  })
 
   router.use((req, res, next) => {
     res.setHeader('x-request-id', req.header('x-request-id') || randomUUID())
@@ -150,6 +231,25 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
         reason: 'worker_readiness_not_verified',
       },
     })
+  })
+
+  router.post('/locations/resolve', requireAuth, async (req, res) => {
+    const parsed = agronautasLocationSelectionRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondLocationResolution(res, 422, { status: 'invalid', reason: 'selection_contract_invalid' })
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondLocationResolution(res, 401, { status: 'unauthorized', reason: 'missing_or_invalid_principal' })
+    if (parsed.data.workspaceId !== principal.workspaceId) return respondLocationResolution(res, 403, { status: 'unauthorized', reason: 'selection_workspace_out_of_scope' })
+
+    try {
+      await resolved.authService.authorize(principal, parsed.data.workspaceId, AUTH_SCOPES.READ, parsed.data.fieldId)
+    } catch (error) {
+      return respondLocationAuthorizationFailure(res, error)
+    }
+
+    const result = await resolveLocation.execute(principal, parsed.data)
+    if (result.status === 'accepted') copilotLocationBindings.set(copilotLocationBindingKey({ actorId: principal.actorId, sessionId: principal.sessionId, workspaceId: principal.workspaceId, fieldId: parsed.data.fieldId }), result.location.locationId)
+    const status = result.status === 'accepted' ? 200 : result.status === 'unauthorized' ? 403 : result.status === 'invalid' ? 422 : 503
+    return respondLocationResolution(res, status, result)
   })
 
   router.post('/contact/demo', async (req, res) => {
@@ -188,15 +288,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     }
 
     try {
-      const result = await createFieldIntake.execute(parsed.data)
+      const workspaceId = requiredPrincipalWorkspace(req, res)
+      if (!workspaceId) return
+      const result = await createFieldIntake.execute(parsed.data, workspaceId)
       return res.status(201).json(result)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'unknown_error'
-      if (message.includes('outside') || message.includes('coverage') || message.includes('locality')) {
-        return respondContractError(res, 422, 'OUT_OF_SUPPORTED_AREA', 'El lote queda fuera del alcance Corrientes arroz', { reason: message })
-      }
-
-      return respondContractError(res, 500, 'INVALID_CONTRACT', 'No se pudo crear el lote', { reason: message })
+      return respondCreateFieldFailure(res, error)
     }
   })
   const getFieldIntelligence = new GetFieldIntelligenceUseCase(resolved.fieldRepository, resolved.fieldContextRepository, resolved.signalSummaryRepository, resolved.riskSnapshotRepository)
@@ -205,6 +302,16 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.post('/planning/context', requireRead, async (req, res) => {
     const parsed = campaignPlanningContextRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      await resolved.authService.authorize(principal, parsed.data.workspaceId, AUTH_SCOPES.READ)
+      for (const fieldId of parsed.data.fieldIds) {
+        await resolved.authService.authorize(principal, parsed.data.workspaceId, AUTH_SCOPES.READ, fieldId)
+      }
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
     try {
       return res.json(await getCampaignPlanningContext.execute(parsed.data))
     } catch (error) {
@@ -219,9 +326,167 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json(calculateAssumptionSimulation(parsed.data))
   })
 
-  router.get('/workspace', requireRead, async (_req, res) => {
+  router.get('/management', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const fieldId = typeof req.query['fieldId'] === 'string' ? req.query['fieldId'] : undefined
     try {
-      return res.json(await ensureDefaultWorkspace.execute())
+      if (fieldId) await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.READ, fieldId)
+      return res.json(agronautasManagementResponseSchema.parse(await listManagementItems.execute({ workspaceId: principal.workspaceId, ...(fieldId ? { fieldId } : {}) }, principal)))
+    } catch (error) {
+      if (error instanceof AuthFailure) return respondAuthFailure(res, error)
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'La gestión Agronautas no está disponible', undefined, true)
+    }
+  })
+
+  router.post('/management/:kind', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.WRITE)
+    } catch (error) {
+      if (error instanceof AuthFailure) {
+        const targetId = typeof req.body?.['idempotencyKey'] === 'string' ? req.body['idempotencyKey'] : randomUUID()
+        await recordRejectedManagementAudit(resolved.managementRepository, { workspaceId: principal.workspaceId, actorId: principal.actorId, action: 'create', targetId, outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId: req.header('x-request-id') || targetId })
+        return respondAuthFailure(res, error)
+      }
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'La autorización de gestión no está disponible', undefined, true)
+    }
+    const kind = managementKindFromPath(req.params['kind'])
+    if (!kind) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Management resource not found')
+    const parsed = parseManagementCreate(kind, req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    try {
+      await resolved.authService.authorize(principal, parsed.data.workspaceId, AUTH_SCOPES.WRITE, parsed.data.fieldId)
+      const requestId = req.header('x-request-id') || parsed.data.idempotencyKey
+      const result = await createManagementItem.execute(parsed.data, principal, requestId)
+      const status = result.status === 'created' ? 201 : result.status === 'duplicate' ? 200 : 409
+      const response = { contractVersion: result.contractVersion, items: result.items, audit: result.audit }
+      return res.status(status).json(agronautasManagementResponseSchema.parse(response))
+    } catch (error) {
+      if (error instanceof AuthFailure) {
+        if (error.statusCode !== 401) await recordRejectedManagementAudit(resolved.managementRepository, { workspaceId: parsed.data.workspaceId, actorId: principal.actorId, action: 'create', targetId: parsed.data.idempotencyKey, outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId: req.header('x-request-id') || parsed.data.idempotencyKey })
+        return respondAuthFailure(res, error)
+      }
+      if (error instanceof Error && error.message === 'WORKSPACE_SCOPE_DENIED') return respondContractError(res, 403, 'FORBIDDEN', 'El workspace no pertenece a la sesión')
+      if (error instanceof Error && error.message === 'MANAGEMENT_SCOPE_DENIED') return respondContractError(res, 403, 'FORBIDDEN', 'El recurso no pertenece al workspace autorizado')
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'No se pudo persistir la gestión Agronautas', undefined, true)
+    }
+  })
+
+  router.post('/management/:itemId/transition', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.WRITE)
+    } catch (error) {
+      if (error instanceof AuthFailure) {
+        const targetId = req.params['itemId'] ?? randomUUID()
+        await recordRejectedManagementAudit(resolved.managementRepository, { workspaceId: principal.workspaceId, actorId: principal.actorId, action: 'transition', targetId, outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId: req.header('x-request-id') || targetId })
+        return respondAuthFailure(res, error)
+      }
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'La autorización de gestión no está disponible', undefined, true)
+    }
+    const parsed = agronautasManagementTransitionRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    const requestId = parsed.data.requestId ?? req.header('x-request-id') ?? randomUUID()
+    try {
+      const itemId = req.params['itemId'] ?? ''
+      const item = await resolved.managementRepository.getManagementItem?.({ workspaceId: principal.workspaceId, itemId })
+      await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.WRITE, item?.fieldId ?? undefined)
+      const result = await transitionManagementItem.execute({ workspaceId: principal.workspaceId, itemId, ...parsed.data, requestId }, principal)
+      if (result.status === 'not_found') return respondContractError(res, 404, 'INVALID_CONTRACT', 'Management resource not found')
+      const response = { contractVersion: result.contractVersion, items: result.items, audit: result.audit }
+      return res.status(result.status === 'stale' ? 409 : 200).json(agronautasManagementResponseSchema.parse(response))
+    } catch (error) {
+      if (error instanceof AuthFailure) {
+        if (error.statusCode !== 401) await recordRejectedManagementAudit(resolved.managementRepository, { workspaceId: principal.workspaceId, actorId: principal.actorId, action: 'transition', targetId: req.params['itemId'] ?? '', outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId })
+        return respondAuthFailure(res, error)
+      }
+      if (error instanceof Error && (error.message === 'WORKSPACE_SCOPE_DENIED' || error.message === 'MANAGEMENT_PERMISSION_DENIED')) return respondContractError(res, 403, 'FORBIDDEN', 'La sesión no tiene permisos de gestión')
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'No se pudo actualizar la gestión Agronautas', undefined, true)
+    }
+  })
+
+  router.get('/marketplace/listings', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const marketId = typeof req.query['marketId'] === 'string' ? req.query['marketId'] : undefined
+    const search = typeof req.query['search'] === 'string' ? req.query['search'] : undefined
+    try {
+      return res.json(agronautasMarketplaceDiscoveryResponseSchema.parse(await discoverMarketplaceListings.execute({ workspaceId: principal.workspaceId, marketId, search }, principal)))
+    } catch {
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'El catálogo local no está disponible', undefined, true)
+    }
+  })
+
+  router.get('/marketplace/rfqs', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      return res.json(agronautasMarketplaceRfqResponseSchema.parse(await listMarketplaceRfqs.execute({ workspaceId: principal.workspaceId }, principal)))
+    } catch {
+      return respondContractError(res, 503, 'INVALID_CONTRACT', 'Las solicitudes locales no están disponibles', undefined, true)
+    }
+  })
+
+  router.post('/marketplace/rfqs', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const parsed = agronautasMarketplaceRfqCreateRequestSchema.safeParse(req.body)
+    const targetId = typeof req.body?.['idempotencyKey'] === 'string' ? req.body['idempotencyKey'] : randomUUID()
+    try {
+      await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.WRITE)
+    } catch (error) {
+      await recordRejectedMarketplaceAudit(resolved.marketplaceRepository, { workspaceId: principal.workspaceId, actorId: principal.actorId, action: 'submit', targetId, outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId: readRequestId(req), occurredAt: new Date() })
+      return respondAuthFailure(res, error)
+    }
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    try {
+      const result = await submitMarketplaceRfq.execute(parsed.data, principal, readRequestId(req))
+      return res.status(result.status === 'created' ? 201 : result.status === 'conflict' ? 409 : 200).json(agronautasMarketplaceRfqResponseSchema.parse(result))
+    } catch (error) {
+      return respondMarketplaceFailure(res, error, 'No se pudo registrar la solicitud local')
+    }
+  })
+
+  router.post('/marketplace/rfqs/:rfqId/review', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const parsed = agronautasMarketplaceRfqReviewRequestSchema.safeParse(req.body)
+    if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+    try {
+      await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.WRITE)
+      const result = await reviewMarketplaceRfq.execute({ workspaceId: principal.workspaceId, rfqId: req.params['rfqId'] ?? '', ...parsed.data }, principal, readRequestId(req))
+      if (result.status === 'not_found') return respondContractError(res, 404, 'INVALID_CONTRACT', 'Solicitud local no encontrada')
+      return res.status(result.status === 'stale' ? 409 : 200).json(agronautasMarketplaceRfqResponseSchema.parse(result))
+    } catch (error) {
+      if (error instanceof AuthFailure && error.statusCode !== 401) await recordRejectedMarketplaceAudit(resolved.marketplaceRepository, { workspaceId: principal.workspaceId, actorId: principal.actorId, action: 'review', targetId: req.params['rfqId'] ?? randomUUID(), outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId: readRequestId(req), occurredAt: new Date() })
+      return respondMarketplaceFailure(res, error, 'No se pudo revisar la solicitud local')
+    }
+  })
+
+  router.delete('/marketplace/rfqs/:rfqId', requireRead, async (req, res) => {
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const expectedRevision = Number(req.query['expectedRevision'])
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Expected revision is required')
+    try {
+      await resolved.authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.WRITE)
+      const result = await cancelMarketplaceRfq.execute({ workspaceId: principal.workspaceId, rfqId: req.params['rfqId'] ?? '', expectedRevision }, principal, readRequestId(req))
+      if (result.status === 'not_found') return respondContractError(res, 404, 'INVALID_CONTRACT', 'Solicitud local no encontrada')
+      return res.status(result.status === 'stale' ? 409 : 200).json(agronautasMarketplaceRfqResponseSchema.parse(result))
+    } catch (error) {
+      if (error instanceof AuthFailure && error.statusCode !== 401) await recordRejectedMarketplaceAudit(resolved.marketplaceRepository, { workspaceId: principal.workspaceId, actorId: principal.actorId, action: 'cancel', targetId: req.params['rfqId'] ?? randomUUID(), outcome: 'forbidden', revisionBefore: null, revisionAfter: null, requestId: readRequestId(req), occurredAt: new Date() })
+      return respondMarketplaceFailure(res, error, 'No se pudo cancelar la solicitud local')
+    }
+  })
+
+  router.get('/workspace', requireRead, async (req, res) => {
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    try {
+      return res.json(await getWorkspaceContext.execute(workspaceId))
     } catch {
       return respondContractError(res, 503, 'INVALID_CONTRACT', 'El contexto Agronautas no está disponible', undefined, true)
     }
@@ -230,6 +495,13 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/workspace/fields', requireRead, async (req, res) => {
     const workspaceId = typeof req.query['workspaceId'] === 'string' ? req.query['workspaceId'] : undefined
     if (!workspaceId) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Workspace id is required')
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    try {
+      await resolved.authService.authorize(principal, workspaceId, AUTH_SCOPES.READ)
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
     try {
       const workspace = await getWorkspaceContext.execute(workspaceId)
       if (!workspace) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Workspace not found')
@@ -242,11 +514,21 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   const getWorkspaceContext = new GetWorkspaceContext(resolved.workspaceRepository)
   const listWorkspaceFields = new ListWorkspaceFields(resolved.workspaceRepository)
   const getFieldActivity = new GetFieldActivity(resolved.workspaceRepository)
+  const listManagementItems = new ListManagementItems(resolved.managementRepository)
+  const createManagementItem = new CreateManagementItem(resolved.managementRepository)
+  const transitionManagementItem = new TransitionManagementItem(resolved.managementRepository)
+  const discoverMarketplaceListings = new DiscoverMarketplaceListings(resolved.marketplaceRepository)
+  const listMarketplaceRfqs = new ListMarketplaceRfqs(resolved.marketplaceRepository)
+  const submitMarketplaceRfq = new SubmitMarketplaceRfq(resolved.marketplaceRepository)
+  const reviewMarketplaceRfq = new ReviewMarketplaceRfq(resolved.marketplaceRepository)
+  const cancelMarketplaceRfq = new CancelMarketplaceRfq(resolved.marketplaceRepository)
 
   router.get('/fields', requireRead, async (req, res) => {
     if (!resolved.fieldRepository.list) return res.status(503).json({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null, unavailable: true })
     try {
-      const page = await resolved.fieldRepository.list({ limit: parseLimit(req), cursor: typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined })
+       const principal = getAgronautasPrincipal(req)
+       if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+       const page = await resolved.fieldRepository.list({ limit: parseLimit(req), cursor: typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined, workspaceId: principal.workspaceId })
       return res.json(agronautasFieldIndexResponseSchema.parse({ contractVersion: 'agronautas-field-index-v1', items: page.items.map(toAgronautasFieldIndexItem), nextCursor: page.nextCursor }))
     } catch {
       return res.status(503).json({ contractVersion: 'agronautas-field-index-v1', items: [], nextCursor: null, unavailable: true })
@@ -261,7 +543,9 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       return res.json(createDemoFieldOverview(fieldId))
     }
 
-    const field = await resolved.fieldRepository.findById(fieldId)
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    const field = await resolved.fieldRepository.findById(fieldId, workspaceId)
     if (!field) return res.status(404).json({ error: 'Field not found' })
 
     return res.json({
@@ -279,10 +563,12 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/fields/:fieldId/activity', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
     try {
-      const field = await resolved.fieldRepository.findById(fieldId)
+      const field = await resolved.fieldRepository.findById(fieldId, workspaceId)
       if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
-      return res.json(agronautasActivityResponseSchema.parse(await getFieldActivity.execute(fieldId)))
+       return res.json(agronautasActivityResponseSchema.parse(await getFieldActivity.execute(fieldId, workspaceId)))
     } catch {
       return respondContractError(res, 503, 'INVALID_CONTRACT', 'La actividad del lote no está disponible', undefined, true)
     }
@@ -291,9 +577,11 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/fields/:fieldId/geometry', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
-    const field = await resolved.fieldRepository.findById(fieldId)
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    const field = await resolved.fieldRepository.findById(fieldId, workspaceId)
     if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
-    const geometry = await updateFieldGeometry.get(fieldId)
+    const geometry = await updateFieldGeometry.get(fieldId, workspaceId)
     if (!geometry) return res.status(404).json({ fieldId, status: 'point_only', source: field.props.geometrySource ?? 'fallback' })
     return res.json({ fieldId, ...geometry, updatedAt: geometry.updatedAt?.toISOString() ?? null })
   })
@@ -301,8 +589,10 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.patch('/fields/:fieldId/geometry', requireWrite, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
     try {
-      const geometry = await updateFieldGeometry.execute(fieldId, req.body)
+      const geometry = await updateFieldGeometry.execute(fieldId, workspaceId, req.body)
       return res.json({ fieldId, ...geometry, updatedAt: geometry.updatedAt?.toISOString() ?? null })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'geometry_update_failed'
@@ -334,7 +624,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     })
   })
 
-  router.get('/fields/:fieldId/hydrology/dashboard', requireRead, requireFieldAccess(resolved.fieldRepository), async (req: RequestWithField, res: Response) => {
+  router.get('/fields/:fieldId/hydrology/dashboard', requireRead, requireFieldAccess(resolved.fieldRepository, resolved.authService), async (req: RequestWithField, res: Response) => {
     const field = req.field
     if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
 
@@ -342,7 +632,7 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json(toHydrologyDashboardResponse(context))
   })
 
-  router.get('/fields/:fieldId/hydrology/alerts', requireRead, requireFieldAccess(resolved.fieldRepository), async (req: RequestWithField, res: Response) => {
+  router.get('/fields/:fieldId/hydrology/alerts', requireRead, requireFieldAccess(resolved.fieldRepository, resolved.authService), async (req: RequestWithField, res: Response) => {
     const field = req.field
     if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
 
@@ -418,7 +708,9 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
     if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) return res.json(createDemoDashboardSnapshot(fieldId))
-    const dashboard = await buildDashboardPayload(fieldId)
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    const dashboard = await buildDashboardPayload(fieldId, workspaceId)
     if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
     return res.json(dashboard)
   })
@@ -426,7 +718,9 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/fields/:fieldId/intelligence', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
-    const intelligence = await getFieldIntelligence.execute(fieldId)
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    const intelligence = await getFieldIntelligence.execute(fieldId, workspaceId)
     if (!intelligence) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
     return res.json(agronautasIntelligenceSchema.parse(intelligence))
   })
@@ -440,11 +734,13 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       res.setHeader('Content-Disposition', `attachment; filename="agronautas-${fieldId}.pdf"`)
       return res.send(Buffer.from(renderDashboardPdfText(dashboard, { geometryStatus: 'point_only', geometryUpdatedAt: null }), 'utf8'))
     }
-    const dashboard = await buildDashboardPayload(fieldId)
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    const dashboard = await buildDashboardPayload(fieldId, workspaceId)
     if (!dashboard) return res.status(404).json({ error: 'Dashboard payload not found' })
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="agronautas-${fieldId}.pdf"`)
-    const geometry = await resolved.geometryRepository.getGeometry(fieldId)
+    const geometry = await resolved.geometryRepository.getGeometry(fieldId, workspaceId)
     return res.send(Buffer.from(renderDashboardPdfText(dashboard, { geometryStatus: geometry?.status ?? 'point_only', geometryUpdatedAt: geometry?.updatedAt?.toISOString() ?? null }), 'utf8'))
   })
 
@@ -556,13 +852,15 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   router.get('/fields/:fieldId/copilot/context', requireRead, async (req, res) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
 
     if (shouldUseDemoData(req, fieldId, runtimeConfig.mode)) {
       return res.json(createDemoCopilotContext(fieldId))
     }
 
     const [field, context, snapshot, alerts] = await Promise.all([
-      resolved.fieldRepository.findById(fieldId),
+      resolved.fieldRepository.findById(fieldId, workspaceId),
       resolved.fieldContextRepository.getLatest(fieldId),
       resolved.riskSnapshotRepository.getLatest(fieldId),
       resolved.alertSnapshotRepository.getLatestForField(fieldId),
@@ -611,12 +909,26 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
     return res.json(payload)
   })
 
-  router.post('/fields/:fieldId/copilot/chat', requireRead, requireFieldAccess(resolved.fieldRepository), chatRateLimitMiddleware, async (req: RequestWithField, res: Response) => {
+  router.post('/fields/:fieldId/copilot/chat', requireRead, requireFieldAccess(resolved.fieldRepository, resolved.authService), chatRateLimitMiddleware, async (req: RequestWithField, res: Response) => {
     const field = req.field
     if (!field) return respondContractError(res, 404, 'INVALID_CONTRACT', 'Field not found')
 
     const parsed = groundedChatRequestSchema.safeParse(req.body)
     if (!parsed.success) return respondContractError(res, 400, 'INVALID_CONTRACT', 'Payload inválido', { issues: parsed.error.flatten() })
+
+    if (parsed.data.locationId) {
+      const principal = getAgronautasPrincipal(req)
+      if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+      const scope: GroundedCopilotScope = {
+        actorId: principal.actorId,
+        sessionId: principal.sessionId,
+        workspaceId: principal.workspaceId,
+        fieldId: field.props.id,
+        locationId: parsed.data.locationId,
+      }
+      const response = await groundedChat.execute(field.props.id, parsed.data, principal.workspaceId, scope)
+      return streamGroundedCopilotResponse(res, response)
+    }
 
     const context = await resolved.hydrologyRepository.getDenseContextForField(field.props.id, fieldBoundaryWkt(field))
     res.status(200)
@@ -668,15 +980,17 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
       })
     }
 
-    const response = await groundedChat.execute(fieldId, parsed.data)
+    const workspaceId = requiredPrincipalWorkspace(req, res)
+    if (!workspaceId) return
+    const response = await groundedChat.execute(fieldId, parsed.data, workspaceId)
     return res.json(response)
   })
 
   return router
 
-  async function buildDashboardPayload(fieldId: string) {
+  async function buildDashboardPayload(fieldId: string, workspaceId: string) {
     const [field, snapshot, alerts, climate] = await Promise.all([
-      resolved.fieldRepository.findById(fieldId),
+      resolved.fieldRepository.findById(fieldId, workspaceId),
       resolved.riskSnapshotRepository.getLatest(fieldId),
       resolved.alertSnapshotRepository.getLatestForField(fieldId),
       resolved.signalSummaryRepository.listClimateTimeline?.(fieldId, 1) ?? Promise.resolve([]),
@@ -751,6 +1065,132 @@ export function createAgronautasRouter(deps: Partial<AgronautasRouterDeps> = {})
   }
 }
 
+async function recordRejectedManagementAudit(repository: AgronautasManagementRepository, input: Parameters<NonNullable<AgronautasManagementRepository['recordManagementAudit']>>[0]): Promise<void> {
+  try {
+    await repository.recordManagementAudit?.(input)
+  } catch {
+    // Preserve the authorization response; the request is never reported as accepted.
+  }
+}
+
+async function recordRejectedMarketplaceAudit(repository: MarketplaceRepository, input: Omit<import('../../domain/repositories/agronautas-marketplace').MarketplaceAuditRecord, 'auditId'>): Promise<void> {
+  try {
+    await repository.appendAudit({ auditId: randomUUID(), ...input })
+  } catch {
+    // Preserve the authorization response; the request is never reported as accepted.
+  }
+}
+
+function respondMarketplaceFailure(res: Response, error: unknown, unavailableMessage: string) {
+  if (error instanceof AuthFailure) return respondAuthFailure(res, error)
+  if (error instanceof Error && (error.message === 'WORKSPACE_SCOPE_DENIED' || error.message === 'MARKETPLACE_PERMISSION_DENIED')) return respondContractError(res, 403, 'FORBIDDEN', 'La sesión no tiene permisos para este flujo local')
+  return respondContractError(res, 503, 'INVALID_CONTRACT', unavailableMessage, undefined, true)
+}
+
+async function buildGroundedCopilotContext(scope: GroundedCopilotScope, deps: AgronautasRouterDeps): Promise<GroundedCopilotContext> {
+  const field = await deps.fieldRepository.findById(scope.fieldId, scope.workspaceId)
+  if (!field) throw new Error('field_scope_unavailable')
+
+  const [snapshot, providerEvidence] = await Promise.all([
+    deps.riskSnapshotRepository.getLatest(scope.fieldId),
+    deps.providerEvidencePort.getEvidence('open-meteo', 'climate', scope.fieldId),
+  ])
+  const evidence: GroundedCopilotContext['evidence'] = [{
+    evidenceId: providerEvidence.evidenceId,
+    runId: providerEvidence.runId,
+    provider: providerEvidence.provider,
+    signalType: providerEvidence.signalType,
+    providerMode: providerEvidence.mode,
+    status: providerEvidence.mode === 'unavailable' ? 'unavailable' : providerEvidence.freshness,
+    sourceUrl: providerEvidence.sourceUrl,
+    retrievedAt: providerEvidence.retrievedAt,
+    observedAt: providerEvidence.observedAt,
+    lastSuccessfulObservedAt: providerEvidence.lastSuccessfulObservedAt,
+    degradationReasons: providerEvidence.degradationReasons,
+  }]
+
+  if (snapshot) {
+    evidence.push({
+      evidenceId: `risk:${snapshot.props.snapshotId}`,
+      runId: snapshot.props.runId,
+      provider: 'risk-engine',
+      signalType: 'risk',
+      providerMode: 'seam',
+      status: snapshot.freshness,
+      sourceKey: snapshot.props.ruleVersion,
+      observedAt: snapshot.props.computedAt.toISOString(),
+      retrievedAt: snapshot.props.computedAt.toISOString(),
+      lastSuccessfulObservedAt: snapshot.props.computedAt.toISOString(),
+      degradationReasons: snapshot.props.degradationReasons,
+    })
+  }
+
+  const hasUnavailable = evidence.some((item) => item.status === 'unavailable' || item.providerMode === 'unavailable')
+  const hasStale = evidence.some((item) => item.status === 'stale')
+  const hasDegraded = evidence.some((item) => item.status === 'degraded')
+  const readiness = snapshot && !hasUnavailable && !hasStale && !hasDegraded && evidence.every((item) => item.status === 'fresh')
+    ? 'ready'
+    : hasStale
+      ? 'stale'
+      : hasDegraded
+        ? 'degraded'
+        : hasUnavailable
+          ? 'unavailable'
+          : 'unverified'
+
+  return {
+    actorId: scope.actorId,
+    sessionId: scope.sessionId,
+    workspaceId: scope.workspaceId,
+    fieldId: field.props.id,
+    locationId: scope.locationId,
+    readiness,
+    evidence,
+  }
+}
+
+function streamGroundedCopilotResponse(res: Response, response: Awaited<ReturnType<GroundedChatUseCase['execute']>>) {
+  res.status(200)
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders?.()
+  const metadata = {
+    contractVersion: response.contractVersion,
+    fieldId: response.fieldId,
+    locationId: response.locationId,
+    actionable: response.actionable,
+    degraded: response.degraded,
+    unavailableReason: response.unavailableReason,
+    providerMode: response.providerMode,
+    providerModes: response.providerModes,
+    modelMode: response.modelMode,
+    citationMode: response.actionable ? 'validated-context' : 'none',
+    citationUnavailable: !response.actionable,
+    unverifiedClaims: !response.actionable,
+    evidenceStatus: response.evidenceStatus,
+    readiness: response.readiness,
+    citations: response.citations,
+    sourceRunIds: response.sourceRunIds,
+    citationLineage: response.citationLineage,
+    facts: response.supportingFacts,
+    limits: ['Solo evidencia Agronautas autorizada; no municipal, marketplace, auth, financiero, legal, hidráulico ni evacuación.'],
+  }
+  res.write('event: metadata\n')
+  res.write(`data: ${JSON.stringify(metadata)}\n\n`)
+  if (response.answer) {
+    res.write('event: token\n')
+    res.write(`data: ${JSON.stringify({ token: response.answer })}\n\n`)
+  }
+  res.write('event: done\n')
+  res.write(`data: ${JSON.stringify({ modelMode: response.modelMode, actionable: response.actionable, sourceRunIds: response.sourceRunIds })}\n\n`)
+  return res.end()
+}
+
+function copilotLocationBindingKey(scope: Pick<GroundedCopilotScope, 'actorId' | 'sessionId' | 'workspaceId' | 'fieldId'>): string {
+  return `${scope.actorId}:${scope.sessionId}:${scope.workspaceId}:${scope.fieldId}`
+}
+
 function receivedResponse(submissionId: string) {
   return demoContactSubmissionResponseSchema.parse({
     contractVersion: '1.0.0',
@@ -781,7 +1221,7 @@ function renderDashboardPdfText(dashboard: { snapshotId: string; field: { fieldI
 function respondContractError(
   res: Response,
   status: number,
-  code: 'INVALID_CONTRACT' | 'OUT_OF_SUPPORTED_AREA' | 'WORKER_UNAVAILABLE',
+  code: 'INVALID_CONTRACT' | 'OUT_OF_SUPPORTED_AREA' | 'WORKER_UNAVAILABLE' | 'UNAUTHORIZED' | 'FORBIDDEN' | 'UNMAPPED_RECORD' | 'AUTH_MAINTENANCE' | 'REFRESH_REPLAY',
   message: string,
   details?: Record<string, unknown>,
   retryable = false,
@@ -795,6 +1235,40 @@ function respondContractError(
       details,
     }),
   )
+}
+
+function respondLocationResolution(res: Response, status: number, result: unknown) {
+  return res.status(status).json(agronautasLocationResolutionSchema.parse(result))
+}
+
+function respondLocationAuthorizationFailure(res: Response, error: unknown) {
+  if (error instanceof AuthFailure) {
+    if (error.code === AUTH_FAILURE_CODES.UNMAPPED_RECORD) return respondLocationResolution(res, 403, { status: 'unauthorized', reason: 'field_out_of_scope' })
+    if (error.statusCode === 403) return respondLocationResolution(res, 403, { status: 'unauthorized', reason: 'workspace_scope_forbidden' })
+    if (error.statusCode === 503) return respondLocationResolution(res, 503, { status: 'unavailable', reason: 'authorization_unavailable', retryable: true })
+  }
+  return respondLocationResolution(res, 503, { status: 'unavailable', reason: 'authorization_unavailable', retryable: true })
+}
+
+function respondCreateFieldFailure(res: Response, error: unknown) {
+  const message = error instanceof Error ? error.message : ''
+  if (message === 'WORKSPACE_REQUIRED') return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+  if (message === 'FIELD_WORKSPACE_CONFLICT') return respondContractError(res, 403, 'FORBIDDEN', 'El lote no pertenece al workspace autorizado')
+  if (message === 'WORKSPACE_NOT_FOUND') return respondContractError(res, 503, 'AUTH_MAINTENANCE', 'El workspace Agronautas no está disponible', undefined, true)
+  if (message === 'FIELD_EXTERNAL_ID_CONFLICT') return respondContractError(res, 422, 'INVALID_CONTRACT', 'Ya existe un lote con ese ID externo')
+  if (message === 'coverage_not_loaded') return respondContractError(res, 503, 'INVALID_CONTRACT', 'La cobertura Agronautas no está disponible', undefined, true)
+  if (message === 'outside_corrientes_rice_zone' || message === 'unsupported_locality' || message === 'UNSUPPORTED_CROP' || message === 'Field hectares must be positive' || message === 'coordinates out of range') {
+    return respondContractError(res, 422, 'OUT_OF_SUPPORTED_AREA', 'El lote no cumple el contrato de cobertura Agronautas', { reason: message })
+  }
+
+  logger.error({ operation: 'create_field_intake', errorName: error instanceof Error ? error.name || 'Error' : typeof error, errorCode: readSafeErrorCode(error) }, 'Agronautas field intake failed unexpectedly')
+  return respondContractError(res, 500, 'INVALID_CONTRACT', 'No se pudo crear el lote')
+}
+
+function readSafeErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+  const code = (error as Error & { code?: unknown }).code
+  return typeof code === 'string' && /^[A-Z0-9_]{2,16}$/.test(code) ? code : undefined
 }
 
 function readRequestId(req: Request): string {
@@ -819,17 +1293,98 @@ function deriveAlertStatus(alerts: Array<{ freshness: 'fresh' | 'stale' | 'degra
   return 'fresh'
 }
 
-function requireFieldAccess(fieldRepository: FieldRepository) {
+function requireFieldAccess(fieldRepository: FieldRepository, authService: AgronautasAuthServicePort) {
   return async (req: RequestWithField, res: Response, next: NextFunction) => {
     const fieldId = requireFieldId(req, res)
     if (!fieldId) return
 
-    const field = await fieldRepository.findById(fieldId)
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const field = await fieldRepository.findById(fieldId, principal.workspaceId)
     if (!field) return res.status(404).json({ error: 'Field not found' })
+
+    try {
+      await authService.authorize(principal, principal.workspaceId, AUTH_SCOPES.READ, fieldId)
+    } catch (error) {
+      return respondAuthFailure(res, error)
+    }
 
     req.field = field
     return next()
   }
+}
+
+function respondAuthFailure(res: Response, error: unknown) {
+  if (!(error instanceof AuthFailure)) return respondContractError(res, 503, 'AUTH_MAINTENANCE', 'Agronautas authentication maintenance is required', undefined, true)
+  const code = error.code === AUTH_FAILURE_CODES.FORBIDDEN
+    ? 'FORBIDDEN'
+    : error.code === AUTH_FAILURE_CODES.UNMAPPED_RECORD
+      ? 'UNMAPPED_RECORD'
+      : error.code === AUTH_FAILURE_CODES.REFRESH_REPLAY
+        ? 'REFRESH_REPLAY'
+        : error.code === AUTH_FAILURE_CODES.AUTH_MAINTENANCE || error.code === AUTH_FAILURE_CODES.STORAGE_FAILURE
+          ? 'AUTH_MAINTENANCE'
+          : error.code === AUTH_FAILURE_CODES.INVALID_INPUT
+            ? 'INVALID_CONTRACT'
+            : 'UNAUTHORIZED'
+  return respondContractError(res, error.statusCode, code, error.message, undefined, error.statusCode === 503)
+}
+
+function readBearer(req: Request): string | null {
+  const header = req.header('authorization')?.trim()
+  const match = header ? /^Bearer\s+(.+)$/i.exec(header) : null
+  return match?.[1]?.trim() || null
+}
+
+function createConfiguredAuthService(): AgronautasAuthServicePort {
+  try {
+    const runtimeConfig = getAgronautasRuntimeConfig()
+    return new AgronautasAuthService(new PostgresAgronautasAuthRepository(), {
+      secrets: resolveAuthSecrets(),
+      redis: new RedisAgronautasAuthDenyStore(),
+      redisRequired: true,
+      protectedAccessEnabled: runtimeConfig.maintenanceMode !== true,
+    })
+  } catch {
+    return {
+       async authenticateAccessToken() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+       async authenticateBffAssertion() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+       async authorize() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+      async login() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+      async refresh() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+      async logout() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+      async status() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE, 'Agronautas authentication is not configured') },
+    }
+  }
+}
+
+function resolveRequestWorkspaceId(req: Request): string | undefined {
+  const queryWorkspaceId = typeof req.query['workspaceId'] === 'string' ? req.query['workspaceId'] : undefined
+  const body = req.body as { workspaceId?: unknown } | undefined
+  const bodyWorkspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined
+  return queryWorkspaceId ?? bodyWorkspaceId ?? (typeof req.params['workspaceId'] === 'string' ? req.params['workspaceId'] : undefined)
+}
+
+type ManagementCreateKind = 'season' | 'campaign' | 'operation' | 'task'
+
+function managementKindFromPath(value: string | undefined): ManagementCreateKind | null {
+  if (value === 'seasons' || value === 'season') return 'season'
+  if (value === 'campaigns' || value === 'campaign') return 'campaign'
+  if (value === 'operations' || value === 'operation') return 'operation'
+  if (value === 'tasks' || value === 'task') return 'task'
+  return null
+}
+
+function parseManagementCreate(kind: ManagementCreateKind, body: unknown) {
+  const payload = body && typeof body === 'object' ? { ...(body as Record<string, unknown>), kind } : body
+  if (kind === 'season') return agronautasManagementCreateSeasonRequestSchema.safeParse(payload)
+  if (kind === 'campaign') return agronautasManagementCreateCampaignRequestSchema.safeParse(payload)
+  if (kind === 'operation') return agronautasManagementCreateOperationRequestSchema.safeParse(payload)
+  return agronautasManagementCreateTaskRequestSchema.safeParse(payload)
+}
+
+function resolveRequestFieldId(req: Request): string | undefined {
+  return typeof req.params['fieldId'] === 'string' ? req.params['fieldId'] : undefined
 }
 
 function requireFieldAccessOrDemo(fieldRepository: FieldRepository, runtimeMode: ReturnType<typeof getAgronautasRuntimeConfig>['mode']) {
@@ -838,12 +1393,23 @@ function requireFieldAccessOrDemo(fieldRepository: FieldRepository, runtimeMode:
     if (!fieldId) return
     if (shouldUseDemoData(req, fieldId, runtimeMode)) return next()
 
-    const field = await fieldRepository.findById(fieldId)
+    const principal = getAgronautasPrincipal(req)
+    if (!principal) return respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    const field = await fieldRepository.findById(fieldId, principal.workspaceId)
     if (!field) return res.status(404).json({ error: 'Field not found' })
 
     req.field = field
     return next()
   }
+}
+
+function requiredPrincipalWorkspace(req: Request, res: Response): string | null {
+  const principal = getAgronautasPrincipal(req)
+  if (!principal) {
+    respondContractError(res, 401, 'UNAUTHORIZED', 'Missing or invalid bearer token')
+    return null
+  }
+  return principal.workspaceId
 }
 
 function fieldBoundaryWkt(field: Field): string {

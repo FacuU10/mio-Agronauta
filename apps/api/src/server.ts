@@ -21,6 +21,8 @@ import type { SignalIngestionRepository, SourceCadenceRepository } from './domai
 import { HydrologyIngestionScheduler, type HydrologyIngestionRunner, type HydrologyIngestionSource } from './infrastructure/jobs/hydrology-ingestion-scheduler'
 import type { HydrologySource } from '@repo/zod-schemas'
 import { ProductionEnvValidatorPort } from './infrastructure/config/validator'
+import type { AgronautasAuthServicePort } from './domain/auth/ports'
+import { runAgronautasAuthBootstrapFromEnv, type AgronautasAuthBootstrapResult } from './infrastructure/bootstrap/agronautas-auth-bootstrap'
 
 dotenv.config({ path: resolve(__dirname, '../.env') })
 
@@ -51,7 +53,11 @@ interface HydrologySchedulerStartupDeps {
   ownerId?: string
 }
 
-export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyIngestionCoordinator } = {}): Application {
+interface ApiStartupDependencies {
+  authBootstrap?: () => Promise<AgronautasAuthBootstrapResult>
+}
+
+export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyIngestionCoordinator; authService?: AgronautasAuthServicePort } = {}): Application {
   const app = express()
   const runtimeConfig = getAgronautasRuntimeConfig()
   const hydrologyRepository = new HydrologyRepository(getPostgresPool())
@@ -74,8 +80,8 @@ export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyInges
   app.use(healthRouter)
   app.use('/api/hydrology', createHydrologyGovernmentRouter({ ingestionCoordinator: hydrologyIngestionCoordinator }))
   app.use(runtimeConfig.routePrefix, healthRouter)
-  app.use(runtimeConfig.routePrefix, createAgronautasRouter())
-  app.use(`${runtimeConfig.routePrefix}/v1`, createAgronautasRouter({ isVersionedNamespace: true }))
+  app.use(runtimeConfig.routePrefix, createAgronautasRouter({ authService: deps.authService ?? undefined }))
+  app.use(`${runtimeConfig.routePrefix}/v1`, createAgronautasRouter({ authService: deps.authService ?? undefined, isVersionedNamespace: true }))
 
   app.use(notFoundHandler)
   app.use(globalErrorHandler)
@@ -83,8 +89,9 @@ export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyInges
   return app
 }
 
-export function startServer(): void {
+export async function startServer(dependencies: ApiStartupDependencies = {}): Promise<void> {
   ProductionEnvValidatorPort.validate()
+  await (dependencies.authBootstrap ?? startAgronautasAuthBootstrapFromEnv)()
   const port = resolveApiPort()
 
   const hydrologyRepository = new HydrologyRepository(getPostgresPool())
@@ -147,6 +154,10 @@ export function startAgronautasSchedulerFromEnv(env: NodeJS.ProcessEnv = process
     status: enabled ? 'enabled' as const : requested ? 'unavailable' as const : 'disabled' as const,
     reason: enabled ? null : requested ? AGRONAUTAS_SCHEDULER_UNAVAILABLE_REASON : 'scheduler_disabled',
   })
+}
+
+export function startAgronautasAuthBootstrapFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<AgronautasAuthBootstrapResult> {
+  return runAgronautasAuthBootstrapFromEnv(env)
 }
 
 export function startHydrologySchedulerFromEnv(env: NodeJS.ProcessEnv, deps: HydrologySchedulerStartupDeps = {}): Pick<HydrologyIngestionScheduler, 'start'> | null {

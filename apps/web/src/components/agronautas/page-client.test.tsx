@@ -9,6 +9,7 @@ import { createAgronautasMockService, type AgronautasService } from '@/lib/agron
 import { ApiError } from '@/lib/api-client'
 import { fieldOverviewSchema } from '@/lib/agronautas/schemas'
 import { useAgronautasStore } from '@/store/agronautas-store'
+import type { AgronautasAuthClient } from '@/lib/agronautas/auth-client'
 
 const activeDoms: Array<InstanceType<typeof JSDOM>> = []
 const globalNames = ['window', 'document', 'HTMLElement', 'HTMLFormElement', 'HTMLButtonElement', 'FormData', 'Event', 'navigator'] as const
@@ -82,7 +83,8 @@ test('alta válida muestra dashboard con alertas y evidencia', async () => {
     assert.ok(view.getByText('Drivers y evidencia'))
     assert.ok(view.getByText('Estado monitoreo'))
     assert.ok(view.getByText('Riesgo de anegamiento'))
-    assert.ok(view.getByText(/weather:open-meteo/i))
+    const evidenceList = view.getByTestId('agronautas-evidence-list')
+    assert.match(evidenceList.textContent ?? '', /weather:open-meteo/i)
     assert.ok(view.getByText('Timeline climático'))
     const evidenceStates = view.getByRole('region', { name: 'Estados de evidencia Agronautas' })
     assert.match(evidenceStates.textContent ?? '', /observed/i)
@@ -338,6 +340,136 @@ test('401 de runtime ofrece una entrada de demo explícita y no muestra workspac
   })
 })
 
+test('auth loading is bounded and never renders the previous protected workspace', () => {
+  const authClient: AgronautasAuthClient = {
+    status: () => new Promise(() => undefined),
+    login: async () => { throw new Error('not used') },
+    refresh: async () => { throw new Error('not used') },
+    logout: async () => undefined,
+  }
+  const base = createAgronautasMockService()
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={{ ...base, isDemo: false }} authClient={authClient} />
+    </QueryProvider>,
+  )
+
+  assert.ok(view.getByText(/Verificando autenticación Agronautas/i))
+  assert.equal(view.queryByRole('button', { name: 'Registrar lote' }), null)
+})
+
+test('protected auth failure with a previous cache shows recovery and never renders stale field data', async () => {
+  const base = createAgronautasMockService()
+  const authClient: AgronautasAuthClient = {
+    status: async () => { throw new ApiError(401, 'Missing session') },
+    login: async () => { throw new Error('not used') },
+    refresh: async () => { throw new Error('not used') },
+    logout: async () => undefined,
+  }
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={{ ...base, isDemo: false }} authClient={authClient} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('heading', { name: /Acceso Agronautas no autorizado/i }))
+    assert.equal(view.queryByText('private-old-field'), null)
+    assert.equal(view.queryByRole('button', { name: 'Registrar lote' }), null)
+  })
+})
+
+test('successful protected session renders the workspace instead of a false unauthorized state', async () => {
+  const base = createAgronautasMockService()
+  const authClient: AgronautasAuthClient = {
+    status: async () => ({
+      principal: {
+        actorId: 'operator-1', sessionId: 'session-1', membershipId: 'membership-1',
+        workspaceId: 'workspace-1', workspaceKey: 'agronautas-pilot', role: 'operator',
+        scopes: ['read', 'write'], expiresAt: '2030-09-15T15:00:00.000Z',
+      },
+      accessExpiresAt: '2030-09-15T15:00:00.000Z',
+      refreshExpiresAt: '2030-10-15T15:00:00.000Z',
+      memberships: [{
+        membershipId: 'membership-1', workspaceId: 'workspace-1', workspaceKey: 'agronautas-pilot', role: 'operator', scopes: ['read', 'write'],
+      }],
+    }),
+    login: async () => { throw new Error('not used') },
+    refresh: async () => { throw new Error('not used') },
+    logout: async () => undefined,
+  }
+  const service: AgronautasService = {
+    ...base,
+    isDemo: false,
+    async getRuntime() {
+      return {
+        mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0',
+        scheduler: { enabled: false, status: 'disabled' }, worker: { status: 'unavailable', reason: 'worker_not_configured' },
+      }
+    },
+  }
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={service} authClient={authClient} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.ok(view.getByText(/Modo real/i))
+    assert.ok(view.getByText('Contexto de trabajo'))
+    assert.ok(view.getByRole('status', { name: 'Workspace Agronautas listo' }))
+    assert.equal(view.queryByRole('heading', { name: /Acceso Agronautas no autorizado/i }), null)
+  })
+})
+
+test('protected workspace exposes readiness only after its authenticated context is loaded', async () => {
+  const base = createAgronautasMockService()
+  const workspace = await base.getWorkspace()
+  let releaseWorkspace: ((value: typeof workspace) => void) | undefined
+  const pendingWorkspace = new Promise<typeof workspace>((resolve) => { releaseWorkspace = resolve })
+  const authClient: AgronautasAuthClient = {
+    status: async () => ({
+      principal: {
+        actorId: 'operator-1', sessionId: 'session-1', membershipId: 'membership-1',
+        workspaceId: 'workspace-1', workspaceKey: 'agronautas-pilot', role: 'operator',
+        scopes: ['read', 'write'], expiresAt: '2030-09-15T15:00:00.000Z',
+      },
+      accessExpiresAt: '2030-09-15T15:00:00.000Z',
+      refreshExpiresAt: '2030-10-15T15:00:00.000Z',
+      memberships: [{
+        membershipId: 'membership-1', workspaceId: 'workspace-1', workspaceKey: 'agronautas-pilot', role: 'operator', scopes: ['read', 'write'],
+      }],
+    }),
+    login: async () => { throw new Error('not used') },
+    refresh: async () => { throw new Error('not used') },
+    logout: async () => undefined,
+  }
+  const service: AgronautasService = {
+    ...base,
+    isDemo: false,
+    async getRuntime() {
+      return {
+        mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0',
+        scheduler: { enabled: false, status: 'disabled' }, worker: { status: 'unavailable', reason: 'worker_not_configured' },
+      }
+    },
+    async getWorkspace() {
+      return pendingWorkspace
+    },
+  }
+  const view = render(
+    <QueryProvider>
+      <AgronautasPageClient service={service} authClient={authClient} />
+    </QueryProvider>,
+  )
+
+  await waitFor(() => {
+    assert.equal(view.queryByRole('status', { name: 'Workspace Agronautas listo' }), null)
+  })
+  releaseWorkspace?.(workspace)
+  await waitFor(() => assert.ok(view.getByRole('status', { name: 'Workspace Agronautas listo' })))
+})
+
 test('403 de runtime muestra acceso restringido sin ofrecer una falsa ruta de autenticación', async () => {
   const base = createAgronautasMockService()
   const view = render(
@@ -377,8 +509,8 @@ test('modo demo está rotulado como aislado y no como tenancy de producción', a
   )
 
   await waitFor(() => {
-    assert.ok(view.getByText(/Demo aislada/i))
-    assert.ok(view.getByText(/no representa identidad, rol ni tenancy de producción/i))
+    assert.ok(view.getByText(/DEMO LOCAL · SIN PERSISTENCIA/i))
+    assert.ok(view.getByText(/no representan identidad, rol ni tenancy de producción/i))
   })
 })
 
@@ -410,6 +542,82 @@ test('404 de capacidades muestra estados no disponibles y conserva evidencia dis
     assert.ok(view.getByText(/Frescura degradada/i))
     assert.doesNotMatch(view.getByTestId('agronautas-hydrology-panel').textContent ?? '', /5\.42\s*m|Pronóstico INA/i)
   }, { timeout: 5000 })
+})
+
+test('evidence dashboard renders a typed 503 recovery state and recovers without demo replacement', async () => {
+  const base = createAgronautasMockService()
+  let attempts = 0
+  const service: AgronautasService = {
+    ...base,
+    isDemo: false,
+    async getRuntime() {
+      return {
+        mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0',
+        scheduler: { enabled: false, status: 'disabled' }, worker: { status: 'unavailable', reason: 'worker_not_configured' },
+      }
+    },
+    async getEvidenceDashboard(fieldId) {
+      attempts += 1
+      if (attempts === 1) throw new ApiError(503, 'Evidence service unavailable')
+      return base.getEvidenceDashboard(fieldId)
+    },
+  }
+  const authClient: AgronautasAuthClient = {
+    status: async () => ({
+      principal: { actorId: 'operator-1', sessionId: 'session-1', membershipId: 'membership-1', workspaceId: 'workspace-1', workspaceKey: 'agronautas-pilot', role: 'operator', scopes: ['read', 'write'], expiresAt: '2030-09-15T15:00:00.000Z' },
+      accessExpiresAt: '2030-09-15T15:00:00.000Z', refreshExpiresAt: '2030-10-15T15:00:00.000Z', memberships: [],
+    }),
+    login: async () => { throw new Error('not used') }, refresh: async () => { throw new Error('not used') }, logout: async () => undefined,
+  }
+  const view = render(<QueryProvider><AgronautasPageClient service={service} authClient={authClient} /></QueryProvider>)
+
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Registrar lote' })))
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+  await waitFor(() => {
+    assert.ok(view.getByTestId('agronautas-evidence-dashboard'))
+    assert.ok(view.getByText(/Evidencia no disponible/i))
+    assert.ok(view.getByRole('button', { name: /Reintentar evidencia/i }))
+    assert.equal(view.queryByText(/Demo aislada/i), null)
+  })
+
+  fireEvent.click(view.getByRole('button', { name: /Reintentar evidencia/i }))
+  await waitFor(() => {
+    assert.ok(view.getByText('Evidencia por fuente'))
+    assert.ok(view.getByText('Alertas SMN'))
+    assert.ok(view.getAllByText('Satélite').length >= 1)
+    assert.ok(view.getByText(/Readiness no fue devuelto/i))
+  })
+})
+
+test('malformed evidence response is visible as unavailable and never becomes a fabricated source', async () => {
+  const base = createAgronautasMockService()
+  const service: AgronautasService = {
+    ...base,
+    isDemo: false,
+    async getRuntime() {
+      return {
+        mode: 'real', routePrefix: '/agronautas', compatibilityPrefix: '/agronautas/v1', contractVersion: '1.0.0',
+        scheduler: { enabled: false, status: 'disabled' }, worker: { status: 'unavailable', reason: 'worker_not_configured' },
+      }
+    },
+    async getEvidenceDashboard() { throw new Error('evidence contract malformed') },
+  }
+  const authClient: AgronautasAuthClient = {
+    status: async () => ({
+      principal: { actorId: 'operator-1', sessionId: 'session-1', membershipId: 'membership-1', workspaceId: 'workspace-1', workspaceKey: 'agronautas-pilot', role: 'operator', scopes: ['read'], expiresAt: '2030-09-15T15:00:00.000Z' },
+      accessExpiresAt: '2030-09-15T15:00:00.000Z', refreshExpiresAt: '2030-10-15T15:00:00.000Z', memberships: [],
+    }),
+    login: async () => { throw new Error('not used') }, refresh: async () => { throw new Error('not used') }, logout: async () => undefined,
+  }
+  const view = render(<QueryProvider><AgronautasPageClient service={service} authClient={authClient} /></QueryProvider>)
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Registrar lote' })))
+  fireEvent.click(view.getByRole('button', { name: 'Registrar lote' }))
+
+  await waitFor(() => {
+    assert.ok(view.getByRole('heading', { name: /Evidencia no disponible/i }))
+    assert.equal(view.queryByText('open-meteo-weather'), null)
+    assert.equal(view.queryByText(/Mock|Demo aislada/i), null)
+  })
 })
 
 test('el shell Agronautas expone un destino de contenido sin sumar otro main', async () => {

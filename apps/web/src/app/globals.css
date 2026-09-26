@@ -20,6 +20,18 @@
   --destructive-foreground: #fff7f7;
   --ring: rgba(16, 185, 129, 0.35);
   --focus-ring: #b8e36b;
+  --status-success: #047857;
+  --status-success-surface: #ecfdf5;
+  --status-info: #0369a1;
+  --status-info-surface: #f0f9ff;
+  --status-warning: #b45309;
+  --status-warning-surface: #fffbeb;
+  --status-error: #b91c1c;
+  --status-error-surface: #fff1f2;
+  --status-muted: #64748b;
+  --status-muted-surface: #f8fafc;
+  --status-action: #0f172a;
+  --status-focus: #047857;
 }
 
 * {
@@ -79,6 +91,18 @@ img {
 
 @theme inline {
   --breakpoint-desktop: 100rem;
+  --color-status-success: var(--status-success);
+  --color-status-success-surface: var(--status-success-surface);
+  --color-status-info: var(--status-info);
+  --color-status-info-surface: var(--status-info-surface);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-surface: var(--status-warning-surface);
+  --color-status-error: var(--status-error);
+  --color-status-error-surface: var(--status-error-surface);
+  --color-status-muted: var(--status-muted);
+  --color-status-muted-surface: var(--status-muted-surface);
+  --color-status-action: var(--status-action);
+  --color-status-focus: var(--status-focus);
 }
 
 .responsive-shell,
@@ -88,9 +112,19 @@ img {
   min-width: 0;
 }
 
+.responsive-main :where(button, input:not([type='hidden']), select, textarea) {
+  min-height: 44px;
+}
+
 .responsive-nav {
   scrollbar-width: thin;
   overscroll-behavior-inline: contain;
+}
+
+.responsive-shell header a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
 }
 
 .evidence-surface {

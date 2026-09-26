@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { HYDROLOGY_BRAZIL_EXTENSION, InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository, getIberaCoverageStatus, isReviewedIberaRegistryAssociation, summarizeObservedTendency } from './index'
+import { HYDROLOGY_BRAZIL_EXTENSION, InaAdapter, InaHttpClient, InmetAdapter, InmetHttpClient, PnaAdapter, PnaHttpClient, SmnAdapter, SmnHttpClient, HydrologyRepository, getIberaCoverageStatus, getIberaGeometryStatus, isReviewedIberaRegistryAssociation, summarizeObservedTendency } from './index'
 
 test('Brazil remains an explicit data-free extension point until official sources and BR to Corrientes influence are verified', () => {
   assert.deepEqual(HYDROLOGY_BRAZIL_EXTENSION, {
@@ -136,6 +136,10 @@ test('Iberá registry activation requires complete reviewed provenance and gener
   assert.equal(isReviewedIberaRegistryAssociation({ municipalityId: 'mun-1', source: 'PNA', officialIdentifier: 'mun-official', sourceUrl: 'https://example.com', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed', reviewedAt: new Date('2026-08-13T10:00:00.000Z'), stationId: 'station-1', coverageKey: null, geometryStatus: 'unverified' }), true)
   assert.equal(isReviewedIberaRegistryAssociation({ municipalityId: 'mun-1', source: 'PNA', officialIdentifier: null, sourceUrl: 'https://example.com', freshnessPolicy: 'PT1H', registryVersion: 'v1', reviewStatus: 'reviewed', reviewedAt: new Date('2026-08-13T10:00:00.000Z'), stationId: 'station-1', coverageKey: null, geometryStatus: 'unverified' }), false)
   assert.equal(getIberaCoverageStatus([{ status: 'supported' }, { status: 'unavailable' }]), 'partial')
+  assert.equal(getIberaGeometryStatus([]), 'unavailable')
+  assert.equal(getIberaGeometryStatus([{ geometryStatus: 'unverified' }, { geometryStatus: 'partial' }]), 'partial')
+  assert.equal(getIberaGeometryStatus([{ geometryStatus: 'verified' }, { geometryStatus: 'unverified' }]), 'unverified')
+  assert.equal(getIberaGeometryStatus([{ geometryStatus: 'verified' }]), 'verified')
   assert.equal(summarizeObservedTendency([{ value: 1 }, { value: 2 }, { value: 3 }]), 'rising')
   assert.equal(summarizeObservedTendency([{ value: 3 }, { value: 2 }, { value: 1 }]), 'falling')
   assert.equal(summarizeObservedTendency([{ value: 1 }, { value: null }]), null)

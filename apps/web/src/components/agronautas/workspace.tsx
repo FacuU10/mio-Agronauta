@@ -3,15 +3,15 @@
 import { createElement, Fragment, useRef, useState, type InputHTMLAttributes } from 'react'
 import type { FieldIntake } from '@repo/zod-schemas'
 import { agronautasSupportedCrops } from '@repo/zod-schemas'
-import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextResponse, AssumptionSimulationResponse, AssumptionSimulationRequest } from '@/lib/agronautas/schemas'
+import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOverview, GroundedChatResponse, HydrologyDashboard, HydrologyItem, MonitoringStatus, RecomputeRequestResult, RiskCurrent, RiskTimelineResponse, WeatherTimelineResponse, AgronautasWorkspaceFieldPage, AgronautasWorkspaceContext, AgronautasActivityResponse, AgronautasIntelligence, CampaignPlanningContextResponse, AssumptionSimulationResponse, AssumptionSimulationRequest, AgronautasManagementItem, AgronautasManagementAuditItem } from '@/lib/agronautas/schemas'
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
 import { ProductShell } from '@/components/shell/product-shell'
 import { EvidenceStateBadge, FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard, VisibilityState } from '@/components/visibility/primitives'
 import { FutureCapabilities } from '@/components/visibility/future-capabilities'
-import { ChatEvidencePanel } from '@/components/visibility/chat-evidence'
 import type { ChatStreamState } from '@/lib/visibility/chat'
+import type { AgronautasCanonicalLocation } from '@/lib/agronautas/schemas'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,7 +19,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { EVIDENCE_STATE, normalizeEvidence, type EvidenceViewModel } from '@/lib/visibility/evidence-state'
+import { ApiError } from '@/lib/api-client'
+import { normalizeRequestError } from '@/lib/visibility/view-models'
+import type { EvidenceDashboardModel, EvidenceSourceRecord } from '@/lib/agronautas/ingestion-status'
 import { FieldGeometryEditor } from './field-geometry-editor'
+import { ManagementPanel } from './management-panel'
+import { PlanningPanel } from './planning-panel'
+import { CopilotPanel } from './copilot-panel'
+import { EvidencePanel } from './evidence-panel'
+import { IntelligencePanel } from './intelligence-panel'
+import { buildWorkspaceHref, OPERATIONAL_WORKSPACE_VIEWS, type OperationalWorkspaceView } from './workspace-navigation'
 
 const React = { createElement, Fragment }
 
@@ -35,6 +44,7 @@ const AGRONAUTAS_ACCESS_STATE_VALUES = {
   UNAUTHORIZED: 'unauthorized',
   FORBIDDEN: 'forbidden',
   UNAVAILABLE: 'unavailable',
+  MAINTENANCE: 'maintenance',
 } as const
 
 export type AgronautasAccessState = (typeof AGRONAUTAS_ACCESS_STATE_VALUES)[keyof typeof AGRONAUTAS_ACCESS_STATE_VALUES]
@@ -66,20 +76,36 @@ export interface AgronautasCapabilityStates {
 interface WorkspaceProps {
   accessState?: AgronautasAccessState
   accessReason?: string | null
+  workspaceReady: boolean
   capabilityStates?: AgronautasCapabilityStates
   runtimeMode: 'real' | 'demo'
   runtimeStatus: 'loading' | 'ready' | 'error'
   runtimeError: string | null
   selectedFieldId: string | null
+  selectedLocation: AgronautasCanonicalLocation | null
+  selectionError: string | null
+  isLocationResolving: boolean
   fieldIndex?: AgronautasWorkspaceFieldPage
   isFieldIndexLoading: boolean
   isFieldIndexFetchingNextPage: boolean
   hasNextFieldPage: boolean
   workspace?: AgronautasWorkspaceContext
   activity?: AgronautasActivityResponse
+  managementItems: AgronautasManagementItem[]
+  managementAudit: AgronautasManagementAuditItem[]
+  isManagementLoading: boolean
+  managementError: string | null
+  isManagementMutating: boolean
+  onRetryManagement: () => Promise<unknown>
+  onCreateManagementOperation: (name: string) => Promise<unknown>
+  onTransitionManagement: (item: AgronautasManagementItem) => Promise<unknown>
   intelligence?: AgronautasIntelligence
   planningContext?: CampaignPlanningContextResponse
   simulation?: AssumptionSimulationResponse
+  isPlanningLoading: boolean
+  isPlanningMutating: boolean
+  planningError: string | null
+  onRetryPlanning: () => Promise<unknown>
   onLoadPlanningContext: (input: { campaignName: string; season: string; fieldIds: string[] }) => Promise<unknown>
   onSimulateAssumptions: (input: AssumptionSimulationRequest) => Promise<unknown>
   lastCreatedFieldId: string | null
@@ -93,7 +119,9 @@ interface WorkspaceProps {
   status?: MonitoringStatus
   riskTimeline?: RiskTimelineResponse
   weatherTimeline?: WeatherTimelineResponse
-  dashboardPayload?: DashboardSnapshot
+   dashboardPayload?: DashboardSnapshot
+   evidenceDashboard?: EvidenceDashboardModel
+   evidenceDashboardError?: unknown
   hydrologyDashboard?: HydrologyDashboard
   geometry?: FieldGeometryResponse
   chatResponse?: GroundedChatResponse
@@ -107,17 +135,24 @@ interface WorkspaceProps {
   onLoadMoreFields: () => void
   onSubmitIntake: (input: FieldIntake) => Promise<unknown>
   onSaveGeometry?: (input: { polygonWkt: string; expectedUpdatedAt?: string }) => Promise<FieldGeometryResponse>
+  onSelectPolygon?: (polygonWkt: string) => Promise<void>
   onRequestRecompute: () => Promise<unknown>
   onAskChat: (message: string) => Promise<unknown>
   onRetryChat: () => Promise<unknown>
   onAskHydrologyChat: (message: string) => Promise<unknown>
   onRetryHydrologyChat: () => Promise<unknown>
   onRetrySync: () => Promise<unknown>
+  workspaceView: OperationalWorkspaceView
+  workspaceBasePath: string
 }
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
   if (props.accessState === 'unauthorized') {
     return <ProductShell product="agronautas" title="Workspace Agronautas" description="Acceso controlado al workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="unauthorized" title="Acceso Agronautas no autorizado" description="Este workspace requiere una sesión autorizada. La vista no muestra datos de producción mientras falta autenticación." /><a className="mt-4 inline-flex rounded-full bg-stone-950 px-4 py-2 text-sm font-semibold text-white hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" href="/probar-demo">Solicitar entrada al demo</a></div></ProductShell>
+  }
+
+  if (props.accessState === 'loading') {
+    return <ProductShell product="agronautas" title="Workspace Agronautas" description="Verificando el acceso controlado al workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="loading" title="Verificando autenticación Agronautas" description="Confirmando la sesión y el workspace antes de mostrar datos protegidos." retryAllowed={false} /></div></ProductShell>
   }
 
   if (props.accessState === 'forbidden') {
@@ -128,22 +163,32 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
     return <ProductShell product="agronautas" title="Workspace Agronautas" description="Estado de disponibilidad del workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="error" title="Backend Agronautas no disponible" description={props.accessReason ?? 'No se pudo conectar con el backend. No se muestran datos como si fueran actuales.'} retryLabel="Reintentar conexión" onRetry={props.onRetrySync} /></div></ProductShell>
   }
 
+  if (props.accessState === 'maintenance') {
+    return <ProductShell product="agronautas" title="Workspace Agronautas" description="La autenticación Agronautas está en mantenimiento." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="error" title="Autenticación Agronautas en mantenimiento" description={props.accessReason ?? 'No se pudo probar la política de seguridad. Tus datos permanecen protegidos; intentá más tarde.'} retryAllowed={false} /></div></ProductShell>
+  }
+
   const isDemo = props.runtimeMode === 'demo' || props.accessState === 'demo'
+  const operationalNavItems = OPERATIONAL_WORKSPACE_VIEWS.map((view) => ({
+    href: buildWorkspaceHref(view.key, props.selectedFieldId, props.workspaceBasePath),
+    label: view.label,
+    active: props.workspaceView === view.key,
+  }))
 
   return (
     <ProductShell
       product="agronautas"
       title="Workspace Agronautas"
       description="De la ubicación del lote a una decisión verificable: cobertura por punto, nivel de riesgo, siguiente acción y evidencia contratada."
-      navItems={[{ href: '#agronautas-intake', label: 'Nuevo lote' }, { href: '#agronautas-dashboard', label: 'Decisión' }, { href: '#agronautas-alerts', label: 'Alertas' }, { href: '#agronautas-timeline', label: 'Timeline' }]}
+       navItems={[{ href: '#agronautas-intake', label: 'Nuevo lote' }, ...operationalNavItems, { href: '#agronautas-dashboard', label: 'Decisión' }, { href: '#agronautas-alerts', label: 'Alertas' }, { href: '#agronautas-timeline', label: 'Timeline' }]}
     >
     <div className="agronautas-canvas mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 rounded-[2rem] px-4 py-8 md:px-8">
+      {props.workspaceReady ? <p role="status" aria-label="Workspace Agronautas listo" data-testid="agronautas-workspace-ready" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">Workspace Agronautas listo: sesión, runtime y contexto autorizados.</p> : null}
       <section className="grid gap-4 rounded-[32px] border border-emerald-950/20 bg-stone-950 px-6 py-8 text-white shadow-lg md:grid-cols-[1.4fr,0.9fr] md:px-8">
         <div className="space-y-4">
           <Badge className="bg-amber-200 text-stone-950">Web MVP · Modo {isDemo ? 'demo' : 'real'}</Badge>
           <h2 className="max-w-2xl font-serif text-3xl font-semibold leading-tight md:text-5xl">Agronautas: dashboard de riesgo para el campo argentino.</h2>
           <p className="max-w-2xl text-sm text-white/85 md:text-base">Riesgo, frescura, fuentes y evidencia persistida para lotes agrícolas de Corrientes, sin reglas de negocio calculadas en el cliente.</p>
-          {isDemo ? <p role="status" className="max-w-2xl rounded-2xl border border-amber-200/40 bg-amber-100/10 px-4 py-3 text-sm text-amber-100">Demo aislada: no representa identidad, rol ni tenancy de producción.</p> : null}
+           {isDemo ? <p role="status" className="max-w-2xl rounded-2xl border border-amber-200/40 bg-amber-100/10 px-4 py-3 text-sm text-amber-100">DEMO LOCAL · SIN PERSISTENCIA. Los cambios de esta sesión son ilustrativos y no representan identidad, rol ni tenancy de producción.</p> : null}
         </div>
         <Card className="border-white/10 bg-white/10 text-white backdrop-blur">
           <CardHeader>
@@ -164,21 +209,31 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
       </section>
 
        <section className="grid gap-4" aria-label="Contexto de workspace Agronautas">
-          <Card><CardHeader><CardTitle>Contexto de trabajo</CardTitle><CardDescription>{props.workspace ? `${props.workspace.name} · ${props.workspace.fieldCount} lotes en contexto predeterminado · Solo datos persistidos.` : 'Cargando contexto Agronautas…'}</CardDescription></CardHeader></Card>
+           <Card><CardHeader><CardTitle>Contexto de trabajo</CardTitle><CardDescription>{props.workspace ? `${props.workspace.name} · ${props.workspace.fieldCount} lotes en contexto predeterminado · Solo datos persistidos.` : 'Cargando contexto Agronautas…'}</CardDescription></CardHeader><CardContent><SelectionLineageState location={props.selectedLocation} error={props.selectionError} isResolving={props.isLocationResolving} /></CardContent></Card>
        </section>
         <section id="agronautas-intake" className="grid gap-6 xl:grid-cols-[420px,1fr]">
          <FieldIndexPanel index={props.fieldIndex} isLoading={props.isFieldIndexLoading} isFetchingNextPage={props.isFieldIndexFetchingNextPage} hasNextPage={props.hasNextFieldPage} onLoadMore={props.onLoadMoreFields} onSelectField={props.onSelectField} />
         <IntakePanel {...props} />
           <DashboardPanel {...props} />
        </section>
-        <PlanningPanel {...props} />
-        <FutureCapabilities product="agronautas" />
+          <PlanningPanel fieldId={props.selectedFieldId ?? (props.runtimeMode === 'demo' ? 'field-demo-1' : props.fieldIndex?.items[0]?.fieldId ?? null)} planningContext={props.planningContext} simulation={props.simulation} isLoading={props.isPlanningLoading} isMutating={props.isPlanningMutating} error={props.planningError} onRetry={props.onRetryPlanning} onLoadPlanningContext={props.onLoadPlanningContext} onSimulateAssumptions={props.onSimulateAssumptions} />
+          <section id="agronautas-management" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700">
+            <ManagementPanel selectedFieldId={props.selectedFieldId} items={props.managementItems} audit={props.managementAudit} isLoading={props.isManagementLoading} error={props.managementError} isMutating={props.isManagementMutating} onRetry={props.onRetryManagement} onCreateOperation={props.onCreateManagementOperation} onTransition={props.onTransitionManagement} />
+          </section>
+         <FutureCapabilities product="agronautas" />
     </div>
     </ProductShell>
   )
 }
 
-function PlanningPanel({ fieldIndex, planningContext, simulation, onLoadPlanningContext, onSimulateAssumptions }: WorkspaceProps) {
+function SelectionLineageState({ location, error, isResolving }: { location: AgronautasCanonicalLocation | null; error: string | null; isResolving: boolean }) {
+  if (isResolving) return <p role="status">Confirmando selección autorizada…</p>
+  if (error) return <p role="alert" aria-label="Selección de lote no disponible">Selección no disponible: {error}</p>
+  if (!location) return <p role="status">Elegí un lote para confirmar su ubicación y alcance.</p>
+  return <p role="status">Selección autorizada · {location.locationId} · {location.geometry.type} · cobertura {location.coverage.status}</p>
+}
+
+function LegacyPlanningPanel({ fieldIndex, planningContext, simulation, onLoadPlanningContext, onSimulateAssumptions }: WorkspaceProps) {
   const [campaignName, setCampaignName] = useState('Campaña demostrativa')
   const [season, setSeason] = useState('2026')
   const [areaHa, setAreaHa] = useState('10')
@@ -374,7 +429,7 @@ function IntakePanel({ intakeError, isSubmitting, onSubmitIntake }: WorkspacePro
   )
 }
 
-function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, hydrologyDashboard, geometry, activity, intelligence, capabilityStates, onSaveGeometry, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat, onRetrySync }: WorkspaceProps) {
+function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTimeline, weatherTimeline, dashboardPayload, evidenceDashboard, evidenceDashboardError, hydrologyDashboard, geometry, activity, intelligence, capabilityStates, onSaveGeometry, onSelectPolygon, chatResponse, hydrologyChatState, chatError, isChatPending, isHydrologyChatPending, recomputeStatus, isDashboardLoading, isRecomputePending, onSelectField, onRequestRecompute, onAskChat, onRetryChat, onAskHydrologyChat, onRetryHydrologyChat, onRetrySync }: WorkspaceProps) {
   const [chatValidationError, setChatValidationError] = useState<string | null>(null)
 
   if (!selectedFieldId) {
@@ -404,7 +459,9 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
 
   return (
     <div id="agronautas-dashboard" className="grid gap-6">
-      {geometry && onSaveGeometry ? <FieldGeometryEditor fieldId={selectedFieldId} initialGeometry={geometry} onSave={async (input) => onSaveGeometry({ polygonWkt: input.polygonWkt ?? '', expectedUpdatedAt: input.expectedUpdatedAt })} /> : <CapabilityUnavailableState capability={capabilityStates?.geometry} label="Geometría" onRetry={onRetrySync} />}
+        <section id="agronautas-geometry" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" aria-label="Geometría del lote">
+          {geometry && onSaveGeometry ? <FieldGeometryEditor fieldId={selectedFieldId} initialGeometry={geometry} onSave={async (input) => onSaveGeometry({ polygonWkt: input.polygonWkt ?? '', expectedUpdatedAt: input.expectedUpdatedAt })} onSelectPolygon={onSelectPolygon} /> : <CapabilityUnavailableState capability={capabilityStates?.geometry} label="Geometría" onRetry={onRetrySync} />}
+        </section>
       <section className="grid gap-5 rounded-[2rem] border border-emerald-900/20 bg-emerald-950 p-5 text-white shadow-lg md:grid-cols-[1.15fr,0.85fr] md:p-7" aria-labelledby="decision-heading">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">Resumen · {field?.externalFieldId ?? selectedFieldId}</p>
@@ -458,11 +515,19 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
         </Card>
       ) : null}
 
-      <HydrologyPanel dashboard={hydrologyDashboard} availability={capabilityStates?.hydrology} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
+       <section id="agronautas-copilot" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" aria-label="Copilot Agronautas">
+         <HydrologyPanel dashboard={hydrologyDashboard} availability={capabilityStates?.hydrology} locality={field?.locality ?? null} hydrologyChatState={hydrologyChatState} isHydrologyChatPending={isHydrologyChatPending} onAskHydrologyChat={onAskHydrologyChat} onRetryHydrologyChat={onRetryHydrologyChat} />
+       </section>
 
-      <AgronautasEvidenceStatePanel dashboardPayload={dashboardPayload} hydrologyDashboard={hydrologyDashboard} risk={risk} />
+       <section id="agronautas-evidence" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" aria-label="Evidencia Agronautas">
+          <EvidencePanel model={evidenceDashboard} error={evidenceDashboardError} onRetry={onRetrySync} />
+       </section>
 
-      <IntelligencePanel intelligence={intelligence} availability={capabilityStates?.intelligence} onRetry={onRetrySync} />
+       <AgronautasEvidenceStatePanel dashboardPayload={dashboardPayload} hydrologyDashboard={hydrologyDashboard} risk={risk} />
+
+       <section id="agronautas-intelligence" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" aria-label="Inteligencia Agronautas">
+         <IntelligencePanel intelligence={intelligence} availability={capabilityStates?.intelligence} onRetry={onRetrySync} />
+       </section>
 
       <NextFeaturesPanel dashboardPayload={dashboardPayload} />
 
@@ -614,7 +679,7 @@ function DashboardPanel({ selectedFieldId, field, risk, alerts, status, riskTime
 
            {chatError ? <p id={AGRONAUTAS_CHAT_ERROR_ID} role="alert" aria-live="assertive" aria-atomic="true" className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{chatError}</p> : null}
 
-          {chatResponse ? <ChatEvidencePanel response={chatResponse} onRetry={onRetryChat} /> : null}
+           {chatResponse ? <CopilotPanel response={chatResponse} onRetry={onRetryChat} /> : null}
         </CardContent>
       </Card>
     </div>
@@ -639,7 +704,7 @@ function CapabilityUnavailableState({ capability, label, onRetry }: { capability
   return <VisibilityState state={state} title={title} description={description} retryLabel={`Reintentar ${label.toLowerCase()}`} retryAllowed={!isBoundary} onRetry={isBoundary ? undefined : () => void onRetry()} />
 }
 
-function IntelligencePanel({ intelligence, availability, onRetry }: { intelligence?: AgronautasIntelligence; availability?: AgronautasCapabilityState; onRetry: () => Promise<unknown> }) {
+function LegacyIntelligencePanel({ intelligence, availability, onRetry }: { intelligence?: AgronautasIntelligence; availability?: AgronautasCapabilityState; onRetry: () => Promise<unknown> }) {
   if (!intelligence) return <CapabilityUnavailableState capability={availability} label="Inteligencia" onRetry={onRetry} />
   const recommendationReason = 'reason' in intelligence.recommendation ? intelligence.recommendation.reason : 'No hay evidencia suficiente para una recomendación.'
   const recommendationInputs = 'missingInputs' in intelligence.recommendation ? intelligence.recommendation.missingInputs ?? [] : []
@@ -650,7 +715,86 @@ function IntelligencePanel({ intelligence, availability, onRetry }: { intelligen
     <div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-900">Inteligencia económica</p><h2 className="mt-1 font-serif text-2xl font-semibold text-stone-950">Explicación climática y riesgo sin inventar datos</h2><p className="mt-2 text-sm text-stone-700">Fuente {intelligence.climate.state === 'available' ? intelligence.climate.metadata.source : 'no disponible'} · selección de motor de riesgo: {intelligence.risk.state === 'available' ? intelligence.risk.value.engine.selectionStatus : 'no disponible'}</p></div>
     <div className="grid gap-3 md:grid-cols-4">{capabilities.map(([label, capability]) => <div key={label} className="rounded-2xl border border-amber-900/15 bg-white p-4"><div className="flex items-center justify-between gap-2"><p className="font-medium text-stone-900">{label}</p><Badge variant={capability.state === 'available' ? 'success' : 'warning'}>{capability.state}</Badge></div><p className="mt-2 text-sm text-stone-600">{'reason' in capability ? capability.reason : 'Observación respaldada con metadata de fuente, unidad y lineage.'}</p></div>)}</div>
     <div className="rounded-2xl border border-amber-900/20 bg-white p-4"><p className="font-semibold text-stone-950">Recomendación bloqueada</p><p className="mt-1 text-sm text-stone-700">{recommendationReason}</p><ul className="mt-2 list-disc pl-5 text-sm text-stone-700">{recommendationInputs.map((input) => <li key={input}>{input}</li>)}</ul></div>
+   </section>
+}
+
+function LegacyEvidenceDashboardPanel({ model, error, onRetry }: { model?: EvidenceDashboardModel; error?: unknown; onRetry: () => Promise<unknown> }) {
+  if (error) {
+    const outcome = normalizeRequestError(error)
+    const status = error instanceof ApiError ? error.status : outcome.httpStatus
+    const isUnauthorized = status === 401
+    const isForbidden = status === 403
+    const isNotFound = status === 404
+    const state = isUnauthorized ? 'unauthorized' : isForbidden ? 'forbidden' : isNotFound ? 'missing' : 'error'
+    const title = isUnauthorized
+      ? 'Evidencia requiere autenticación'
+      : isForbidden
+        ? 'Evidencia restringida'
+        : isNotFound
+          ? 'Evidencia no disponible'
+          : `Evidencia no disponible${status ? ` (HTTP ${status})` : ''}`
+    const description = isUnauthorized
+      ? 'La respuesta HTTP 401 no permite leer evidencia. Iniciá sesión; no se reemplaza el contenido con demo.'
+      : isForbidden
+        ? 'La respuesta HTTP 403 mantiene el límite de workspace/campo. No se muestra evidencia de otra sesión.'
+        : isNotFound
+          ? 'La API no devolvió un contrato de evidencia para este campo. No se inventan fuentes ni readiness.'
+          : `${outcome.reason}. La vista conserva el alcance seleccionado y permite reintentar sin usar datos simulados.`
+    return <section data-testid="agronautas-evidence-dashboard" aria-label="Dashboard de evidencia Agronautas" className="grid gap-4">
+      <Card className="border-rose-200 bg-rose-50"><CardHeader><CardTitle>Dashboard de evidencia</CardTitle><CardDescription>Respuesta real de API/BFF</CardDescription></CardHeader><CardContent><VisibilityState state={state} title={title} description={description} retryAllowed={!isUnauthorized && !isForbidden && !isNotFound} retryLabel="Reintentar evidencia" onRetry={() => void onRetry()} /></CardContent></Card>
+    </section>
+  }
+
+  if (!model) return null
+
+  return <section data-testid="agronautas-evidence-dashboard" aria-label="Dashboard de evidencia Agronautas" className="grid gap-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>Evidencia por fuente</CardTitle>
+        <CardDescription>Contrato location-scoped servido por API/BFF. Cada fuente conserva su modo, tiempos, confianza, lineage y próxima acción.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {model.overallState === 'empty' ? <div role="status"><VisibilityState state="empty" title="Sin registros de evidencia" description="La API respondió un conjunto vacío para el campo seleccionado. Empty no es fallo y no se completa con datos demo." retryAllowed={true} retryLabel="Reintentar evidencia" onRetry={() => void onRetry()} /></div> : null}
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {model.sources.map((source) => <EvidenceSourceCard key={`${source.key}-${source.provider}-${source.signalType}`} source={source} />)}
+        </div>
+      </CardContent>
+    </Card>
+
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card data-testid="agronautas-ingestion-records">
+        <CardHeader><CardTitle>Registros de ingestión</CardTitle><CardDescription>Runs y reintentos devueltos por el contrato; no se deduce éxito desde HTTP 200.</CardDescription></CardHeader>
+        <CardContent className="grid gap-3 text-sm">
+          {model.ingestion.length ? model.ingestion.map((record) => <div key={`${record.provider}-${record.signalType}-${record.runId ?? record.state}`} className="rounded-2xl border border-[var(--border)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{record.provider} · {record.signalType}</p><Badge variant={record.state === 'succeeded' ? 'success' : record.state === 'failed' ? 'destructive' : 'warning'}>{record.state}</Badge></div><p className="mt-2 break-words text-[var(--muted-foreground)]">Run {record.runId ?? 'no disponible'} · retrieved {formatDateTime(record.retrievedAt)} · próximo {formatDateTime(record.nextDueAt)}</p><p className="mt-2 text-[var(--muted-foreground)]">{record.reason ?? (record.retryable ? 'Reintento permitido por el contrato.' : 'Sin reintento permitido.')}</p></div>) : <p role="status">La respuesta no incluyó registros de ingestión; no se inventan corridas.</p>}
+        </CardContent>
+      </Card>
+      <Card data-testid="agronautas-readiness-records">
+        <CardHeader><CardTitle>Readiness por fuente</CardTitle><CardDescription>Solo se muestra readiness emitido por backend con evidencia y run lineage.</CardDescription></CardHeader>
+        <CardContent className="grid gap-3 text-sm">
+          {model.readiness.length ? model.readiness.map((record) => <div key={`${record.source}-${record.productSlice}`} className="rounded-2xl border border-[var(--border)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{record.source} · {record.productSlice}</p><Badge variant={record.state === 'ready' ? 'success' : 'warning'}>{record.state}</Badge></div><p className="mt-2 break-words text-[var(--muted-foreground)]">Evaluado {formatDateTime(record.evaluatedAt)} · evidence {record.evidenceRefs.join(', ') || 'no disponible'} · runs {record.runIds.join(', ') || 'no disponible'}</p>{record.reason ? <p className="mt-2 text-[var(--muted-foreground)]">{record.reason}</p> : null}</div>) : <p role="status">Readiness no fue devuelto por la API; no se eleva ningún estado desde el cliente.</p>}
+        </CardContent>
+      </Card>
+    </div>
   </section>
+}
+
+function EvidenceSourceCard({ source }: { source: EvidenceSourceRecord }) {
+  const variant = source.status === 'fresh' ? 'success' : source.status === 'unavailable' || source.status === 'missing' ? 'destructive' : 'warning'
+  return <article className="min-w-0 rounded-2xl border border-[var(--border)] p-4" aria-label={`${source.label} evidence`}>
+    <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><p className="font-semibold">{source.label}</p><p className="break-words text-xs text-[var(--muted-foreground)]">{source.provider} · {source.signalType}</p></div><Badge variant={variant}>{source.status}</Badge></div>
+    <dl className="mt-3 grid gap-1 text-xs leading-5 text-[var(--muted-foreground)]">
+      <div><dt className="inline font-medium text-[var(--foreground)]">Modo: </dt><dd className="inline">{source.providerMode}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Observed: </dt><dd className="inline">{formatDateTime(source.observedAt)}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Acquired: </dt><dd className="inline">{formatDateTime(source.acquiredAt)}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Forecast: </dt><dd className="inline">{formatDateTime(source.forecastAt)}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Retrieved: </dt><dd className="inline">{formatDateTime(source.retrievedAt)}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Confidence: </dt><dd className="inline">{source.confidence === null ? 'No provista' : `${Math.round(source.confidence * 100)}%`}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Lineage: </dt><dd className="inline break-all">{source.runId ?? 'No disponible'}</dd></div>
+      <div><dt className="inline font-medium text-[var(--foreground)]">Source: </dt><dd className="inline break-all">{source.sourceUrl ?? source.sourceKey ?? 'No disponible'}</dd></div>
+    </dl>
+    {source.degradationReasons.length ? <p className="mt-3 break-words text-xs text-amber-800">Límite: {source.degradationReasons.join(', ')}</p> : null}
+    <p className="mt-3 text-xs font-medium text-stone-700">Siguiente acción: {source.nextAction}</p>
+  </article>
 }
 
 function NextFeaturesPanel({ dashboardPayload }: { dashboardPayload?: DashboardSnapshot }) {
@@ -801,7 +945,7 @@ function HydrologyPanel({ dashboard, availability, locality, hydrologyChatState,
              <Field label="Pregunta hidrológica" name="hydrologyMessage" autoComplete="off" error={hydrologyChatValidationError ?? undefined} placeholder="¿Qué riesgo de crecida tiene mi lote en los próximos 7 días?" />
              <Button type="submit" className={focusVisibleClassName} disabled={isHydrologyChatPending}>{isHydrologyChatPending ? 'Transmitiendo respuesta…' : 'Preguntar al Copilot Hidrológico'}</Button>
           </form>
-           {hydrologyChatState.status !== 'idle' ? <div id={AGRONAUTAS_HYDROLOGY_CHAT_ERROR_ID}><ChatEvidencePanel stream={hydrologyChatState} onRetry={onRetryHydrologyChat} /></div> : null}
+            {hydrologyChatState.status !== 'idle' ? <div id={AGRONAUTAS_HYDROLOGY_CHAT_ERROR_ID}><CopilotPanel stream={hydrologyChatState} onRetry={onRetryHydrologyChat} /></div> : null}
         </CardContent>
       </Card>
     </section>

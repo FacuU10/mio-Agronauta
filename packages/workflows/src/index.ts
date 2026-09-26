@@ -10,6 +10,7 @@ export const AGRONAUTAS_SCHEDULED_WINDOW_SIGNAL_TYPES = {
   CLIMATE: 'climate',
   SATELLITE: 'satellite',
   WEATHER_ALERT: 'weather_alert',
+  WEATHER: 'weather',
   FIRE: 'fire',
   SOIL: 'soil',
 } as const
@@ -55,6 +56,9 @@ export interface AgronautasRuntimeSourceWindow {
   windowStart: string
   windowEnd: string
   runId: string
+  locationId?: string
+  workspaceId?: string
+  fieldId?: string
 }
 
 export interface AgronautasRuntimeJobFactoryInput {
@@ -139,6 +143,9 @@ export interface AgronautasScheduledWindowInput {
   windowStart: Date
   windowEnd: Date
   runId: string
+  locationId?: string
+  workspaceId?: string
+  fieldId?: string
 }
 
 export interface AgronautasScheduledWindowJob {
@@ -278,6 +285,9 @@ export function createAgronautasScheduledWindowRuntimeJob(input: {
   createdAt?: Date
   lease?: Pick<JobLease, 'attempt' | 'maxAttempts'>
   idGenerator?: () => string
+  locationId?: string
+  workspaceId?: string
+  fieldId?: string
 }): AgronautasRuntimeJob {
   const createdAt = input.createdAt ?? new Date()
   if (input.windowEnd.getTime() <= input.windowStart.getTime()) {
@@ -302,8 +312,11 @@ export function createAgronautasScheduledWindowRuntimeJob(input: {
       provider: input.provider,
       signalType: input.signalType,
       windowStart: input.windowStart.toISOString(),
-      windowEnd: input.windowEnd.toISOString(),
-      runId: input.runId,
+       windowEnd: input.windowEnd.toISOString(),
+       runId: input.runId,
+       ...(input.locationId ? { locationId: input.locationId } : {}),
+       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+       ...(input.fieldId ? { fieldId: input.fieldId } : {}),
     },
   })
 }
@@ -345,6 +358,9 @@ export function createAgronautasScheduledWindowJob(input: {
         windowStart: input.window.windowStart.toISOString(),
         windowEnd: input.window.windowEnd.toISOString(),
         runId: input.window.runId,
+        ...(input.window.locationId ? { locationId: input.window.locationId } : {}),
+        ...(input.window.workspaceId ? { workspaceId: input.window.workspaceId } : {}),
+        ...(input.window.fieldId ? { fieldId: input.window.fieldId } : {}),
       },
     },
     labels: { domain: 'agronautas', operation: 'scheduled-window' },

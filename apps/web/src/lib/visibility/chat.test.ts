@@ -39,6 +39,12 @@ test('chat view model renders only facts, citations, trace and degradation suppl
     contractVersion: '1.0.0', fieldId: 'field-1', answer: 'Estado persistido.', executedAction: 'GET_RISK_SUMMARY',
     supportingFacts: [{ label: 'Score', value: '74' }], citations: ['weather:open-meteo:2026'],
     trace: [{ action: 'GET_RISK_SUMMARY', status: 'executed' }], degraded: true, unavailableReason: 'groq_unavailable',
+    sourceRunIds: ['run-weather-2026'], actionable: false, providerModes: ['live'], modelMode: 'unavailable',
+    citationLineage: [{
+      citationId: 'weather:open-meteo:2026', evidenceId: 'weather-2026', runId: 'run-weather-2026',
+      provider: 'open-meteo', signalType: 'weather', providerMode: 'live', status: 'fresh',
+      sourceKey: 'open-meteo', retrievedAt: '2026-06-03T00:00:00.000Z', degradationReasons: [],
+    }],
   })
 
   assert.deepEqual(viewModel.facts, [{ label: 'Score', value: '74' }])
@@ -53,6 +59,7 @@ test('chat normalizer rejects an HTTP-200 empty stream as non-actionable', () =>
   const viewModel = createChatViewModel({
     contractVersion: '1.0.0', fieldId: 'field-1', answer: '', executedAction: 'FINAL_RESPONSE',
     supportingFacts: [], citations: [], trace: [], degraded: false,
+    sourceRunIds: [], actionable: false, providerModes: [], modelMode: 'deterministic', citationLineage: [],
   })
 
   assert.equal(viewModel.actionable, false)
@@ -66,6 +73,7 @@ test('chat normalizer refuses unverified Copilot claims even when answer text ex
     contractVersion: '1.0.0', fieldId: 'field-1', answer: 'No respaldado', executedAction: 'FINAL_RESPONSE',
     supportingFacts: [], citations: [], trace: [], degraded: false,
     citationMode: 'none', citationUnavailable: true, unverifiedClaims: true,
+    sourceRunIds: [], actionable: false, providerModes: [], modelMode: 'deterministic', citationLineage: [],
   })
 
   assert.equal(viewModel.actionable, false)
@@ -80,6 +88,7 @@ test('chat normalizer exposes a rate-limit outcome without losing retry timing',
     contractVersion: '1.0.0', fieldId: 'field-1', answer: 'No disponible', executedAction: 'FINAL_RESPONSE',
     supportingFacts: [], citations: [], trace: [], degraded: false,
     status: 429, unavailableReason: 'rate_limited', retryAfterMs: 3_000,
+    sourceRunIds: [], actionable: false, providerModes: [], modelMode: 'unavailable', citationLineage: [],
   })
 
   assert.equal(viewModel.outcome, 'retryable')
@@ -107,6 +116,28 @@ test('chat stream normalization preserves the pending draft and rate-limit metad
   assert.equal(viewModel.httpStatus, 429)
   assert.equal(viewModel.retryAfterMs, 4_000)
   assert.equal(viewModel.retryable, true)
+})
+
+test('chat stream preserves Copilot citation lineage, run ids and provider modes from metadata', () => {
+  const events = parseSseText([
+    'event: metadata',
+    'data: {"fieldId":"field-1","locationId":"location-1","sourceRunIds":["run-1"],"providerModes":["live"],"citations":["evidence:evidence-1"],"citationLineage":[{"citationId":"evidence:evidence-1","evidenceId":"evidence-1","runId":"run-1","provider":"open-meteo","signalType":"weather","providerMode":"live","status":"fresh","sourceKey":"open-meteo","retrievedAt":"2026-09-15T10:00:00Z"}],"readiness":"ready"}',
+    '',
+    'event: token',
+    'data: {"token":"Respuesta basada en evidencia."}',
+    '',
+    'event: done',
+    'data: {}',
+    '',
+  ].join('\n'), '2026-09-15T10:01:00Z')
+
+  let state = createChatStreamState()
+  for (const event of events) state = applyChatEvent(state, event)
+  const view = createChatViewModelFromStream(state)
+  assert.equal(view.actionable, true)
+  assert.deepEqual(view.metadata['sourceRunIds'], ['run-1'])
+  assert.deepEqual(view.metadata['providerModes'], ['live'])
+  assert.equal((view.metadata['citationLineage'] as Array<{ evidenceId: string }>)[0]?.evidenceId, 'evidence-1')
 })
 
 test('chat rate-limit recovery normalizes Retry-After seconds and blocks early retry', () => {

@@ -1,6 +1,8 @@
 {
   "verifier": "hydrology-local-real-matrix-v1",
-  "proofRunId": "proof-20260812T044942Z",
+  "runId": "proof-20260922T043008Z",
+  "proofRunId": "proof-20260922T043008Z",
+  "revisionId": null,
   "oneShotPerSource": true,
   "retries": 0,
   "sources": [
@@ -20,39 +22,26 @@
       "SMN": false
     }
   },
-  "startedAt": "2026-08-12T04:49:46.726Z",
-  "finishedAt": "2026-08-12T04:50:43.046Z",
+  "startedAt": "2026-09-22T04:30:13.823Z",
+  "finishedAt": "2026-09-22T04:30:16.752Z",
   "sourceMatrix": [
     {
       "source": "PNA",
+      "requestId": "proof-20260922T043008Z:PNA:request",
+      "revisionId": null,
+      "proofRunId": "proof-20260922T043008Z",
+      "jobId": null,
       "localApi": {
-        "status": "pass",
-        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260812T044942Z"
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=not_observed; proofRunId=invalid"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "contenidosweb.prefecturanaval.gob.ar/alturas/ status=200 elapsedMs=717",
-        "evidence": {
-          "host": "contenidosweb.prefecturanaval.gob.ar",
-          "path": "/alturas/",
-          "status": 200,
-          "elapsedMs": 717,
-          "attempts": 1,
-          "timeoutMs": 120000,
-          "responseBytes": 111736,
-          "responseChars": 111544
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "PNA DB row correlated to proofRunId=proof-20260812T044942Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 16,
-          "rowIds": [
-            "95c1ee8e-5b4f-4f79-ac1e-2fc6eeefc2da"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for PNA"
       },
       "prodApi": {
         "status": "not_run",
@@ -66,38 +55,25 @@
         "status": "not_run",
         "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
       },
-      "status": "pass"
+      "status": "blocked"
     },
     {
       "source": "INA",
+      "requestId": "proof-20260922T043008Z:INA:request",
+      "revisionId": null,
+      "proofRunId": "proof-20260922T043008Z",
+      "jobId": null,
       "localApi": {
-        "status": "pass",
-        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260812T044942Z"
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=not_observed; proofRunId=invalid"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "alerta.ina.gob.ar/a5/getObservaciones status=200 elapsedMs=234",
-        "evidence": {
-          "host": "alerta.ina.gob.ar",
-          "path": "/a5/getObservaciones",
-          "status": 200,
-          "elapsedMs": 234,
-          "attempts": 1,
-          "timeoutMs": 60000,
-          "responseBytes": 530,
-          "responseChars": 530
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "INA DB row correlated to proofRunId=proof-20260812T044942Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 32,
-          "rowIds": [
-            "98a9fd55-6613-4eb6-a011-9f5bdeac107c"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for INA"
       },
       "prodApi": {
         "status": "not_run",
@@ -111,38 +87,25 @@
         "status": "not_run",
         "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
       },
-      "status": "pass"
+      "status": "blocked"
     },
     {
       "source": "INMET",
+      "requestId": "proof-20260922T043008Z:INMET:request",
+      "revisionId": null,
+      "proofRunId": "proof-20260922T043008Z",
+      "jobId": null,
       "localApi": {
-        "status": "pass",
-        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260812T044942Z"
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=not_observed; proofRunId=invalid"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "apiprevmet3.inmet.gov.br/avisos/rss status=200 elapsedMs=1020",
-        "evidence": {
-          "host": "apiprevmet3.inmet.gov.br",
-          "path": "/avisos/rss",
-          "status": 200,
-          "elapsedMs": 1020,
-          "attempts": 1,
-          "timeoutMs": 60000,
-          "responseBytes": 131974,
-          "responseChars": 130828
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "INMET DB row correlated to proofRunId=proof-20260812T044942Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 75,
-          "rowIds": [
-            "58a14218-45cf-4f31-8d9b-820c853b8a2e"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for INMET"
       },
       "prodApi": {
         "status": "not_run",
@@ -156,38 +119,25 @@
         "status": "not_run",
         "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
       },
-      "status": "pass"
+      "status": "blocked"
     },
     {
       "source": "SMN",
+      "requestId": "proof-20260922T043008Z:SMN:request",
+      "revisionId": null,
+      "proofRunId": "proof-20260922T043008Z",
+      "jobId": null,
       "localApi": {
-        "status": "pass",
-        "detail": "ackHTTP=202; ackContract=true; completionStatus=completed; proofRunId=proof-20260812T044942Z"
+        "status": "blocked",
+        "detail": "ackHTTP=202; ackContract=true; completionStatus=not_observed; proofRunId=invalid"
       },
       "providerHttp": {
-        "status": "pass",
-        "detail": "ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo_2026.xml status=200 elapsedMs=142",
-        "evidence": {
-          "host": "ssl.smn.gob.ar",
-          "path": "/feeds/CAP/rss_alertaCAP_nuevo_2026.xml",
-          "status": 200,
-          "elapsedMs": 142,
-          "attempts": 1,
-          "timeoutMs": 60000,
-          "responseBytes": 17890,
-          "responseChars": 17763
-        }
+        "status": "blocked",
+        "detail": "missing provider http summary"
       },
       "localDb": {
-        "status": "pass",
-        "detail": "SMN DB row correlated to proofRunId=proof-20260812T044942Z status=success",
-        "evidence": {
-          "rowCount": 1,
-          "recordsIngested": 29,
-          "rowIds": [
-            "20086c90-af57-451d-85b5-96bfaeaa6fd7"
-          ]
-        }
+        "status": "blocked",
+        "detail": "local API did not return a result for SMN"
       },
       "prodApi": {
         "status": "not_run",
@@ -201,8 +151,8 @@
         "status": "not_run",
         "detail": "Use Playwright/local browser step against /municipalities after local API has rows"
       },
-      "status": "pass"
+      "status": "blocked"
     }
   ],
-  "passed": true
+  "passed": false
 }

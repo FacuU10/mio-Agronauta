@@ -64,6 +64,15 @@ test('GovernmentDetail renders governed coverage, unverified geometry and eviden
   assert.equal(view.queryByRole('button', { name: /incidente|asignar|escalar|resolver/i }), null)
 })
 
+test('GovernmentDetail renders verified, partial, and unavailable geometry without implying official territory', async () => {
+  for (const geometryStatus of ['verified', 'partial', 'unavailable'] as const) {
+    const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), municipality: { ...dashboardPayload().municipality, coverageStatus: 'partial', geometryStatus } }} />)
+    assert.ok(await view.findByText(new RegExp(`Geometría ${geometryStatus === 'verified' ? 'verificada' : geometryStatus === 'partial' ? 'parcial' : 'no disponible'}`, 'i')))
+    assert.doesNotMatch(view.container.textContent ?? '', /territorio oficial|impacto derivado/i)
+    cleanup()
+  }
+})
+
 test('GovernmentDetail renders grounded explanation metadata without inventing impact', async () => {
    const view = render(<GovernmentDetail municipalityId="corrientes" initialData={{ ...dashboardPayload(), explanation: { relationLabel: 'source mapping / threshold comparison', threshold: { alertHeightM: 6.5, evacuationHeightM: 7 }, observed: { value: 3.2, comparison: 'below_alert', source: 'PNA', sourceUrl: 'https://example.com/pna', observedAt: '2026-06-23T10:30:00.000Z', freshness: 'fresh' }, tendency: { value: 'creciente', window: 'últimas 3 observaciones de PNA' }, forecast: { horizonDays: 20, confidence: 'speculative', label: 'planning_only', source: 'INA', sourceUrl: 'https://example.com/ina', observedAt: '2026-07-13T10:30:00.000Z' } }, timeline: { events: [], currentStatus: 'unavailable', nextCursor: null } }} />)
   assert.ok(await view.findByText('Explicación verificable'))
@@ -319,6 +328,25 @@ test('GovernmentDetail retries a failed dashboard request and restores the meani
     await waitFor(() => assert.equal(calls, 2))
     assert.ok(await view.findByText('Corrientes Capital'))
     assert.equal(view.queryByRole('button', { name: 'Reintentar tablero' }), null)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('GovernmentDetail treats HTTP 200 without a dashboard contract as missing data, not as a live municipality', async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+
+  try {
+    const view = render(<GovernmentDetail municipalityId="route-preserved-municipality" />)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const alert = view.container.querySelector('[role="alert"]')
+    const rendered = view.container.textContent ?? ''
+    assert.ok(alert)
+    assert.match(alert?.textContent ?? '', /El tablero respondió sin datos verificables ni un contrato válido/i)
+    assert.doesNotMatch(rendered, /Cargando municipio/)
+    assert.equal(view.queryByRole('button', { name: 'Reintentar tablero' }), null)
+    assert.doesNotMatch(rendered, /Corrientes Capital|3\.2 m/)
   } finally {
     globalThis.fetch = previousFetch
   }

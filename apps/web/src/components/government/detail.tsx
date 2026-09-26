@@ -95,6 +95,7 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
         return response.json() as Promise<DashboardPayload>
       })
       .then((payload) => {
+        if (!isDashboardPayload(payload)) throw new DashboardRequestError('El tablero respondió sin datos verificables ni un contrato válido.', false)
         if (!active) return
         setData(payload)
         setErrorRetryable(false)
@@ -160,12 +161,12 @@ export function GovernmentDetail({ municipalityId, initialData = null }: { munic
           <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_0.72fr] lg:items-end">
             <div>
               <p className="text-sm font-black uppercase tracking-[0.28em] text-lime-200">Tablero local · {data?.municipality.localityId ?? municipalityId}</p>
-              <h1 className="mt-4 text-balance text-4xl font-black tracking-tight sm:text-6xl">{data?.municipality.name ?? 'Cargando municipio…'}</h1>
+              <h1 className="mt-4 text-balance text-4xl font-black tracking-tight sm:text-6xl">{data?.municipality.name ?? (loading ? 'Cargando municipio…' : 'Municipio no disponible')}</h1>
               <p className="mt-4 max-w-2xl text-pretty text-stone-300">Lectura ejecutiva de PNA, SMN, INMET e INA con procedencia oficial y continuidad operativa ante fuentes degradadas.</p>
             </div>
             <aside className="rounded-[2rem] border border-lime-200/20 bg-lime-200/10 p-5 shadow-2xl">
               <div className="flex items-center gap-3 text-lime-100"><ShieldAlert aria-hidden="true" /><h2 className="font-black">Tablero usable con fuentes degradadas</h2></div>
-              <p className="mt-3 text-sm text-stone-300">{degraded ? 'Hay fuentes con estado degradado; se mantienen visibles los últimos datos oficiales.' : 'Todas las fuentes reportadas están disponibles.'}</p>
+              <p className="mt-3 text-sm text-stone-300">{!data ? 'No se recibió información verificable del municipio.' : degraded ? 'Hay fuentes con estado degradado; se mantienen visibles los últimos datos oficiales.' : 'Todas las fuentes reportadas están disponibles.'}</p>
             </aside>
           </div>
 
@@ -277,7 +278,8 @@ function MunicipalitySectionIndex() {
 
 function InstitutionalCoveragePanel({ data }: { data: DashboardPayload | null }) {
   const status = data?.municipality.coverageStatus ?? 'unavailable'
-  return <section className="mt-10 rounded-[2rem] border border-teal-200/20 bg-teal-200/10 p-5" aria-label="Gobernanza de cobertura"><h2 className="text-2xl font-black">Gobernanza de cobertura</h2><p className="mt-2 text-sm text-stone-200">Cobertura {status === 'partial' ? 'parcial' : status === 'supported' ? 'soportada' : 'no disponible'}.</p><p className="mt-2 text-sm text-stone-200">Las asociaciones describen fuentes, no influencia ni impacto.</p><p className="mt-2 text-sm text-amber-100">{data?.municipality.geometryStatus === 'unverified' ? 'Geometría no verificada: no se publica un polígono oficial.' : 'Geometría no disponible.'}</p><div className="mt-4 space-y-2">{(data?.municipality.sourceRegistry ?? []).map((item) => <article key={`${item.source}-${item.stationId ?? item.coverageKey ?? 'unmapped'}`} className="rounded-2xl bg-stone-950/50 p-3 text-sm text-stone-200"><p className="font-black">{item.source} · {item.stationId ?? 'sin estación'}</p><p>Cobertura: {item.coverageKey ?? 'sin clave'} · frescura: {item.freshnessPolicy} · versión: {item.registryVersion} · {item.reviewStatus}</p><p>Revisado: {formatRegistryTime(item.reviewedAt)}</p><a className="underline underline-offset-2" href={item.sourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></article>)}</div>{data && data.municipality.sourceRegistry?.length === 0 ? <p className="mt-4 text-sm text-amber-100">Registro de fuentes no disponible.</p> : null}</section>
+  const geometryLabel = data?.municipality.geometryStatus === 'verified' ? 'Geometría verificada: solo indica una referencia revisada; no implica impacto hidráulico.' : data?.municipality.geometryStatus === 'partial' ? 'Geometría parcial: faltan referencias revisadas y no se publica un límite.' : data?.municipality.geometryStatus === 'unverified' ? 'Geometría no verificada: no se publica un polígono oficial.' : 'Geometría no disponible: no se publica un polígono oficial.'
+  return <section className="mt-10 rounded-[2rem] border border-teal-200/20 bg-teal-200/10 p-5" aria-label="Gobernanza de cobertura"><h2 className="text-2xl font-black">Gobernanza de cobertura</h2><p className="mt-2 text-sm text-stone-200">Cobertura {status === 'partial' ? 'parcial' : status === 'supported' ? 'soportada' : 'no disponible'}.</p><p className="mt-2 text-sm text-stone-200">Las asociaciones describen fuentes, no influencia ni impacto.</p><p className="mt-2 text-sm text-amber-100">{geometryLabel}</p><div className="mt-4 space-y-2">{(data?.municipality.sourceRegistry ?? []).map((item) => <article key={`${item.source}-${item.stationId ?? item.coverageKey ?? 'unmapped'}`} className="rounded-2xl bg-stone-950/50 p-3 text-sm text-stone-200"><p className="font-black">{item.source} · {item.stationId ?? 'sin estación'}</p><p>Cobertura: {item.coverageKey ?? 'sin clave'} · frescura: {item.freshnessPolicy} · versión: {item.registryVersion} · {item.reviewStatus}</p><p>Revisado: {formatRegistryTime(item.reviewedAt)}</p><a className="underline underline-offset-2" href={item.sourceUrl} target="_blank" rel="noreferrer">Ver fuente oficial</a></article>)}</div>{data && data.municipality.sourceRegistry?.length === 0 ? <p className="mt-4 text-sm text-amber-100">Registro de fuentes no disponible.</p> : null}</section>
 }
 
 function MunicipalityExplanationPanel({ data }: { data: DashboardPayload | null }) {
@@ -377,6 +379,19 @@ class DashboardRequestError extends Error {
     super(message)
     this.name = 'DashboardRequestError'
   }
+}
+
+function isDashboardPayload(value: unknown): value is DashboardPayload {
+  if (!value || typeof value !== 'object') return false
+  const payload = value as Partial<DashboardPayload>
+  return Boolean(
+    payload.municipality &&
+    payload.gaugeMappings &&
+    Array.isArray(payload.telemetryCards) &&
+    Array.isArray(payload.inaPredictions30d) &&
+    Array.isArray(payload.alerts) &&
+    Array.isArray(payload.provenance),
+  )
 }
 
 class CopilotRequestError extends Error {

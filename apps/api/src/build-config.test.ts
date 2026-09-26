@@ -31,6 +31,10 @@ const API_RENDER_ENV_NAMES = [
   'GROQ_API_KEY',
   'GROQ_MODEL',
   'GROQ_TIMEOUT_MS',
+  'AGRONAUTAS_AUTH_ACCESS_SECRET',
+  'AGRONAUTAS_AUTH_REFRESH_SECRET',
+  'AGRONAUTAS_AUTH_BOOTSTRAP_SECRET',
+  'AGRONAUTAS_BFF_BEARER_TOKEN',
 ] as const
 
 const WEB_RENDER_ENV_NAMES = [
@@ -121,7 +125,7 @@ test('build and clean scripts use deterministic cross-platform commands', async 
   const hydrologyPackage = await readPackageJson('packages/hydrology-engine/package.json')
 
   assert.equal(rootPackage.scripts?.['clean'], 'turbo run clean && node scripts/clean-root.mjs')
-  assert.equal(apiPackage.scripts?.['test'], 'pnpm run prisma:generate && node --import tsx --test src/**/*.test.ts')
+  assert.equal(apiPackage.scripts?.['test'], 'pnpm run prisma:generate && node --import tsx --test --test-concurrency=1 --test-force-exit src/**/*.test.ts')
   assert.equal(apiPackage.scripts?.['clean'], 'node -e "require(\'fs\').rmSync(\'dist\',{recursive:true,force:true})"')
   assert.equal(webPackage.scripts?.['clean'], 'node scripts/clean.mjs')
   assert.equal(webPackage.scripts?.['build'], 'pnpm --dir ../../packages/zod-schemas build:ensure && next build')
@@ -248,7 +252,7 @@ test('Render commands match current workspace scripts and preserve separate rout
   assert.match(renderYaml, /startCommand: pnpm --dir apps\/api scheduler:once -- --render-cron/)
   assert.match(renderYaml, /HYDROLOGY_CRON_OWNER_ID/)
   assert.match(server, /app\.use\('\/api\/hydrology'/)
-  assert.match(server, /app\.use\(runtimeConfig\.routePrefix, createAgronautasRouter\(\)\)/)
+  assert.match(server, /app\.use\(runtimeConfig\.routePrefix, createAgronautasRouter\(\{ authService: deps\.authService \?\? undefined \}\)\)/)
   assert.match(server, /app\.use\(`\$\{runtimeConfig\.routePrefix\}\/v1`/)
 })
 

@@ -63,13 +63,20 @@ export function createChatViewModelFromStream(state: ChatStreamState): ChatViewM
   const metadataSources = asStrings(state.metadata['sources'])
   const metadataLimits = asStrings(state.metadata['limits'])
   const normalized = normalizeCopilotStream({
+    done: state.status === 'done',
     status: state.httpStatus ?? (state.status === 'error' ? 503 : 200),
     answer: state.answer,
+    tokens: state.answer,
     citations: state.citations.length ? state.citations : metadataCitations,
     sources: state.sources.length ? state.sources : metadataSources,
     citationMode: state.metadata['citationMode'],
     citationUnavailable: state.metadata['citationUnavailable'],
     unverifiedClaims: state.metadata['unverifiedClaims'],
+    citationLineage: state.metadata['citationLineage'],
+    readiness: state.metadata['readiness'],
+    actionable: state.metadata['actionable'],
+    sourceRunIds: state.metadata['sourceRunIds'],
+    providerModes: state.metadata['providerModes'],
     degraded: state.status === 'degraded' || state.status === 'partial' || state.status === 'error',
     unavailableReason: state.error ?? state.metadata['unavailableReason'],
     retryAfterMs: state.retryAfterMs ?? state.metadata['retryAfterMs'],

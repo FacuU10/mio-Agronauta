@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
 import { createHealthRouter } from './presentation/routes/health'
-import { resolveApiPort, startAgronautasSchedulerFromEnv } from './server'
+import { resolveApiPort, startAgronautasAuthBootstrapFromEnv, startAgronautasSchedulerFromEnv, startServer } from './server'
 
 test('API port resolution trims blanks and prefers PORT over API_PORT and the local fallback', () => {
   assert.equal(resolveApiPort({ PORT: ' 4100 ', API_PORT: '4200' }), 4100)
@@ -79,7 +79,7 @@ test('health and readiness remain controlled boundaries without live acquisition
   assert.equal(body.checks.worker, false)
   assert.equal(body.worker.required, false)
   assert.equal(body.worker.healthy, null)
-  assert.equal(body.worker.status, 'unavailable')
+  assert.equal(body.worker.status, 'not_configured')
   assert.equal(body.worker.reason, 'worker_not_configured')
   assert.equal(calls.postgres, 1)
   assert.equal(calls.redis, 1)
@@ -101,6 +101,21 @@ test('Agronautas scheduler refuses an unproven dispatcher even when the flag is 
   assert.equal(runtime.status, 'unavailable')
   assert.equal(runtime.reason, 'scheduler_dispatch_capability_not_configured')
   runtime.stop()
+})
+
+test('API startup invokes the internal auth bootstrap before opening the listener', async () => {
+  let calls = 0
+  await assert.rejects(
+    () => startServer({
+      authBootstrap: async () => {
+        calls += 1
+        throw new Error('bootstrap failed')
+      },
+    }),
+    /bootstrap failed/,
+  )
+  assert.equal(calls, 1)
+  assert.deepEqual(await startAgronautasAuthBootstrapFromEnv({}), { status: 'disabled' })
 })
 
 test('Agronautas scheduler refuses startup when worker proof exists without a compatible dispatcher', () => {

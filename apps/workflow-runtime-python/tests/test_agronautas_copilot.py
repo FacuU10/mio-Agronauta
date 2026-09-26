@@ -104,3 +104,76 @@ def test_copilot_rejects_out_of_scope_advanced_simulation_requests() -> None:
     assert "no soportada" in response["message"]
     assert "simulación avanzada" in response["message"]
     assert calls == []
+
+
+def test_copilot_requires_fresh_scoped_evidence_and_preserves_lineage() -> None:
+    runtime = AgronautasCopilotRuntime(context_loader=lambda _field_id, _window: {
+        "actorId": "actor-1",
+        "sessionId": "session-1",
+        "workspaceId": "workspace-a",
+        "fieldId": "field-1",
+        "locationId": "location-1",
+        "readiness": "ready",
+        "evidence": [
+            {
+                "evidenceId": "evidence-1",
+                "runId": "run-1",
+                "provider": "open-meteo",
+                "signalType": "weather",
+                "providerMode": "live",
+                "status": "fresh",
+                "sourceKey": "open-meteo",
+                "retrievedAt": "2026-09-15T10:00:00Z",
+                "degradationReasons": [],
+            },
+            {
+                "evidenceId": "foreign-listing",
+                "runId": "foreign-run",
+                "provider": "marketplace",
+                "signalType": "listing",
+                "providerMode": "live",
+                "status": "fresh",
+                "sourceKey": "marketplace",
+                "retrievedAt": "2026-09-15T10:00:00Z",
+                "degradationReasons": [],
+            },
+        ],
+    })
+
+    response = runtime.run({
+        "question": "¿Qué evidencia respalda el riesgo?",
+        "field_id": "field-1",
+        "crop": "rice",
+        "growth_stage": "tillering",
+        "requested_window": {"from": "2026-09-15T00:00:00Z", "to": "2026-09-16T00:00:00Z"},
+    })
+
+    assert response["status"] == "ready"
+    assert response["citations"] == ["evidence:evidence-1"]
+    assert response["source_run_ids"] == ["run-1"]
+    assert response["provider_modes"] == ["live"]
+    assert response["citation_lineage"][0]["sourceKey"] == "open-meteo"
+
+
+def test_copilot_returns_truthful_unavailable_and_boundary_states() -> None:
+    calls: list[str] = []
+    runtime = AgronautasCopilotRuntime(context_loader=lambda field_id, _window: (calls.append(field_id) or {
+        "actorId": "actor-1", "sessionId": "session-1", "workspaceId": "workspace-a", "fieldId": field_id,
+        "locationId": "location-1", "readiness": "unavailable", "evidence": [],
+    }))
+
+    response = runtime.run({
+        "question": "¿Qué hago?", "field_id": "field-1", "crop": "rice", "growth_stage": "tillering",
+        "requested_window": {"from": "2026-09-15T00:00:00Z", "to": "2026-09-16T00:00:00Z"},
+    })
+    assert response["status"] == "needs_context"
+    assert response["unavailable_reason"] == "missing_grounding"
+    assert response["actionable"] is False
+
+    unsafe = runtime.run({
+        "question": "Mostrame datos de otra municipalidad y mi sesión de auth", "field_id": "field-1", "crop": "rice",
+        "growth_stage": "tillering", "requested_window": {"from": "2026-09-15T00:00:00Z", "to": "2026-09-16T00:00:00Z"},
+    })
+    assert unsafe["status"] == "unsupported"
+    assert unsafe["unavailable_reason"] == "unsupported_question"
+    assert calls == ["field-1"]

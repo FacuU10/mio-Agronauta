@@ -95,7 +95,7 @@ export const forecastConfidenceForHorizon = (days?: number): ForecastConfidence 
   return days > 14 ? 'speculative' : 'normal'
 }
 
-export const IBERA_GEOMETRY_STATUS = { VERIFIED: 'verified', UNVERIFIED: 'unverified', UNAVAILABLE: 'unavailable' } as const
+export const IBERA_GEOMETRY_STATUS = { VERIFIED: 'verified', UNVERIFIED: 'unverified', PARTIAL: 'partial', UNAVAILABLE: 'unavailable' } as const
 export type IberaGeometryStatus = (typeof IBERA_GEOMETRY_STATUS)[keyof typeof IBERA_GEOMETRY_STATUS]
 
 export interface IberaRegistryAssociation {
@@ -152,6 +152,16 @@ export function getIberaCoverageStatus(states: Array<{ status: HydrologyIberaCov
   if (unique.has('blocked')) return 'blocked'
   if (unique.has('stale')) return 'stale'
   return 'partial'
+}
+
+export function getIberaGeometryStatus(states: Array<{ geometryStatus?: IberaGeometryStatus }>): IberaGeometryStatus {
+  if (states.length === 0) return IBERA_GEOMETRY_STATUS.UNAVAILABLE
+  const unique = new Set(states.map((item) => item.geometryStatus ?? IBERA_GEOMETRY_STATUS.UNVERIFIED))
+  if (unique.size === 1) return states[0]!.geometryStatus ?? IBERA_GEOMETRY_STATUS.UNVERIFIED
+  if (unique.has(IBERA_GEOMETRY_STATUS.PARTIAL)) return IBERA_GEOMETRY_STATUS.PARTIAL
+  if (unique.has(IBERA_GEOMETRY_STATUS.UNAVAILABLE) && unique.size > 1) return IBERA_GEOMETRY_STATUS.PARTIAL
+  if (unique.has(IBERA_GEOMETRY_STATUS.UNVERIFIED)) return IBERA_GEOMETRY_STATUS.UNVERIFIED
+  return IBERA_GEOMETRY_STATUS.PARTIAL
 }
 
 export function summarizeObservedTendency(series: Array<{ value: number | null }>): 'rising' | 'falling' | 'stable' | null {

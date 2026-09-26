@@ -26,7 +26,8 @@ export class CreateFieldIntakeUseCase {
     private readonly options: CreateFieldIntakeOptions = {},
   ) {}
 
-  async execute(input: FieldIntake): Promise<CreateFieldIntakeResult> {
+  async execute(input: FieldIntake, workspaceId: string): Promise<CreateFieldIntakeResult> {
+    if (!workspaceId.trim()) throw new Error('WORKSPACE_REQUIRED')
     const geometry = input.location.polygonWkt || input.location.geoJson
       ? normalizeFieldGeometryInput({ polygonWkt: input.location.polygonWkt, geoJson: input.location.geoJson })
       : null
@@ -64,7 +65,7 @@ export class CreateFieldIntakeUseCase {
       },
     })
 
-    await this.fieldRepository.save(field)
+    await this.fieldRepository.save(field, workspaceId)
     await this.fieldContextRepository.save(context)
 
     return {

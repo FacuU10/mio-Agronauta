@@ -71,7 +71,7 @@ const simulationFixture = {
   assumptions: ['Valores ingresados por la persona usuaria'],
 }
 
-test('campaign planning contracts are namespaced, read-only, and strict about supported scope', () => {
+test('campaign planning contracts preserve the caller workspace identifier for server authorization', () => {
   const request = campaignPlanningContextRequestSchema.parse(planningRequestFixture)
   const response = campaignPlanningContextResponseSchema.parse({
     contractVersion: 'agronautas-campaign-planning-context-v1',
@@ -96,7 +96,7 @@ test('campaign planning contracts are namespaced, read-only, and strict about su
   assert.equal(request.workspaceId, 'agronautas-default-workspace')
   assert.equal(response.persistent, false)
   assert.equal(response.evidence[0]?.risk.engine?.selectionStatus, 'undecided')
-  assert.throws(() => campaignPlanningContextRequestSchema.parse({ ...planningRequestFixture, workspaceId: 'other-workspace' }))
+  assert.equal(campaignPlanningContextRequestSchema.parse({ ...planningRequestFixture, workspaceId: 'workspace-from-membership' }).workspaceId, 'workspace-from-membership')
 })
 
 test('assumption simulation contracts reject invalid units and preserve insufficient evidence without values', () => {
@@ -180,6 +180,7 @@ test('Iberá history and municipality contracts retain safe degraded states and 
 
 test('Iberá registry contracts expose every coverage state and never publish placeholder geometry', () => {
   assert.deepEqual(hydrologyIberaCoverageStatus, ['supported', 'partial', 'unavailable', 'stale', 'failed', 'blocked', 'unverified'])
+  assert.deepEqual(hydrologyIberaGeometryStatusSchema.options, ['verified', 'unverified', 'partial', 'unavailable'])
   const provenance = hydrologyIberaSourceProvenanceSchema.parse({
     source: 'PNA', stationId: 'pna-1', coverageKey: null, sourceUrl: 'https://example.com/pna',
     freshnessPolicy: 'PT1H', registryVersion: 'registry-v1', reviewStatus: 'reviewed', reviewedAt: '2026-08-13T10:00:00.000Z',
@@ -194,7 +195,7 @@ test('Iberá registry contracts expose every coverage state and never publish pl
   assert.equal(Reflect.has(summary, 'polygon'), false)
 })
 
-test('hydrology government ingest schema acepta completed, partial y failed', () => {
+test('hydrology government ingest schema accepts truthful terminal unavailable and maintenance outcomes', () => {
   const base = { contractVersion: 'hydrology-government-ingest-v1' as const, requestedSources: ['PNA', 'SMN'] }
   const completed = hydrologyGovernmentIngestResponseSchema.parse({
     ...base,
@@ -212,10 +213,24 @@ test('hydrology government ingest schema acepta completed, partial y failed', ()
     status: 'failed',
     results: [{ source: 'SMN', status: 'failed', recordsIngested: 0, errorMessage: 'timeout' }],
   })
+  const unavailable = hydrologyGovernmentIngestResponseSchema.parse({
+    ...base,
+    runId: 'run-unavailable',
+    status: 'unavailable',
+    results: [{ source: 'SMN', status: 'failed', recordsIngested: 0, errorMessage: 'provider unavailable' }],
+  })
+  const maintenance = hydrologyGovernmentIngestResponseSchema.parse({
+    ...base,
+    runId: 'run-maintenance',
+    status: 'maintenance',
+    results: [{ source: 'PNA', status: 'skipped', recordsIngested: 0, errorMessage: 'source maintenance' }],
+  })
 
   assert.equal(completed.status, 'completed')
   assert.equal(partial.results[1]?.status, 'failed')
   assert.equal(failed.results[0]?.recordsIngested, 0)
+  assert.equal(unavailable.status, 'unavailable')
+  assert.equal(maintenance.status, 'maintenance')
 })
 
 test('hydrology government ingest schema accepts public bounded diagnostics', () => {

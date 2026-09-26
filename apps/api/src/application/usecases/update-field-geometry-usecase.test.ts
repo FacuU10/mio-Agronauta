@@ -13,9 +13,9 @@ function field(): Field {
 test('UpdateFieldGeometryUseCase derives canonical geometry input and preserves server metrics', async () => {
   let savedInput: unknown
   const fields: FieldRepository = { async save() {}, async findById() { return field() }, async findByExternalFieldId() { return null }, async resolveCoverage() { return { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' } } }
-  const geometry: FieldGeometryRepository = { async getGeometry() { return null }, async updateGeometry(_fieldId, input) { savedInput = input; return { polygonWkt, centroid: { lat: -29.195, lng: -58.096 }, areaM2: 1_000_000, hectares: 100, perimeterM: 4_000, status: 'saved', source: input.source, updatedAt: new Date('2026-08-12T00:00:00.000Z') } } }
+  const geometry: FieldGeometryRepository = { async getGeometry() { return null }, async updateGeometry(_fieldId, _workspaceId, input) { savedInput = input; return { polygonWkt, centroid: { lat: -29.195, lng: -58.096 }, areaM2: 1_000_000, hectares: 100, perimeterM: 4_000, status: 'saved', source: input.source, updatedAt: new Date('2026-08-12T00:00:00.000Z') } } }
 
-  const result = await new UpdateFieldGeometryUseCase(fields, geometry).execute('field-1', { geoJson: { type: 'Polygon', coordinates: [[[-58.10, -29.20], [-58.09, -29.20], [-58.09, -29.19], [-58.10, -29.20]]] } })
+  const result = await new UpdateFieldGeometryUseCase(fields, geometry).execute('field-1', 'workspace-a', { geoJson: { type: 'Polygon', coordinates: [[[-58.10, -29.20], [-58.09, -29.20], [-58.09, -29.19], [-58.10, -29.20]]] } })
 
   assert.equal(result.hectares, 100)
   assert.deepEqual(savedInput, { polygonWkt, source: 'operator', expectedUpdatedAt: undefined })
@@ -26,6 +26,6 @@ test('UpdateFieldGeometryUseCase rejects unsupported coverage before repository 
   const fields: FieldRepository = { async save() {}, async findById() { return field() }, async findByExternalFieldId() { return null }, async resolveCoverage() { return { insideSupportedArea: false, staleCause: 'outside_supported_area' } } }
   const geometry: FieldGeometryRepository = { async getGeometry() { return null }, async updateGeometry() { updates += 1; throw new Error('must not save') } }
 
-  await assert.rejects(() => new UpdateFieldGeometryUseCase(fields, geometry).execute('field-1', { polygonWkt }), /outside_supported_area/)
+  await assert.rejects(() => new UpdateFieldGeometryUseCase(fields, geometry).execute('field-1', 'workspace-a', { polygonWkt }), /outside_supported_area/)
   assert.equal(updates, 0)
 })

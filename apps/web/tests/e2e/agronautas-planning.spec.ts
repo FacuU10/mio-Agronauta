@@ -49,7 +49,7 @@ test.describe('Agronautas planning', () => {
     await expect(page.getByText(/No hay una observación de suelo verificada/i)).toBeVisible()
     await expect(page.locator('[aria-label="Datos de lotes seleccionados"]').getByText('field-demo-1')).toBeVisible()
     await expect(page.getByText(/open-meteo/i)).toBeVisible()
-    await expect(page.getByText(/Proveniencia: demo/i)).toBeVisible()
+    await expect(page.getByText(/Proveniencia: demo/i).first()).toBeVisible()
     await expect(page.getByText(/No hay una observación de precios verificada/i)).toBeVisible()
     await expect(page.getByText(/Iberá-Alerta/i)).toHaveCount(0)
   })

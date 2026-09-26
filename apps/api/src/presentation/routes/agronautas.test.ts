@@ -3,18 +3,28 @@ import assert from 'node:assert/strict'
 import express from 'express'
 import { createServer } from 'node:http'
 import { DEFAULT_GROQ_MODEL } from '@repo/hydrology-engine'
-import type { AgronautasActivitySourceRecord, AgronautasWorkspaceContextRecord, AgronautasWorkspaceRepository, DemoContactSubmissionRepository, FieldContextRepository, FieldRepository, SupportedCoverageResult } from '../../domain/repositories/agronautas'
+import type { AgronautasActivitySourceRecord, AgronautasManagementRepository, AgronautasWorkspaceContextRecord, AgronautasWorkspaceRepository, DemoContactSubmissionRepository, FieldContextRepository, FieldRepository, ManagementAuditRecord, ManagementItemRecord, SupportedCoverageResult } from '../../domain/repositories/agronautas'
 import { DEFAULT_AGRONAUTAS_WORKSPACE_ID } from '../../domain/repositories/agronautas'
 import { Field, FieldContext, RiskSnapshotFoundation, type ClimateSummary, type SatelliteSummary } from '../../domain/entities/agronautas'
 import type { ProviderEvidencePort } from '../../infrastructure/config/provider-matrix'
 import { createAgronautasRouter } from './agronautas'
+import { AUTH_FAILURE_CODES, AuthFailure, type AuthPrincipal } from '../../domain/auth/contracts'
+import type { AgronautasAuthServicePort } from '../../domain/auth/ports'
+import { AgronautasAuthService, InMemoryAgronautasAuthRepository } from '../../application/auth/agronautas-auth-service'
+
+const REAL_AUTH_TEST_SECRETS = {
+  accessSecret: 'access-secret-for-route-tests-1234567890',
+  refreshSecret: 'refresh-secret-for-route-tests-1234567890',
+  bootstrapSecret: 'bootstrap-secret-for-route-tests-1234567890',
+  bffBearerToken: 'bff-secret-for-route-tests-1234567890',
+}
 
 type HydrologyDenseContextV1 = Awaited<ReturnType<NonNullable<NonNullable<Parameters<typeof createAgronautasRouter>[0]>['hydrologyRepository']>['getDenseContextForField']>>
 
 test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async () => {
   const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
   const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
-  const app = createTestApp()
+  const app = createTestApp({ authService: createExplicitTestAuthService(false) })
 
   process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
@@ -35,6 +45,166 @@ test('GET /fields/:id/risk/current devuelve 401 contractual sin bearer', async (
   }
 })
 
+test('management API enforces 401/403 and preserves create, duplicate, revision, reload, and audit outcomes', async () => {
+  const managementRepository = createManagementRepository()
+  const app = createTestApp({ managementRepository, authService: createExplicitTestAuthService(false) })
+
+  assert.equal((await request(app, '/agronautas/management')).status, 401)
+  assert.equal((await request(app, '/agronautas/management/operations', { method: 'POST', headers: { authorization: 'Bearer reader-token', 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID, fieldId: 'field-1', name: 'Nope', idempotencyKey: 'reader-1', sourceLocationIds: [] }) })).status, 403)
+
+  const input = { contractVersion: 'agronautas-management-v2', workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID, fieldId: 'field-1', name: 'Aplicar tratamiento', idempotencyKey: 'operation-1', sourceLocationIds: ['location-1'] }
+  const created = await request(app, '/agronautas/management/operations', { method: 'POST', headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' }, body: JSON.stringify(input) })
+  assert.equal(created.status, 201, await created.clone().text())
+  const duplicate = await request(app, '/agronautas/management/operations', { method: 'POST', headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' }, body: JSON.stringify(input) })
+  assert.equal(duplicate.status, 200)
+  const stale = await request(app, '/agronautas/management/operation-1/transition', { method: 'POST', headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: 'agronautas-management-v2', expectedRevision: 99, status: 'active' }) })
+  assert.equal(stale.status, 409)
+  const reloaded = await request(app, '/agronautas/management', { headers: { authorization: 'Bearer operator-token' } })
+  const body = await reloaded.json() as { items: Array<{ revision: number }>; audit: Array<{ outcome: string }> }
+  assert.equal(reloaded.status, 200)
+  assert.equal(body.items[0]?.revision, 1)
+  assert.ok(body.audit.some((entry) => entry.outcome === 'accepted'))
+  assert.ok(body.audit.some((entry) => entry.outcome === 'duplicate'))
+  assert.ok(body.audit.some((entry) => entry.outcome === 'conflict'))
+  assert.ok(body.audit.some((entry) => entry.outcome === 'forbidden'))
+})
+
+test('management API turns a possible commit timeout into a retryable recovery state', async () => {
+  const repository = createManagementRepository()
+  repository.createManagement = async () => { throw new Error('management persistence timeout') }
+  const app = createTestApp({ managementRepository: repository })
+  const response = await request(app, '/agronautas/management/operations', { method: 'POST', headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' }, body: JSON.stringify({ contractVersion: 'agronautas-management-v2', workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID, fieldId: 'field-1', name: 'Retry me', idempotencyKey: 'timeout-1', sourceLocationIds: [] }) })
+  assert.equal(response.status, 503)
+  assert.equal((await response.json() as { retryable: boolean }).retryable, true)
+})
+
+test('POST /locations/resolve preserves point lineage through the authenticated route', async () => {
+  let coverageCalls = 0
+  const app = createTestApp({
+    locationRepository: {
+      async findAuthorizedField(fieldId) { return fieldId === 'field-1' ? testField(fieldId) : null },
+      async resolveCoverage() {
+        coverageCalls += 1
+        return { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W', boundaryVersion: 'boundary-v1' }
+      },
+    },
+  })
+
+  const response = await request(app, '/agronautas/locations/resolve', {
+    method: 'POST',
+    headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contractVersion: 'agronautas-product-flows-v2',
+      workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID,
+      fieldId: 'field-1',
+      geometry: { type: 'point', coordinates: { latitude: -29.2, longitude: -58.1 } },
+      selection: { source: 'locality-fallback', sourceReference: 'mercedes' },
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.json() as { status: string; location?: { geometry: { type: string }; coverage: { status: string; evidenceRef?: string } } }
+  assert.equal(body.status, 'accepted')
+  assert.equal(body.location?.geometry.type, 'point')
+  assert.deepEqual(body.location?.coverage, { status: 'supported', evidenceRef: 'boundary-v1' })
+  assert.equal(coverageCalls, 1)
+})
+
+test('POST /locations/resolve preserves polygon lineage without claiming polygon coverage support', async () => {
+  const app = createTestApp({
+    locationRepository: {
+      async findAuthorizedField() { return testField('field-1') },
+      async resolveCoverage() { return { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W', boundaryVersion: 'boundary-v1' } },
+    },
+  })
+
+  const response = await request(app, '/agronautas/locations/resolve', {
+    method: 'POST',
+    headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contractVersion: 'agronautas-product-flows-v2',
+      workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID,
+      fieldId: 'field-1',
+      geometry: { type: 'polygon', coordinates: [[[-58.1, -29.2], [-58.09, -29.2], [-58.09, -29.19], [-58.1, -29.2]]] },
+      selection: { source: 'reviewed-polygon', sourceReference: 'field:field-1' },
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.json() as { status: string; location?: { geometry: { type: string }; coverage: { status: string; reason?: string } } }
+  assert.equal(body.status, 'accepted')
+  assert.equal(body.location?.geometry.type, 'polygon')
+  assert.deepEqual(body.location?.coverage, { status: 'partial', reason: 'polygon_boundary_coverage_not_proven', evidenceRef: 'boundary-v1' })
+})
+
+test('POST /locations/resolve rejects an out-of-scope field before coverage resolution', async () => {
+  let coverageCalls = 0
+  const app = createTestApp({
+    locationRepository: {
+      async findAuthorizedField() { return null },
+      async resolveCoverage() { coverageCalls += 1; return { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' } },
+    },
+  })
+
+  const response = await request(app, '/agronautas/locations/resolve', {
+    method: 'POST',
+    headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contractVersion: 'agronautas-product-flows-v2',
+      workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID,
+      fieldId: 'foreign-field',
+      geometry: { type: 'point', coordinates: { latitude: -29.2, longitude: -58.1 } },
+      selection: { source: 'locality-fallback', sourceReference: 'mercedes' },
+    }),
+  })
+
+  assert.equal(response.status, 403)
+  assert.deepEqual(await response.json(), { status: 'unauthorized', reason: 'field_out_of_scope' })
+  assert.equal(coverageCalls, 0)
+})
+
+test('real auth service returns 422 for an unmapped field write without invoking the repository write', async () => {
+  const authService = new AgronautasAuthService(new InMemoryAgronautasAuthRepository({
+    users: [{ id: 'mapped-user', email: 'mapped@example.test', displayName: 'Mapped', password: 'password-123', workspaceId: 'workspace-a', role: 'operator', scopes: ['read', 'write'] }],
+  }), { secrets: REAL_AUTH_TEST_SECRETS })
+  const login = await authService.login({ email: 'mapped@example.test', password: 'password-123' })
+  let writes = 0
+  const field = testField('unmapped-field')
+  const app = createTestApp({
+    authService,
+    fieldRepository: {
+      async save() { writes += 1 },
+      async findById() { return field },
+      async findByExternalFieldId() { return null },
+      async resolveCoverage() { return { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' } },
+      async list() { return { items: [], nextCursor: null } },
+    },
+  })
+
+  const response = await request(app, '/agronautas/fields/unmapped-field/geometry', {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${login.accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ polygonWkt: 'POLYGON ((-58.10 -29.20, -58.09 -29.20, -58.09 -29.19, -58.10 -29.20))' }),
+  })
+
+  assert.equal(response.status, 422)
+  assert.equal((await response.json() as { code: string }).code, 'UNMAPPED_RECORD')
+  assert.equal(writes, 0)
+})
+
+test('real auth service returns 503 when required Redis cannot prove a protected request', async () => {
+  const authService = new AgronautasAuthService(new InMemoryAgronautasAuthRepository({
+    users: [{ id: 'redis-user', email: 'redis@example.test', displayName: 'Redis', password: 'password-123', workspaceId: 'workspace-a', role: 'operator', scopes: ['read'] }],
+  }), { secrets: REAL_AUTH_TEST_SECRETS, redis: { isDenied: async () => { throw new Error('redis down') }, deny: async () => undefined } })
+  const login = await authService.login({ email: 'redis@example.test', password: 'password-123' })
+  const response = await request(createTestApp({ authService }), '/agronautas/runtime', { headers: { authorization: `Bearer ${login.accessToken}` } })
+
+  assert.equal(response.status, 503)
+  const body = await response.json() as { code: string; retryable: boolean }
+  assert.equal(body.code, 'AUTH_MAINTENANCE')
+  assert.equal(body.retryable, true)
+})
+
 test('auth 401 expone el challenge Bearer sin cambiar el cuerpo contractual ni el request ID', { concurrency: false }, async () => {
   const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
   const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
@@ -42,7 +212,7 @@ test('auth 401 expone el challenge Bearer sin cambiar el cuerpo contractual ni e
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
 
   try {
-    const response = await request(createTestApp(), '/agronautas/runtime', { headers: { 'x-request-id': 'agronautas-auth-401' } })
+     const response = await request(createTestApp({ authService: createExplicitTestAuthService(false) }), '/agronautas/runtime', { headers: { 'x-request-id': 'agronautas-auth-401' } })
 
     assert.equal(response.status, 401)
     assert.equal(response.headers.get('www-authenticate'), 'Bearer')
@@ -99,7 +269,7 @@ test('demo query no omite auth y la respuesta demo no declara identidad ni tenan
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
 
   try {
-    const app = createTestApp()
+    const app = createTestApp({ authService: createExplicitTestAuthService(false) })
     const unauthorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo', { headers: { 'x-request-id': 'agronautas-demo-401' } })
     assert.equal(unauthorized.status, 401)
 
@@ -123,7 +293,7 @@ test('demo query no omite auth y la respuesta demo no declara identidad ni tenan
 test('Agronautas route propagates request IDs across auth, not-found, unavailable, and rate-limit outcomes', async () => {
   const previousAuth = process.env['AGRONAUTAS_AUTH_ENABLED']
   const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
-  const unavailableApp = createTestApp({ workspaceRepository: {
+  const unavailableApp = createTestApp({ authService: createExplicitTestAuthService(false), workspaceRepository: {
     async ensureDefaultWorkspace() { throw new Error('workspace unavailable') },
     async getWorkspace() { throw new Error('workspace unavailable') },
     async listWorkspaceFields() { throw new Error('fields unavailable') },
@@ -162,12 +332,12 @@ test('GET status y POST chat requieren bearer antes de consultar el lote o ejecu
   const previousReaderToken = process.env['AGRONAUTAS_AUTH_TOKEN_READER']
   let fieldLookups = 0
   const fieldRepository = createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() })
-  const app = createTestApp({
+  const app = createTestApp({ authService: createExplicitTestAuthService(false),
     fieldRepository: {
       ...fieldRepository,
       async findById(fieldId) {
         fieldLookups += 1
-        return fieldRepository.findById(fieldId)
+        return fieldRepository.findById(fieldId, DEFAULT_AGRONAUTAS_WORKSPACE_ID)
       },
     },
   })
@@ -249,7 +419,7 @@ test('management routes enforce auth, invalid identifiers, unavailable storage, 
   const fieldStore = new Map<string, Field>([['field-management-1', testField('field-management-1')]])
   const activityRecord: AgronautasActivitySourceRecord = { sourceType: 'field', sourceId: 'field-management-1', occurredAt: new Date('2026-08-13T10:00:00.000Z'), title: 'Field record created' }
   const workspaceRepository = createWorkspaceRepository({ activity: [activityRecord] })
-  const app = createTestApp({ fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }), workspaceRepository })
+  const app = createTestApp({ authService: createExplicitTestAuthService(false), fieldRepository: createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore }), workspaceRepository })
 
   process.env['AGRONAUTAS_AUTH_ENABLED'] = 'true'
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'management-reader'
@@ -387,6 +557,7 @@ test('GET /agronautas/v1/runtime preserva compatibilidad versionada', async () =
     runtimeDispatcher: { async dispatchRiskRecompute() {} },
     jobRunRepository: { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
     alertSnapshotRepository: { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
+    authService: createExplicitTestAuthService(),
   }))
   const response = await request(app, '/agronautas/v1/runtime', {
     headers: { authorization: 'Bearer reader-token' },
@@ -438,7 +609,7 @@ test('GET /fields/:id?mode=demo conserva el scope de lectura', async () => {
   process.env['AGRONAUTAS_AUTH_TOKEN_READER'] = 'reader-token'
 
   try {
-    const app = createTestApp()
+    const app = createTestApp({ authService: createExplicitTestAuthService(false) })
     const unauthorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo')
     const authorized = await request(app, '/agronautas/fields/field-demo-1?mode=demo', { headers: { authorization: 'Bearer reader-token' } })
 
@@ -502,6 +673,31 @@ test('POST /fields acepta alta válida en Corrientes', async () => {
   assert.equal(fieldStore.size, 1)
   assert.equal([...fieldStore.values()][0]?.props.crop, 'maize')
   assert.equal(contextStore.size, 1)
+})
+
+test('POST /fields maps expected persistence failures without hiding unexpected failures', async () => {
+  const payload = { contractVersion: '1.0.0', fieldId: 'ext-failure', cropCategory: 'cereal', crop: 'rice', hectares: 10, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }
+  const failureCases = [
+    { error: 'FIELD_WORKSPACE_CONFLICT', status: 403, code: 'FORBIDDEN' },
+    { error: 'WORKSPACE_NOT_FOUND', status: 503, code: 'AUTH_MAINTENANCE' },
+    { error: 'FIELD_EXTERNAL_ID_CONFLICT', status: 422, code: 'INVALID_CONTRACT' },
+    { error: 'unexpected_database_failure', status: 500, code: 'INVALID_CONTRACT' },
+  ] as const
+
+  for (const failureCase of failureCases) {
+    const response = await request(createTestApp({
+      fieldRepository: {
+        ...createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() }),
+        async save() { throw new Error(failureCase.error) },
+      },
+    }), '/agronautas/fields', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+
+    assert.equal(response.status, failureCase.status)
+    const body = await response.json() as { code: string; message: string; details?: unknown }
+    assert.equal(body.code, failureCase.code)
+    assert.doesNotMatch(body.message, /unexpected_database_failure/)
+    assert.equal(body.details, undefined)
+  }
 })
 
 test('POST /fields labels a point inside the boundary with no PostGIS locality as unsupported locality', async () => {
@@ -642,6 +838,7 @@ test('POST /agronautas/v1/contact/demo mantiene acceso versionado', async () => 
     jobRunRepository: { async saveQueuedRun() {}, async markRunning() {}, async markHeartbeat() {}, async markCompleted() {}, async markFailed() {} },
     alertSnapshotRepository: { async saveMany() {}, async getLatestForField() { return [] }, async listTimeline() { return [] } },
     demoContactSubmissionRepository: { async save() { return { submissionId: 'demo-sub-v1' } } },
+    authService: createExplicitTestAuthService(),
   }))
 
   const response = await request(app, '/agronautas/v1/contact/demo', {
@@ -1352,6 +1549,30 @@ test('seeded Corrientes demo rows can power overview, weather, alerts, status an
   assert.equal((await chat.json() as { supportingFacts: Array<{ label: string }> }).supportingFacts[0]?.label, 'Score')
 })
 
+test('POST /fields persists the authenticated workspace instead of inferring the default workspace', async () => {
+  let savedWorkspaceId: string | undefined
+  const baseRepository = createFieldRepository({
+    coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W', boundaryVersion: 'v1', localityConfidence: 1 },
+    fieldStore: new Map(),
+  })
+  const fieldRepository: FieldRepository = {
+    ...baseRepository,
+    async save(field, workspaceId?: string) {
+      savedWorkspaceId = workspaceId
+      await baseRepository.save(field, DEFAULT_AGRONAUTAS_WORKSPACE_ID)
+    },
+  }
+
+  const response = await request(createTestApp({ fieldRepository }), '/agronautas/fields', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contractVersion: '1.0.0', fieldId: 'ext-workspace', cropCategory: 'cereal', crop: 'maize', hectares: 25, locality: 'Mercedes', location: { lat: -29.2, lng: -58.1 } }),
+  })
+
+  assert.equal(response.status, 201)
+  assert.equal(savedWorkspaceId, DEFAULT_AGRONAUTAS_WORKSPACE_ID)
+})
+
 test('GET /agronautas/runtime no declara habilitado un scheduler sin dispatcher probado', async () => {
   process.env['AGRONAUTAS_RUNTIME_MODE'] = 'real'
   process.env['AGRONAUTAS_SCHEDULER_ENABLED'] = 'true'
@@ -1404,6 +1625,71 @@ test('GET /fields/:id/intelligence explains persisted evidence and blocks econom
   assert.deepEqual(body.recommendation.missingInputs, ['soil', 'crop-history/yield', 'price', 'FX', 'cost'])
 })
 
+test('every field-id route rejects a cross-workspace field before downstream repositories run', async () => {
+  let repositoryCalls = 0
+  const principal: AuthPrincipal = {
+    actorId: 'workspace-a-user', sessionId: 'session-a', membershipId: 'membership-a', workspaceId: 'workspace-a',
+    workspaceKey: 'workspace-a', role: 'operator', scopes: ['read', 'write', 'recompute'], expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }
+  const crossWorkspaceAuth: AgronautasAuthServicePort = {
+    async authenticateAccessToken() { return principal },
+    async authenticateBffAssertion() { return principal },
+    async authorize(_principal, _workspaceId, _scope, fieldId) {
+      if (fieldId === 'foreign-field') throw new AuthFailure(AUTH_FAILURE_CODES.FORBIDDEN, 'Field is outside the authorized workspace')
+    },
+    async login() { throw new Error('not used') },
+    async refresh() { throw new Error('not used') },
+    async logout() { throw new Error('not used') },
+    async status() { throw new Error('not used') },
+  }
+  const fieldRepository = createFieldRepository({ coverage: { insideSupportedArea: true, locality: 'Mercedes', provinceCode: 'AR-W' }, fieldStore: new Map() })
+  const guardedFieldRepository = {
+    ...fieldRepository,
+    async findById() { repositoryCalls += 1; return null },
+    async findByExternalFieldId() { repositoryCalls += 1; return null },
+    async list() { repositoryCalls += 1; return { items: [], nextCursor: null } },
+  }
+  const app = createTestApp({
+    authService: crossWorkspaceAuth,
+    fieldRepository: guardedFieldRepository,
+    fieldContextRepository: { async save() { repositoryCalls += 1 }, async getLatest() { repositoryCalls += 1; return null } },
+    riskSnapshotRepository: { async save() {}, async getLatest() { repositoryCalls += 1; return null }, async listTimeline() { repositoryCalls += 1; return [] } },
+    signalSummaryRepository: { async getLatestClimateSummary() { repositoryCalls += 1; return null }, async getLatestSatelliteSummary() { repositoryCalls += 1; return null }, async listClimateTimeline() { repositoryCalls += 1; return [] } },
+    alertSnapshotRepository: { async saveMany() {}, async getLatestForField() { repositoryCalls += 1; return [] }, async listTimeline() { repositoryCalls += 1; return [] } },
+    geometryRepository: { async getGeometry() { repositoryCalls += 1; return null }, async updateGeometry() { repositoryCalls += 1; throw new Error('not used') } },
+    recomputeLockRepository: { async acquire() { repositoryCalls += 1; throw new Error('not used') }, async release() {} },
+    runtimeDispatcher: { async dispatchRiskRecompute() { repositoryCalls += 1 } },
+    hydrologyRepository: { async getDenseContextForField() { repositoryCalls += 1; throw new Error('not used') } },
+  })
+  const routes: Array<{ path: string; method?: 'GET' | 'POST' | 'PATCH'; body?: string }> = [
+    { path: '/agronautas/fields/foreign-field', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/activity', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/geometry', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/geometry', method: 'PATCH', body: '{}' },
+    { path: '/agronautas/fields/foreign-field/risk/current', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/risk/timeline', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/weather/timeline', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/alerts/current', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/alerts/timeline', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/recompute', method: 'POST', body: '{}' },
+    { path: '/agronautas/fields/foreign-field/dashboard', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/dashboard.pdf', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/intelligence', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/copilot/context', method: 'GET' },
+    { path: '/agronautas/fields/foreign-field/chat', method: 'POST', body: '{}' },
+    { path: '/agronautas/fields/foreign-field/copilot/chat', method: 'POST', body: '{}' },
+  ]
+
+  const responses = await Promise.all(routes.map((route) => request(app, route.path, {
+    method: route.method,
+    headers: { authorization: 'Bearer trusted-access-token', ...(route.body ? { 'content-type': 'application/json' } : {}) },
+    body: route.body,
+  })))
+
+  assert.deepEqual(responses.map((response) => response.status), routes.map(() => 403))
+  assert.equal(repositoryCalls, 0)
+})
+
 function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRouter>[0]> = {}) {
   const app = express()
   process.env['RATE_LIMIT_STORE'] = 'memory'
@@ -1431,10 +1717,38 @@ function createTestApp(overrides: Partial<Parameters<typeof createAgronautasRout
     hydrologyRepository: overrides.hydrologyRepository ?? { async getDenseContextForField(fieldId: string) { return hydrologyContext(fieldId) } },
     hydrologyCopilotService: overrides.hydrologyCopilotService ?? { async *streamChat() { yield { type: 'metadata' as const, data: { model: DEFAULT_GROQ_MODEL } }; yield { type: 'token' as const, data: 'Sin datos oficiales disponibles.' }; yield { type: 'done' as const, data: { model: DEFAULT_GROQ_MODEL } } } },
     groqProvider: overrides.groqProvider ?? { enabled: false, async selectAction() { throw new Error('groq_disabled_fixture') }, async finalizeResponse() { throw new Error('groq_disabled_fixture') } },
-    providerEvidencePort: overrides.providerEvidencePort ?? createTestProviderEvidencePort(),
-    workspaceRepository: overrides.workspaceRepository ?? createWorkspaceRepository(),
-  }))
+     providerEvidencePort: overrides.providerEvidencePort ?? createTestProviderEvidencePort(),
+     workspaceRepository: overrides.workspaceRepository ?? createWorkspaceRepository(),
+     managementRepository: overrides.managementRepository,
+     authService: overrides.authService ?? createExplicitTestAuthService(),
+      locationRepository: overrides.locationRepository ?? { async findAuthorizedField() { return null }, async resolveCoverage() { return { insideSupportedArea: false, provinceCode: undefined } } },
+   }))
   return app
+}
+
+function createExplicitTestAuthService(allowAnonymous = true): AgronautasAuthServicePort {
+  const scopesByRole = {
+    reader: ['read'],
+    operator: ['read', 'write', 'recompute'],
+    admin: ['read', 'write', 'recompute', 'admin'],
+  } as const
+  return {
+    testOnlyAnonymousWhenDisabled: allowAnonymous,
+     async authenticateAccessToken(token: string): Promise<AuthPrincipal> {
+      const role = token.includes('operator') ? 'operator' : token.includes('admin') ? 'admin' : token.includes('reader') || token.includes('management') ? 'reader' : null
+      if (!allowAnonymous && !role) throw new AuthFailure(AUTH_FAILURE_CODES.UNAUTHORIZED, 'Missing or invalid bearer token')
+      if (!role) return { actorId: 'test-actor', sessionId: 'test-session', membershipId: 'test-membership', workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID, workspaceKey: 'agronautas-default', role: 'admin', scopes: [...scopesByRole.admin], expiresAt: new Date(Date.now() + 60_000).toISOString() }
+       return { actorId: `test-${role}`, sessionId: 'test-session', membershipId: `test-membership-${role}`, workspaceId: DEFAULT_AGRONAUTAS_WORKSPACE_ID, workspaceKey: 'agronautas-default', role, scopes: [...scopesByRole[role]], expiresAt: new Date(Date.now() + 60_000).toISOString() }
+     },
+     async authenticateBffAssertion(token: string): Promise<AuthPrincipal> { return this.authenticateAccessToken(token) },
+     async authorize(principal, workspaceId, scope) {
+      if (!principal.scopes.includes(scope)) throw new AuthFailure(AUTH_FAILURE_CODES.FORBIDDEN, `Role ${principal.role} cannot access this operation`)
+    },
+    async login() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE) },
+    async refresh() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE) },
+    async logout() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE) },
+    async status() { throw new AuthFailure(AUTH_FAILURE_CODES.AUTH_MAINTENANCE) },
+  } as AgronautasAuthServicePort
 }
 
 function createTestProviderEvidencePort(): ProviderEvidencePort {
@@ -1521,6 +1835,44 @@ function createWorkspaceRepository(input: { activity?: AgronautasActivitySourceR
     async getWorkspace(workspaceId) { return workspaceId === workspace.workspaceId ? workspace : null },
     async listWorkspaceFields(input) { return { items: [], nextCursor: null } },
     async listFieldActivity() { return input.activity ?? [] },
+  }
+}
+
+function createManagementRepository(): AgronautasManagementRepository {
+  const createdAt = new Date('2026-09-21T10:00:00.000Z')
+  let resource: ManagementItemRecord | undefined
+  const audit: ManagementAuditRecord[] = []
+  const workspace = createWorkspaceRepository()
+  return {
+    ...workspace,
+    async listManagement() { return { items: resource ? [resource] : [], audit: [...audit].reverse() } },
+    async getManagementItem() { return resource ?? null },
+    async recordManagementAudit(input) {
+      const entry = { auditId: `audit-${audit.length + 1}`, actorId: input.actorId, action: input.action, targetId: input.targetId, outcome: input.outcome, revisionBefore: input.revisionBefore, revisionAfter: input.revisionAfter, occurredAt: new Date(), requestId: input.requestId }
+      audit.push(entry)
+      return entry
+    },
+    async createManagement(input) {
+      if (resource) {
+        const duplicate = input.name === resource.name && input.kind === resource.kind && input.fieldId === resource.fieldId
+        const entry = { auditId: `audit-${audit.length + 1}`, actorId: input.actorId, action: 'retry' as const, targetId: resource.id, outcome: duplicate ? 'duplicate' as const : 'conflict' as const, revisionBefore: resource.revision, revisionAfter: resource.revision, occurredAt: new Date(), requestId: input.requestId }
+        audit.push(entry)
+        return { status: duplicate ? 'duplicate' as const : 'conflict' as const, resource, audit: entry }
+      }
+      resource = { id: 'operation-1', kind: input.kind, workspaceId: input.workspaceId, fieldId: input.fieldId ?? null, parentId: input.parentId ?? null, name: input.name, status: input.status, revision: 1, responsibleActorId: input.responsibleActorId ?? null, createdByActorId: input.actorId, idempotencyKey: input.idempotencyKey, sourceLocationIds: input.sourceLocationIds, createdAt, updatedAt: createdAt }
+      const entry = { auditId: 'audit-1', actorId: input.actorId, action: 'create' as const, targetId: resource.id, outcome: 'accepted' as const, revisionBefore: null, revisionAfter: 1, occurredAt: createdAt, requestId: input.requestId }
+      audit.push(entry)
+      return { status: 'created' as const, resource, audit: entry }
+    },
+    async transitionManagement(input) {
+      if (!resource) return { status: 'not_found' as const, audit: { auditId: 'audit-missing', actorId: input.actorId, action: 'transition' as const, targetId: input.itemId, outcome: 'unavailable' as const, revisionBefore: null, revisionAfter: null, occurredAt: new Date(), requestId: input.requestId } }
+      const entry = { auditId: `audit-${audit.length + 1}`, actorId: input.actorId, action: 'transition' as const, targetId: resource.id, outcome: input.expectedRevision === resource.revision ? 'accepted' as const : 'conflict' as const, revisionBefore: resource.revision, revisionAfter: resource.revision, occurredAt: new Date(), requestId: input.requestId }
+      audit.push(entry)
+      if (input.expectedRevision !== resource.revision) return { status: 'stale' as const, resource, audit: entry }
+      resource = { ...resource, status: input.status, revision: resource.revision + 1, updatedAt: new Date() }
+      entry.revisionAfter = resource.revision
+      return { status: 'transitioned' as const, resource, audit: entry }
+    },
   }
 }
 

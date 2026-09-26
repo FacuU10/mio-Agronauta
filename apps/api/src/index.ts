@@ -26,6 +26,11 @@ if (cluster.isPrimary) {
   })
 } else {
   // Workers can share TCP connection
-  startServer()
-  logger.info({ pid: process.pid }, 'API worker started')
+  void startServer().then(() => {
+    logger.info({ pid: process.pid }, 'API worker started')
+  }).catch((error: unknown) => {
+    const failure = error as { code?: string }
+    logger.error({ code: failure.code ?? 'API_STARTUP_FAILURE' }, 'API worker startup failed')
+    process.exit(1)
+  })
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useRef, useState, type FormEvent } from 'react'
-import { pollStatusPath, sanitizeIngestResponse, type IngestStatus, type PollOptions, type SafeIngestView } from '@/lib/visibility/polling'
+import { pollStatusPath, PollingError, sanitizeIngestResponse, type IngestStatus, type PollOptions, type SafeIngestView } from '@/lib/visibility/polling'
 import { EvidenceStateBadge } from '@/components/visibility/primitives'
 import { EVIDENCE_STATE, normalizeEvidence } from '@/lib/visibility/evidence-state'
 export type { SafeIngestView } from '@/lib/visibility/polling'
@@ -16,6 +16,8 @@ const statusLabels: Record<IngestStatus, string> = {
   completed: 'Ingesta completada',
   partial: 'Ingesta parcial',
   failed: 'Ingesta fallida',
+  unavailable: 'Fuente no disponible',
+  maintenance: 'Fuente en mantenimiento',
 }
 
 const sourceStatusLabels: Record<SafeIngestView['results'][number]['status'], string> = {
@@ -101,12 +103,17 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    await executeIngest()
+  }
+
+  async function executeIngest() {
     if (pending || !authorized || !token.trim()) return
 
     setPending(true)
     setResult(null)
     setError(null)
 
+    let retainAuthorizationForRetry = false
     try {
       const response = await fetch('/api/hydrology/ingest', {
         method: 'POST',
@@ -118,20 +125,26 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
         cache: 'no-store',
       })
 
-      if (!response.ok) {
-        throw new IngestRequestError(safeErrorForStatus(response.status))
-      }
+       if (!response.ok) {
+         retainAuthorizationForRetry = response.status === 429 || response.status >= 500
+         throw new IngestRequestError(safeErrorForStatus(response.status))
+       }
 
       const admission = sanitizeIngestResponse(await response.json())
       const view = admission?.statusPath ? await pollStatusPath(admission.statusPath, pollOptions) : admission
-      if (!view) throw new IngestRequestError('La respuesta de ingesta no tiene un formato válido.')
+       if (!view) throw new IngestRequestError('La respuesta de ingesta no tiene un formato válido.')
+       const emptyCompletedResult = view.status === 'completed' && view.results.length === 0
+       retainAuthorizationForRetry = emptyCompletedResult || view.status === 'unavailable'
       if (mountedRef.current) setResult(view)
-    } catch (cause) {
-      if (mountedRef.current) setError(cause instanceof IngestRequestError ? cause.message : 'No se pudo completar la ingesta.')
+     } catch (cause) {
+       if (cause instanceof PollingError) retainAuthorizationForRetry = cause.outcome.retryable
+       if (mountedRef.current) setError(cause instanceof IngestRequestError ? cause.message : 'No se pudo completar la ingesta.')
     } finally {
       if (mountedRef.current) {
-        setToken('')
-        setAuthorized(false)
+        if (!retainAuthorizationForRetry) {
+          setToken('')
+          setAuthorized(false)
+        }
         setPending(false)
       }
     }
@@ -139,7 +152,7 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
 
   const statusMessage = pending
     ? authorized ? 'Procesando ingesta…' : 'Verificando acceso…'
-    : result ? statusLabels[result.status]
+     : result ? result.status === 'completed' && result.results.length === 0 ? 'Ingesta sin datos verificables' : statusLabels[result.status]
     : authorized ? 'Acceso verificado' : 'Se requiere verificación de acceso'
 
   return (
@@ -197,8 +210,8 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
         {error ? (
           <div className="mt-4 grid gap-3">
             <p id="hydrology-ingest-error" className="rounded-2xl border border-red-300/30 bg-red-950/60 px-4 py-3 text-red-100" role="alert" aria-live="assertive" aria-atomic="true">{error}</p>
-            {!authorized ? (
-              <button
+             {!authorized ? (
+               <button
                 ref={verificationRetryRef}
                 type="button"
                 aria-describedby="hydrology-ingest-error"
@@ -207,13 +220,13 @@ export function IngestPanel({ pollOptions = {} }: { pollOptions?: PollOptions } 
                   tokenInputRef.current?.focus()
                 }}
                 className="w-fit rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100"
-              >
-                Reintentar verificación
-              </button>
-            ) : null}
+               >
+                 Reintentar verificación
+               </button>
+             ) : <button type="button" onClick={() => void executeIngest()} className="w-fit rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button>}
           </div>
         ) : null}
-        {result ? <SafeResultView result={result} onRetry={() => { focusTokenAfterResetRef.current = true; setResult(null); setError(null); setAuthorized(false) }} /> : null}
+        {result ? <SafeResultView result={result} onRetry={() => { focusTokenAfterResetRef.current = true; setResult(null); setError(null); void executeIngest() }} /> : null}
         {authorized ? <section className="mt-6 rounded-[2rem] border border-white/10 bg-slate-900/80 p-6" aria-label="Historial de corridas"><div className="flex items-center justify-between gap-3"><h2 className="text-2xl font-black">Historial durable</h2><button type="button" onClick={() => void loadHistory()} className="rounded-full border border-amber-300 px-3 py-2 text-sm font-bold text-amber-100">Actualizar</button></div>{history.length ? <ul className="mt-4 space-y-3">{history.map((run) => <li key={run.id} className="rounded-2xl bg-white/5 p-3 text-sm"><p className="font-bold">{run.id} · {run.status} · {run.freshness}</p><p className="text-slate-300">Proof: {run.proofRunId} · {run.startedAt}</p></li>)}</ul> : <p className="mt-3 text-slate-300">No hay corridas durables disponibles.</p>}</section> : null}
       </div>
     </main>
@@ -252,13 +265,13 @@ function SafeResultView({ result, onRetry }: { result: SafeIngestView; onRetry: 
         </ul>
        ) : <p className="mt-5 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4 text-sm text-amber-100">No se devolvieron resultados por fuente; el estado general no implica una ingesta completada.</p>}
       <IngestEvidenceStatePanel result={result} />
-       {result.status === 'partial' || result.status === 'failed' || result.status === 'queued' || result.status === 'started' ? <button type="button" onClick={onRetry} className="mt-5 rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button> : null}
+          {(result.status !== 'completed' && result.status !== 'maintenance') || (result.status === 'completed' && result.results.length === 0) ? <button type="button" onClick={onRetry} className="mt-5 rounded-full border border-amber-300 px-4 py-2 font-bold text-amber-100 hover:bg-amber-300/10 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-100">Reintentar ingesta</button> : null}
     </section>
   )
 }
 
 function IngestEvidenceStatePanel({ result }: { result: SafeIngestView }) {
-  const overallState = result.status === 'partial' || result.status === 'failed' ? EVIDENCE_STATE.DEGRADED : result.status === 'completed' ? EVIDENCE_STATE.OBSERVED : EVIDENCE_STATE.MISSING
+  const overallState = result.status === 'partial' || result.status === 'failed' || result.status === 'unavailable' || result.status === 'maintenance' ? EVIDENCE_STATE.DEGRADED : result.status === 'completed' && result.results.length > 0 ? EVIDENCE_STATE.OBSERVED : EVIDENCE_STATE.MISSING
   const overall = normalizeEvidence({ state: overallState, source: 'Iberá-Alerta ingest', observedAt: result.results.find((item) => item.observedFrom)?.observedFrom, detail: `Ingest status: ${result.status}` })
 
   return (

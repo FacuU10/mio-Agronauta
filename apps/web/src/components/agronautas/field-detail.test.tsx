@@ -7,6 +7,7 @@ import { QueryProvider } from '@/lib/query-client'
 import { createAgronautasMockService } from '@/lib/agronautas/service'
 import { ApiError } from '@/lib/api-client'
 import { AgronautasFieldDetail, AgronautasFieldDetailPageClient } from './field-detail'
+import type { AgronautasAuthClient } from '@/lib/agronautas/auth-client'
 
 const activeDoms: Array<InstanceType<typeof JSDOM>> = []
 const globalNames = ['window', 'document', 'HTMLElement', 'HTMLButtonElement', 'Event', 'navigator'] as const
@@ -107,6 +108,23 @@ test('field detail recompute keeps the backend state visible for both request ou
   fireEvent.click(view.getByRole('button', { name: /Solicitar recompute/i }))
   await waitFor(() => assert.deepEqual(requested, [fieldId]))
   assert.equal(result.status, 'already_in_progress')
+})
+
+test('protected field detail with unknown auth is bounded before any cached field content can render', () => {
+  const authClient: AgronautasAuthClient = {
+    status: () => new Promise(() => undefined),
+    login: async () => { throw new Error('not used') },
+    refresh: async () => { throw new Error('not used') },
+    logout: async () => undefined,
+  }
+  const view = render(
+    <QueryProvider>
+      <AgronautasFieldDetailPageClient fieldId="field-private-1" service={{ ...createAgronautasMockService(), isDemo: false }} authClient={authClient} />
+    </QueryProvider>,
+  )
+
+  assert.ok(view.getByText(/Verificando autenticación Agronautas/i))
+  assert.equal(view.queryByText('field-private-1'), null)
 })
 
 test('field detail renders an intentional unavailable state for a 404 geometry capability', async () => {

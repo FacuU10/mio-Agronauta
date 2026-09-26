@@ -23,10 +23,27 @@ services:
         value: "true"
       - key: AGRONAUTAS_AUTH_ENABLED
         value: "true"
+      - key: AGRONAUTAS_AUTH_ACCESS_SECRET
+        sync: false
+      - key: AGRONAUTAS_AUTH_REFRESH_SECRET
+        sync: false
+      - key: AGRONAUTAS_AUTH_BOOTSTRAP_SECRET
+        sync: false
+      - key: AGRONAUTAS_BFF_BEARER_TOKEN
+        sync: false
       - key: AGRONAUTAS_RUNTIME_REQUIRED
         value: "true"
       - key: AGRONAUTAS_RUNTIME_MODE
         value: real
+      # Provider verification is source-specific and must opt in to licensed/live proof.
+      - key: AGRONAUTAS_OPEN_METEO_COMMERCIAL_APPROVED
+        value: "false"
+      - key: AGRONAUTAS_RUNTIME_QUEUE_PROOF
+        value: "false"
+      - key: AGRONAUTAS_RUNTIME_CHAT_PROOF
+        value: "false"
+      - key: AGRONAUTAS_RUNTIME_HYDROLOGY_WRITE
+        value: "false"
       - key: AGRONAUTAS_ROUTE_PREFIX
         value: /agronautas
       - key: AGRONAUTAS_READINESS_DEPENDENCY_TIMEOUT_MS
@@ -56,6 +73,10 @@ services:
       - key: SENTINEL_CLIENT_ID
         sync: false
       - key: SENTINEL_CLIENT_SECRET
+        sync: false
+      - key: AGRONAUTAS_SMN_ALERTS_URL
+        sync: false
+      - key: AGRONAUTAS_SATELLITE_STAC_URL
         sync: false
 
   - type: worker

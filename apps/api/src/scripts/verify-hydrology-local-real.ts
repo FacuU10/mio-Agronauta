@@ -34,7 +34,7 @@ interface SourceResultForDbProof { status: 'success' | 'failed' | 'empty' | 'ski
 interface CompletionObservationResult { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; httpSummary?: HydrologyGovernmentHttpSummary }
 interface CompletionObservation {
   proofRunId?: string
-  status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'
+  status: 'queued' | 'started' | 'completed' | 'partial' | 'failed' | 'unavailable' | 'maintenance'
   results?: CompletionObservationResult[]
   acknowledgementStatus?: number
   durableRowId?: string | null

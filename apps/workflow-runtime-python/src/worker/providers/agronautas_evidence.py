@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from json import dumps
+from math import isfinite
 from typing import Any
 
 
@@ -27,6 +28,18 @@ class EvidenceEnvelope:
     value: dict[str, Any] | None = None
     model: str | None = None
     forecast_horizon_days: int | None = None
+    contract_version: str = "agronautas-evidence-v2"
+    evidence_id: str | None = None
+    location_id: str | None = None
+    workspace_id: str | None = None
+    field_id: str | None = None
+    source_key: str | None = None
+    acquired_at: str | None = None
+    freshness_policy: str = "provider-defined"
+    last_successful_observed_at: str | None = None
+    degradation_reasons: tuple[str, ...] = ()
+    retryable: bool = False
+    status: str = "degraded"
 
 
 def normalize_georef(payload: Any, *, source_url: str, retrieved_at: str, run_id: str) -> EvidenceEnvelope:
@@ -35,9 +48,9 @@ def normalize_georef(payload: Any, *, source_url: str, retrieved_at: str, run_id
         province = row["provincia"]
         centroid = row["centroide"]
         if not isinstance(row["id"], str) or not isinstance(row["nombre"], str):
-            raise ValueError("schema_drift")
+            raise TypeError("schema_drift")
         if not isinstance(province.get("id"), str):
-            raise ValueError("schema_drift")
+            raise TypeError("schema_drift")
         if not _finite_number(centroid.get("lat")) or not _finite_number(centroid.get("lon")):
             raise ValueError("schema_drift")
         value = {
@@ -102,6 +115,10 @@ def normalize_open_meteo(
     retrieved_at: str,
     run_id: str,
     forecast_horizon_days: int,
+    location_id: str | None = None,
+    workspace_id: str | None = None,
+    field_id: str | None = None,
+    provider_mode: str = "seam",
 ) -> EvidenceEnvelope:
     try:
         daily = payload["daily"]
@@ -126,6 +143,12 @@ def normalize_open_meteo(
             payload=payload,
             model=model,
             forecast_horizon_days=forecast_horizon_days,
+            location_id=location_id,
+            workspace_id=workspace_id,
+            field_id=field_id,
+            source_key="open-meteo:forecast",
+            freshness_policy="forecast-window",
+            provider_mode=provider_mode,
         )
     except (KeyError, IndexError, TypeError, ValueError):
         return _unavailable("open-meteo", "climate", source_url, retrieved_at, run_id, "schema_drift")
@@ -146,28 +169,57 @@ def _envelope(
     payload: Any,
     model: str | None = None,
     forecast_horizon_days: int | None = None,
+    location_id: str | None = None,
+    workspace_id: str | None = None,
+    field_id: str | None = None,
+    source_key: str | None = None,
+    freshness_policy: str = "provider-defined",
+    provider_mode: str = "seam",
 ) -> EvidenceEnvelope:
+    is_live = provider_mode == "live"
     return EvidenceEnvelope(
         provider=provider,
         signal_type=signal_type,
         source_url=source_url,
-        provider_mode="seam",
+        provider_mode=provider_mode,
         observed_at=observed_at,
         forecast_at=forecast_at,
         retrieved_at=retrieved_at,
         time_standard=time_standard,
         units=units,
-        freshness="degraded",
+        freshness="fresh" if is_live else "degraded",
         run_id=run_id,
         request_id=f"request:{run_id}",
         raw_hash=_hash_payload(payload),
         value=value,
         model=model,
         forecast_horizon_days=forecast_horizon_days,
+        evidence_id=f"{provider}:{signal_type}:{run_id}",
+        location_id=location_id,
+        workspace_id=workspace_id,
+        field_id=field_id,
+        source_key=source_key,
+        freshness_policy=freshness_policy,
+        degradation_reasons=() if is_live else ("provider_seam",),
+        retryable=not is_live,
+        status="fresh" if is_live else "degraded",
     )
 
 
-def _unavailable(provider: str, signal_type: str, source_url: str, retrieved_at: str, run_id: str, reason: str) -> EvidenceEnvelope:
+def _unavailable(
+    provider: str,
+    signal_type: str,
+    source_url: str,
+    retrieved_at: str,
+    run_id: str,
+    reason: str,
+    *,
+    location_id: str | None = None,
+    workspace_id: str | None = None,
+    field_id: str | None = None,
+    source_key: str | None = None,
+    freshness_policy: str = "provider-defined",
+) -> EvidenceEnvelope:
     return EvidenceEnvelope(
         provider=provider,
         signal_type=signal_type,
@@ -183,13 +235,85 @@ def _unavailable(provider: str, signal_type: str, source_url: str, retrieved_at:
         request_id=f"request:{run_id}",
         schema_status="invalid",
         failure_reason=reason,
+        evidence_id=f"{provider}:{signal_type}:{run_id}",
+        location_id=location_id,
+        workspace_id=workspace_id,
+        field_id=field_id,
+        source_key=source_key,
+        freshness_policy=freshness_policy,
+        degradation_reasons=(reason,),
+        retryable=reason not in {"satellite_proof_incomplete", "commercial_use_license_unavailable"},
+        status="unavailable",
     )
+
+
+def normalize_satellite(
+    payload: Any,
+    *,
+    source_url: str,
+    retrieved_at: str,
+    run_id: str,
+    location_id: str,
+    workspace_id: str,
+    field_id: str,
+) -> EvidenceEnvelope:
+    try:
+        if not isinstance(payload, dict):
+            raise TypeError("schema_drift")
+        scene_id = payload["sceneId"]
+        coverage = payload["coverage"]
+        processing = payload["processing"]
+        coverage_percentage = coverage["percentage"]
+        processing_proof = processing["proofRef"]
+        if not isinstance(scene_id, str) or not isinstance(coverage_percentage, (int, float)) or coverage_percentage <= 0:
+            raise ValueError("satellite_proof_incomplete")
+        if processing.get("status") != "complete" or not isinstance(processing_proof, str):
+            raise ValueError("satellite_proof_incomplete")
+        value = {
+            "sceneId": scene_id,
+            "coveragePercentage": coverage_percentage,
+            "processingProof": processing_proof,
+        }
+        if isinstance(payload.get("ndvi"), (int, float)):
+            value["ndvi"] = payload["ndvi"]
+        return _envelope(
+            provider="sentinel-stac",
+            signal_type="satellite",
+            source_url=source_url,
+            retrieved_at=retrieved_at,
+            run_id=run_id,
+            observed_at=payload.get("observedAt") or payload.get("acquiredAt"),
+            forecast_at=None,
+            time_standard="UTC",
+            units={"coverage": "%"},
+            value=value,
+            payload=payload,
+            location_id=location_id,
+            workspace_id=workspace_id,
+            field_id=field_id,
+            source_key="sentinel:stac",
+            freshness_policy="scene-acquisition-time",
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return _unavailable(
+            "sentinel-stac",
+            "satellite",
+            source_url,
+            retrieved_at,
+            run_id,
+            "satellite_proof_incomplete",
+            location_id=location_id,
+            workspace_id=workspace_id,
+            field_id=field_id,
+            source_key="sentinel:stac",
+            freshness_policy="scene-acquisition-time",
+        )
 
 
 def _latest_parameter(value: Any) -> tuple[str, float] | None:
     if not isinstance(value, dict) or not value:
         return None
-    date = sorted(value)[-1]
+    date = max(value)
     number = value[date]
     return (date, float(number)) if isinstance(number, (int, float)) else None
 
@@ -201,7 +325,7 @@ def _format_power_date(value: str) -> str:
 
 
 def _finite_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and value == value
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
 
 
 def _hash_payload(payload: Any) -> str:

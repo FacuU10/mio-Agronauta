@@ -49,6 +49,8 @@ model Field {
   alertSnapshots    AlertSnapshot[]
   copilotThreadRefs CopilotThreadRef[]
   jobRuns           AgronautasJobRun[]
+  authFieldMapping  AgronautasAuthFieldMapping?
+  managementItems   AgronautasManagementItem[]
 
   @@index([provinceCode, localityName])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)])
@@ -63,8 +65,125 @@ model Workspace {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   fields    Field[]
+  managementItems AgronautasManagementItem[]
+  marketplaceListings AgronautasMarketplaceListing[]
+  marketplaceRfqs AgronautasMarketplaceRfq[]
+  marketplaceAudits AgronautasMarketplaceAudit[]
 
   @@map("agronautas_workspaces")
+}
+
+// One additive durable record shape keeps campaign, season, operation, and task
+// lifecycle semantics consistent while the kind field preserves the domain boundary.
+model AgronautasManagementItem {
+  id                 String   @id
+  kind               String
+  workspaceId        String   @map("workspace_id")
+  fieldId            String?  @map("field_id")
+  parentId           String?  @map("parent_id")
+  name               String
+  status             String
+  revision           Int      @default(1)
+  responsibleActorId String?  @map("responsible_actor_id")
+  createdByActorId   String   @map("created_by_actor_id")
+  idempotencyKey     String   @map("idempotency_key")
+  sourceLocationIds  Json     @map("source_location_ids")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  field              Field?    @relation(fields: [fieldId], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)])
+  @@index([workspaceId, fieldId, updatedAt(sort: Desc)])
+  @@map("agronautas_management_items")
+}
+
+model AgronautasManagementAudit {
+  auditId        String   @id @map("audit_id")
+  workspaceId    String   @map("workspace_id")
+  actorId        String   @map("actor_id")
+  action         String
+  targetId       String   @map("target_id")
+  outcome        String
+  revisionBefore Int?     @map("revision_before")
+  revisionAfter  Int?     @map("revision_after")
+  requestId      String   @map("request_id")
+  occurredAt     DateTime @default(now()) @map("occurred_at")
+
+  @@index([workspaceId, occurredAt(sort: Desc), auditId(sort: Desc)])
+  @@index([targetId, occurredAt(sort: Desc)])
+  @@map("agronautas_management_audit")
+}
+
+// Marketplace records are deliberately non-financial: availability and RFQ handoff
+// are persisted without price, order, payment, inventory, or settlement semantics.
+model AgronautasMarketplaceListing {
+  listingId           String   @id @map("listing_id")
+  workspaceId         String   @map("workspace_id")
+  marketId            String   @map("market_id")
+  participantRef      String   @map("participant_ref")
+  itemName            String   @map("item_name")
+  title               String
+  availabilityStatus  String   @map("availability_status")
+  availabilityAt     DateTime @map("availability_at")
+  quantity            Decimal? @db.Decimal(18, 3)
+  unit                String?
+  qualityStatus       String   @map("quality_status")
+  sourceKey           String   @map("source_key")
+  sourceUrl           String?  @map("source_url") @db.Text
+  provenanceRecordedAt DateTime @map("provenance_recorded_at")
+  freshnessExpiresAt  DateTime @map("freshness_expires_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  workspace           Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, marketId, updatedAt(sort: Desc)])
+  @@index([workspaceId, freshnessExpiresAt])
+  @@map("agronautas_marketplace_listings")
+}
+
+model AgronautasMarketplaceRfq {
+  rfqId             String   @id @map("rfq_id")
+  workspaceId       String   @map("workspace_id")
+  requesterActorId  String   @map("requester_actor_id")
+  listingId         String?  @map("listing_id")
+  itemName          String   @map("item_name")
+  quantity          Decimal  @db.Decimal(18, 3)
+  unit              String
+  locality          String
+  participantRefs   Json     @map("participant_refs")
+  reviewStatus      String   @map("review_status")
+  revision          Int      @default(1)
+  idempotencyKey    String   @map("idempotency_key")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  reviewedAt        DateTime? @map("reviewed_at")
+  reviewerActorId   String?  @map("reviewer_actor_id")
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, updatedAt(sort: Desc), rfqId])
+  @@index([workspaceId, reviewStatus, updatedAt(sort: Desc)])
+  @@map("agronautas_marketplace_rfqs")
+}
+
+model AgronautasMarketplaceAudit {
+  auditId        String   @id @map("audit_id")
+  workspaceId    String   @map("workspace_id")
+  actorId        String   @map("actor_id")
+  action         String
+  targetId       String   @map("target_id")
+  outcome        String
+  revisionBefore Int?     @map("revision_before")
+  revisionAfter  Int?     @map("revision_after")
+  requestId      String   @map("request_id")
+  occurredAt     DateTime @default(now()) @map("occurred_at")
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, occurredAt(sort: Desc), auditId])
+  @@index([targetId, occurredAt(sort: Desc)])
+  @@map("agronautas_marketplace_audit")
 }
 
 model FieldContext {
@@ -103,6 +222,50 @@ model SignalIngestionRun {
   @@index([fieldId, startedAt(sort: Desc)])
   @@index([fieldId, signalType, status, observedAt(sort: Desc), startedAt(sort: Desc)])
   @@map("signal_ingestion_runs")
+}
+
+model AgronautasProviderRun {
+  id          String   @id
+  runKey      String   @unique @map("run_key")
+  runId       String   @unique @map("run_id")
+  requestId   String   @map("request_id")
+  locationId  String   @map("location_id")
+  workspaceId String   @map("workspace_id")
+  fieldId     String   @map("field_id")
+  provider    String
+  signalType  String   @map("signal_type")
+  windowStart DateTime @map("window_start")
+  windowEnd   DateTime @map("window_end")
+  status      String
+  createdAt   DateTime @default(now()) @map("created_at")
+  evidence    AgronautasProviderEvidence[]
+
+  @@index([workspaceId, fieldId, locationId, createdAt(sort: Desc)])
+  @@index([provider, signalType, windowStart])
+  @@map("agronautas_provider_runs")
+}
+
+model AgronautasProviderEvidence {
+  id            String                 @id
+  providerRunId String                 @map("run_id")
+  evidenceId    String                 @unique @map("evidence_id")
+  locationId    String                 @map("location_id")
+  workspaceId   String                 @map("workspace_id")
+  fieldId       String                 @map("field_id")
+  provider      String
+  signalType    String                 @map("signal_type")
+  status        String
+  providerMode  String                 @map("provider_mode")
+  observedAt    DateTime?              @map("observed_at")
+  acquiredAt    DateTime?              @map("acquired_at")
+  forecastAt    DateTime?              @map("forecast_at")
+  retrievedAt   DateTime               @map("retrieved_at")
+  evidencePayload Json                 @map("evidence_payload")
+  providerRun   AgronautasProviderRun  @relation(fields: [providerRunId], references: [runId], onDelete: Restrict)
+
+  @@index([workspaceId, fieldId, locationId, retrievedAt(sort: Desc)])
+  @@index([provider, signalType, retrievedAt(sort: Desc)])
+  @@map("agronautas_provider_evidence")
 }
 
 model RiskSnapshot {
@@ -400,4 +563,111 @@ model DemoContactSubmission {
   @@index([createdAt(sort: Desc)])
   @@index([email])
   @@map("demo_contact_submissions")
+}
+
+model AgronautasAuthWorkspace {
+  id          String   @id
+  workspaceKey String  @unique @map("workspace_key")
+  name        String
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  memberships AgronautasAuthMembership[]
+  fieldMappings AgronautasAuthFieldMapping[]
+
+  @@map("agronautas_auth_workspaces")
+}
+
+model AgronautasAuthUser {
+  id           String   @id
+  email        String   @unique
+  displayName  String   @map("display_name")
+  passwordHash String   @map("password_hash")
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  sessions     AgronautasAuthSession[]
+  memberships  AgronautasAuthMembership[]
+
+  @@map("agronautas_auth_users")
+}
+
+model AgronautasAuthSession {
+  id              String   @id
+  userId          String   @map("user_id")
+  membershipId    String   @map("membership_id")
+  refreshFamilyId String   @map("refresh_family_id")
+  expiresAt       DateTime @map("expires_at")
+  revokedAt       DateTime? @map("revoked_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  user            AgronautasAuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership      AgronautasAuthMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  refreshTokens   AgronautasAuthRefreshToken[]
+
+  @@index([userId, expiresAt])
+  @@index([refreshFamilyId])
+  @@map("agronautas_auth_sessions")
+}
+
+model AgronautasAuthRefreshToken {
+  id         String   @id
+  sessionId  String   @map("session_id")
+  familyId   String   @map("family_id")
+  expiresAt  DateTime @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  session    AgronautasAuthSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([familyId, expiresAt])
+  @@index([sessionId, consumedAt])
+  @@map("agronautas_auth_refresh_tokens")
+}
+
+model AgronautasAuthMembership {
+  id          String   @id
+  userId      String   @map("user_id")
+  workspaceId String   @map("workspace_id")
+  role        String
+  scopes      Json
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  user        AgronautasAuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   AgronautasAuthWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sessions    AgronautasAuthSession[]
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId, status])
+  @@map("agronautas_auth_memberships")
+}
+
+model AgronautasAuthFieldMapping {
+  fieldId     String   @id @map("field_id")
+  workspaceId String   @map("workspace_id")
+  workspaceKey String  @map("workspace_key")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  field       Field    @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  workspace   AgronautasAuthWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, fieldId])
+  @@map("agronautas_auth_field_mappings")
+}
+
+model AgronautasAuthBootstrapState {
+  singletonId      String   @id @map("singleton_id")
+  idempotencyKey   String   @unique @map("idempotency_key")
+  inputHash        String   @map("input_hash")
+  workspaceId      String   @map("workspace_id")
+  adminUserId      String   @map("admin_user_id")
+  mappedFieldIds   Json     @map("mapped_field_ids")
+  unmappedFieldIds Json     @map("unmapped_field_ids")
+  secretConsumedAt DateTime @map("secret_consumed_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("agronautas_auth_bootstrap_state")
 }

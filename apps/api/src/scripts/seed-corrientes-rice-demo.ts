@@ -103,7 +103,7 @@ export async function runSeed(options: SeedOptions): Promise<SeedResultRow[]> {
       },
     })
 
-    await fieldRepository.save(field)
+    await fieldRepository.save(field, 'agronautas-pilot-workspace')
 
     const context = new FieldContext({
       fieldId: locality.fieldId,
@@ -384,6 +384,7 @@ export async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>
   await pool.query("ALTER TABLE fields ADD COLUMN IF NOT EXISTS province_code text DEFAULT 'AR-W'")
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS centroid_lat numeric(10,7)')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS centroid_lng numeric(10,7)')
+  await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS workspace_id text')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_source jsonb')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS boundary_version text')
   await pool.query('ALTER TABLE fields ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()')
@@ -554,6 +555,44 @@ export async function ensureSchema(pool: Pick<ReturnType<typeof getPostgresPool>
   await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "riskSnapshotId" DROP NOT NULL')
   await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "alertType" DROP NOT NULL')
   await pool.query('ALTER TABLE alert_snapshots ALTER COLUMN "degradationReasons" DROP NOT NULL')
+  await ensureAuthSchemaPrerequisite(pool)
+}
+
+const AUTH_SCHEMA_TABLES = [
+  'agronautas_auth_workspaces',
+  'agronautas_auth_users',
+  'agronautas_auth_sessions',
+  'agronautas_auth_refresh_tokens',
+  'agronautas_auth_memberships',
+  'agronautas_auth_field_mappings',
+  'agronautas_auth_bootstrap_state',
+]
+
+export async function ensureAuthSchemaPrerequisite(pool: Pick<ReturnType<typeof getPostgresPool>, 'query'>): Promise<void> {
+  const tables = await pool.query(
+    `SELECT table_name
+       FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
+    [AUTH_SCHEMA_TABLES],
+  )
+  const presentTables = new Set(tables.rows.map((row) => String(row['table_name'])))
+  const missingTables = AUTH_SCHEMA_TABLES.filter((table) => !presentTables.has(table))
+
+  const columns = await pool.query(
+    `SELECT table_name, column_name
+       FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'fields' AND column_name = 'workspace_id'`,
+  )
+  const hasWorkspaceColumn = columns.rows.some((row) => row['table_name'] === 'fields' && row['column_name'] === 'workspace_id')
+  if (missingTables.length > 0 || !hasWorkspaceColumn) {
+    throw new Error(`AUTH_SCHEMA_PREREQUISITE_MISSING: run "pnpm --dir apps/api exec prisma migrate deploy" and the Agronautas auth bootstrap before seeding; missing ${[...missingTables, !hasWorkspaceColumn ? 'fields.workspace_id' : ''].filter(Boolean).join(', ')}`)
+  }
+
+  const legacyWorkspace = await pool.query('SELECT id FROM agronautas_workspaces WHERE id = $1 LIMIT 1', ['agronautas-pilot-workspace'])
+  const authWorkspace = await pool.query('SELECT id FROM agronautas_auth_workspaces WHERE id = $1 AND workspace_key = $2 LIMIT 1', ['agronautas-pilot-workspace', 'agronautas-pilot'])
+  if (legacyWorkspace.rows.length === 0 || authWorkspace.rows.length === 0) {
+    throw new Error('AUTH_SCHEMA_PREREQUISITE_MISSING: run the Agronautas auth bootstrap for agronautas-pilot before seeding; no demo rows were written')
+  }
 }
 
 async function cleanupSeed(pool: Pick<ReturnType<typeof getPostgresPool>, 'query'>): Promise<void> {

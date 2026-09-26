@@ -59,3 +59,9 @@ test('canonical runtime v2 admission is disabled by default and requires its cap
   assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_RUNTIME_V2_ENABLED: 'false' }).runtimeV2Enabled, false)
   assert.equal(enabled.schedulerEnabled, false, 'v2 admission must not implicitly enable the scheduler')
 })
+
+test('maintenance mode is explicit and disabled by default', () => {
+  assert.equal(getAgronautasRuntimeConfig({}).maintenanceMode, false)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_MAINTENANCE_MODE: 'true' }).maintenanceMode, true)
+  assert.equal(getAgronautasRuntimeConfig({ AGRONAUTAS_MAINTENANCE_MODE: 'TRUE' }).maintenanceMode, true)
+})

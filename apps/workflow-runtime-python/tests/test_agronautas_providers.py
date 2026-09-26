@@ -50,6 +50,22 @@ def test_open_meteo_parser_requires_forecast_model_and_retrieval_semantics() -> 
     assert envelope.units == {"temperature": "°C", "precipitation": "mm"}
 
 
+def test_open_meteo_live_normalization_preserves_real_provider_mode() -> None:
+    envelope = normalize_open_meteo(
+        {"model": "best_match", "daily": {"time": ["2026-08-23"], "temperature_2m_max": [21], "precipitation_sum": [3]}},
+        source_url="https://api.open-meteo.com/v1/forecast",
+        retrieved_at="2026-08-23T10:00:00Z",
+        run_id="run-meteo-live",
+        forecast_horizon_days=1,
+        provider_mode="live",
+    )
+
+    assert envelope.provider_mode == "live"
+    assert envelope.status == "fresh"
+    assert envelope.freshness == "fresh"
+    assert envelope.degradation_reasons == ()
+
+
 def test_invalid_units_and_schema_drift_are_unavailable_not_live() -> None:
     invalid = normalize_nasa_power_daily(
         {"properties": {"parameter": {"T2M": {"20260822": 75}, "PRECTOTCORR": {"20260822": 4.2}}}},

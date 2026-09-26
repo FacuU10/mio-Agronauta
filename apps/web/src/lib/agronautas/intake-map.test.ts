@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createAgronautasMapAdapter, createGoogleMapsLoader, createPolygonDraft, formatGeometryMetrics, resolveGoogleMapsConfig } from './intake-map'
+import { buildFallbackLocationSelection, createAgronautasMapAdapter, createGoogleMapsLoader, createPolygonDraft, formatGeometryMetrics, resolveGoogleMapsConfig } from './intake-map'
 
 test('Google mapping config is explicit and never enabled without a public browser key', () => {
   assert.deepEqual(resolveGoogleMapsConfig({}), { status: 'disabled', reason: 'missing_public_key' })
@@ -37,4 +37,18 @@ test('mapping search and polygon metrics are deterministic with coordinate fallb
   assert.equal(draft.isComplete, true)
   assert.equal(draft.polygonWkt, 'POLYGON((-58.08 -29.18,-58.07 -29.18,-58.07 -29.19,-58.08 -29.18))')
   assert.deepEqual(formatGeometryMetrics({ hectares: 1, areaM2: 10000, perimeterM: 400 }), { area: '1.00 ha', footprint: '10,000 m²', perimeter: '400 m' })
+})
+
+test('fallback location selection is point-only and contains no fabricated provider or coverage claim', () => {
+  const selection = buildFallbackLocationSelection({ lat: -29.1846, lng: -58.0759 }, 'mercedes')
+
+  assert.deepEqual(selection, {
+    geometry: { type: 'point', coordinates: { latitude: -29.1846, longitude: -58.0759 } },
+    selection: {
+      source: 'locality-fallback',
+      sourceReference: 'mercedes',
+    },
+  })
+  assert.equal('provider' in selection, false)
+  assert.equal('coverage' in selection, false)
 })

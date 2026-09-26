@@ -154,14 +154,19 @@ export type RiskRuntimeResult = RuntimeResult
 
 const runtimeSourceWindowSchema = z.object({
   provider: z.string().trim().min(1).max(80),
-  signalType: z.enum(['climate', 'satellite', 'weather_alert', 'fire', 'soil']),
+  signalType: z.enum(['climate', 'weather', 'satellite', 'weather_alert', 'fire', 'soil']),
   windowStart: z.string().datetime(),
   windowEnd: z.string().datetime(),
   runId: z.string().trim().min(1).max(160),
+  locationId: z.string().trim().min(1).max(160).optional(),
+  workspaceId: z.string().trim().min(1).max(160).optional(),
+  fieldId: z.string().trim().min(1).max(160).optional(),
 }).strict().superRefine((window, ctx) => {
   if (new Date(window.windowEnd).getTime() <= new Date(window.windowStart).getTime()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'windowEnd must be after windowStart', path: ['windowEnd'] })
   }
+  const scopeCount = [window.locationId, window.workspaceId, window.fieldId].filter(Boolean).length
+  if (scopeCount !== 0 && scopeCount !== 3) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'source window scope must include location, workspace, and field', path: ['locationId'] })
 })
 
 export const runtimeJobEnvelopeSchema = z.object({

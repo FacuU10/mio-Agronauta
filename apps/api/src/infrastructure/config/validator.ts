@@ -13,6 +13,9 @@ const PLACEHOLDERS = [
   'operator-token',
   'admin-token',
   'replace-me-if-required',
+  'default',
+  'secret',
+  'changeme',
   'user:password',
 ]
 
@@ -40,6 +43,13 @@ export function validateProductionEnv(env: NodeJS.ProcessEnv = process.env): Val
 
   // 2. Hydrology Ingest Token
   checkRequired('HYDROLOGY_INGEST_TOKEN', 'Hydrology Ingest Token')
+
+  // Agronautas auth is fail-closed in production. These values are never
+  // generated or inherited from the legacy role-token configuration.
+  checkRequired('AGRONAUTAS_AUTH_ACCESS_SECRET', 'Agronautas access secret')
+  checkRequired('AGRONAUTAS_AUTH_REFRESH_SECRET', 'Agronautas refresh secret')
+  checkRequired('AGRONAUTAS_AUTH_BOOTSTRAP_SECRET', 'Agronautas bootstrap secret')
+  checkRequired('AGRONAUTAS_BFF_BEARER_TOKEN', 'Agronautas BFF bearer token')
 
   // 3. Runtime & Provider Keys (Only if AGRONAUTAS_RUNTIME_REQUIRED=true)
   const runtimeRequired = env['AGRONAUTAS_RUNTIME_REQUIRED'] === 'true'

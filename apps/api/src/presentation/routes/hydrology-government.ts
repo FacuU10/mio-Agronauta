@@ -17,7 +17,7 @@ import {
   type HydrologySource,
   type HydrologyTelemetry,
 } from '@repo/zod-schemas'
-import { GroqTimeoutError, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, forecastConfidenceForHorizon, type HydrologySourceFreshness, type IberaIngestRunInput, type IberaIngestRunRecord, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperAttemptLog, type ScraperResult } from '@repo/hydrology-engine'
+import { GroqTimeoutError, getIberaGeometryStatus, HydrologyCopilotService, HydrologyRepository, InaHttpClient, InmetHttpClient, PnaHttpClient, sanitizeOfficialAlertMessage, SmnHttpClient, forecastConfidenceForHorizon, type HydrologySourceFreshness, type IberaIngestRunInput, type IberaIngestRunRecord, type MunicipalityTelemetryDashboard, type MunicipalityTelemetryView, type NormalizedHydrologyTelemetry, type ScraperAttemptLog, type ScraperResult } from '@repo/hydrology-engine'
 import { getPostgresPool } from '../../infrastructure/database/postgres/pool'
 import { logger } from '../../infrastructure/observability/logger'
 
@@ -32,8 +32,8 @@ type GovernmentIngestionRepository = Pick<HydrologyRepository, 'saveTelemetryDed
 type DurableIngestionRepository = Pick<HydrologyRepository, 'createIberaIngestRun' | 'updateIberaIngestRun' | 'getIberaIngestRun' | 'claimIberaIngestLease'>
 type GovernmentSourceClient = { fetchTelemetry(signal?: AbortSignal): Promise<ScraperResult>; timeoutMs?: number; totalTimeoutMs?: number }
 type GovernmentIngestionSourceResult = { source: HydrologySource; status: 'success' | 'failed' | 'empty' | 'skipped'; recordsIngested: number; errorMessage?: string; provenanceUrl?: string; observedFrom?: string; observedTo?: string; httpSummary?: HydrologyGovernmentHttpSummary; diagnostic?: HydrologyGovernmentIngestDiagnostic }
-export type GovernmentIngestionResponse = { contractVersion?: 'hydrology-government-ingest-v1'; runId?: string; proofRunId?: string; statusPath?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
-type CompletedGovernmentIngestionResponse = { runId: string; proofRunId: string; status: 'completed' | 'partial' | 'failed'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+export type GovernmentIngestionResponse = { contractVersion?: 'hydrology-government-ingest-v1'; runId?: string; proofRunId?: string; statusPath?: string; status: 'queued' | 'started' | 'completed' | 'partial' | 'failed' | 'unavailable' | 'maintenance'; requestedSources?: HydrologySource[]; results?: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults?: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
+type CompletedGovernmentIngestionResponse = { runId: string; proofRunId: string; status: 'completed' | 'partial' | 'failed' | 'unavailable' | 'maintenance'; requestedSources: HydrologySource[]; results: GovernmentIngestionSourceResult[]; sources: HydrologySource[]; sourceResults: Array<{ source: HydrologySource; status: 'success' | 'failed'; recordsIngested: number; errorMessage?: string }> }
 type HydrologyStartupOperation = 'runner_execution' | 'seed_municipalities'
 type SanitizedErrorDetail = { name: string; message: string; code?: string }
 type HydrologyStartupFailureDetails = { operation: HydrologyStartupOperation; errorName: string; message?: string; code?: string; aggregateErrors?: SanitizedErrorDetail[] }
@@ -109,7 +109,7 @@ const INA_SERIES_STATIONS = [
   { id: '33988', name: 'Paso de los Libres', river: 'Uruguay' },
   { id: '38469', name: 'Bella Vista', river: 'Paraná' },
 ] as const
-const EXCLUDED_TOPIC_RE = /(tiempo\s+de\s+(?:llegada|propagaci[oó]n|onda|lag)|lag\s*time|wave\s+(?:routing|propagation)|propagaci[oó]n\s+de\s+onda|caudal|descarga|turbinad[oa]s?|vertid[oa]s?|spilled|turbined|routing\s+hidr[aá]ulico|muskingum|evacuaci[oó]n|autoridad\s+de\s+evacuaci[oó]n)/i
+const EXCLUDED_TOPIC_RE = /(agronautas|marketplace|tiempo\s+de\s+(?:llegada|propagaci[oó]n|onda|lag)|lag\s*time|wave\s+(?:routing|propagation)|propagaci[oó]n\s+de\s+onda|caudal|descarga|turbinad[oa]s?|vertid[oa]s?|spilled|turbined|routing\s+hidr[aá]ulico|muskingum|evacuaci[oó]n|autoridad\s+de\s+evacuaci[oó]n)/i
 const OUT_OF_SCOPE_MESSAGE = 'Entiendo la urgencia, pero esos cálculos están fuera del alcance de la Fase 1 de Iberá-Alerta. No calculo tiempos de propagación, routing de onda, caudales/descargas de represas, flujos turbinados o vertidos, ni decisiones de evacuación. Puedo limitar la respuesta a observaciones y pronósticos oficiales disponibles de PNA, INA, INMET y SMN.'
 
 export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmentRouterDeps> = {}): Router {
@@ -199,7 +199,7 @@ export function createHydrologyGovernmentRouter(deps: Partial<HydrologyGovernmen
 
     const payload = hydrologyGovernmentDashboardResponseSchema.parse({
       contractVersion: 'hydrology-government-dashboard-v1',
-       municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts), coverageGaps: coverageGapsFor(municipality.gaugeMappings), coverageStatus: coverageStatusFor(municipality), geometryStatus: 'unverified', sourceRegistry },
+       municipality: { ...municipality.municipality, officialAlerts: sanitizeOfficialAlerts(municipality.officialAlerts), coverageGaps: coverageGapsFor(municipality.gaugeMappings), coverageStatus: coverageStatusFor(municipality), geometryStatus: resolveIberaGeometryStatus(sourceRegistry), sourceRegistry },
       gaugeMappings: municipality.gaugeMappings,
       telemetryCards: municipality.latestTelemetry.filter((item) => item.metric !== 'storm_alert'),
       inaPredictions30d: municipality.latestTelemetry.filter((item) => item.source === 'INA' && item.forecastHorizonDays != null && item.forecastHorizonDays <= 30),
@@ -564,6 +564,10 @@ function coverageStatusFor(municipality: MunicipalityTelemetryDashboard): 'suppo
   const missing = coverageGapsFor(municipality.gaugeMappings).length
   if (municipality.latestTelemetry.length === 0 && (municipality.officialAlerts ?? []).length === 0) return 'unavailable'
   return missing > 0 ? 'partial' : 'supported'
+}
+
+export function resolveIberaGeometryStatus(registry: Array<{ geometryStatus?: 'verified' | 'unverified' | 'partial' | 'unavailable' }>): 'verified' | 'unverified' | 'partial' | 'unavailable' {
+  return getIberaGeometryStatus(registry)
 }
 
 function parseDateQuery(value: unknown): Date | null {

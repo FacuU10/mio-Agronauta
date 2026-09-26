@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
+StateGraph: Any
 try:
     from langgraph.graph import END, StateGraph
-except Exception:  # pragma: no cover - allow pure-function fallback
+except ImportError:  # pragma: no cover - allow pure-function fallback
     END = "__end__"
     StateGraph = None
 
@@ -31,6 +33,11 @@ class CopilotTurnResponse(TypedDict):
     message: str
     missing_context: list[MissingField]
     citations: list[str]
+    actionable: bool
+    unavailable_reason: str
+    source_run_ids: list[str]
+    provider_modes: list[str]
+    citation_lineage: list[dict[str, Any]]
 
 
 class CopilotState(TypedDict, total=False):
@@ -137,6 +144,11 @@ def build_missing_context_response(state: CopilotState) -> CopilotTurnResponse:
         "message": message,
         "missing_context": missing,
         "citations": [],
+        "actionable": False,
+        "unavailable_reason": "missing_context",
+        "source_run_ids": [],
+        "provider_modes": [],
+        "citation_lineage": [],
     }
 
 
@@ -159,6 +171,23 @@ def detect_out_of_scope_request(request: CopilotTurnRequest) -> str | None:
         "machine learning",
         "ml predictivo",
         "multi-provincia",
+        "ibera",
+        "municipal",
+        "municipio",
+        "marketplace",
+        "mercado",
+        "sesión",
+        "session",
+        "auth",
+        "token",
+        "financ",
+        "precio",
+        "legal",
+        "hidrául",
+        "evacuación",
+        "evacuacion",
+        "garantiz",
+        "certeza",
     )
     if any(signal in question for signal in unsupported_signals):
         return "La solicitud queda fuera del alcance MVP: no soportamos simulación avanzada, expansión multi-provincia, pricing, claims ni ML predictivo."
@@ -172,11 +201,19 @@ def build_unsupported_response(reason: str) -> CopilotTurnResponse:
         "message": f"Solicitud no soportada en esta versión. {reason}",
         "missing_context": [],
         "citations": [],
+        "actionable": False,
+        "unavailable_reason": "unsupported_question",
+        "source_run_ids": [],
+        "provider_modes": [],
+        "citation_lineage": [],
     }
 
 
 def build_evidence_only_response(state: CopilotState) -> CopilotTurnResponse:
     context = state.get("context", {})
+    if "evidence" in context:
+        return build_grounded_evidence_response(context)
+
     request = state.get("request", {})
     snapshot = context.get("snapshot") or {}
     alerts = context.get("alerts") or []
@@ -201,6 +238,11 @@ def build_evidence_only_response(state: CopilotState) -> CopilotTurnResponse:
             "message": "No encuentro evidencia persistida suficiente para responder sin inventar datos. Confirmame un lote con snapshot y alertas persistidas.",
             "missing_context": [],
             "citations": [],
+            "actionable": False,
+            "unavailable_reason": "missing_grounding",
+            "source_run_ids": [],
+            "provider_modes": [],
+            "citation_lineage": [],
         }
 
     growth_stage = request.get("growth_stage") or context.get("growthStage")
@@ -215,7 +257,108 @@ def build_evidence_only_response(state: CopilotState) -> CopilotTurnResponse:
         "message": message,
         "missing_context": [],
         "citations": citations,
+        "actionable": True,
+        "unavailable_reason": "",
+        "source_run_ids": [],
+        "provider_modes": [],
+        "citation_lineage": [],
     }
+
+
+ALLOWED_EVIDENCE_PROVIDERS = {"open-meteo", "smn", "nasa-power-daily", "risk-engine", "agronautas"}
+ALLOWED_EVIDENCE_SIGNALS = {"climate", "weather", "weather_alert", "risk", "fire"}
+
+
+def build_grounded_evidence_response(context: dict[str, Any]) -> CopilotTurnResponse:
+    raw_evidence = context.get("evidence")
+    evidence: list[Any] = raw_evidence if isinstance(raw_evidence, list) else []
+    scope = {
+        "actorId": context.get("actorId"),
+        "sessionId": context.get("sessionId"),
+        "workspaceId": context.get("workspaceId"),
+        "fieldId": context.get("fieldId"),
+        "locationId": context.get("locationId"),
+    }
+    if any(not isinstance(value, str) or not value.strip() for value in scope.values()):
+        return grounded_unavailable_response("missing_grounding", "No hay una ubicación y alcance autorizado completos para responder.", context)
+
+    approved = [
+        item for item in evidence
+        if isinstance(item, dict)
+        and item.get("provider") in ALLOWED_EVIDENCE_PROVIDERS
+        and item.get("signalType") in ALLOWED_EVIDENCE_SIGNALS
+        and item.get("evidenceId")
+        and item.get("runId")
+        and item.get("retrievedAt")
+        and item.get("status") in {"fresh", "stale", "degraded"}
+        and item.get("providerMode") in {"live", "seam", "mock"}
+    ]
+    if not approved:
+        return grounded_unavailable_response("missing_grounding", "No hay evidencia Agronautas aprobada y persistida suficiente para responder sin inventar datos.", context)
+
+    readiness = context.get("readiness")
+    fresh = [item for item in approved if item.get("status") == "fresh"]
+    if readiness != "ready" or len(approved) != len(fresh):
+        reason = "stale_evidence" if any(item.get("status") == "stale" for item in approved) else "degraded_evidence"
+        return grounded_unavailable_response(reason, "La evidencia disponible no está fresca o la readiness no está verificada; no emito una recomendación accionable.", context, approved)
+
+    citations = [f"evidence:{item['evidenceId']}" for item in approved]
+    source_run_ids = unique_strings(item["runId"] for item in approved)
+    provider_modes = unique_strings(item["providerMode"] for item in approved)
+    lineage = [
+        {
+            "citationId": f"evidence:{item['evidenceId']}",
+            "evidenceId": item["evidenceId"],
+            "runId": item["runId"],
+            "provider": item["provider"],
+            "signalType": item["signalType"],
+            "providerMode": item["providerMode"],
+            "status": item["status"],
+            "sourceUrl": item.get("sourceUrl"),
+            "sourceKey": item.get("sourceKey"),
+            "observedAt": item.get("observedAt"),
+            "acquiredAt": item.get("acquiredAt"),
+            "forecastAt": item.get("forecastAt"),
+            "retrievedAt": item["retrievedAt"],
+            "lastSuccessfulObservedAt": item.get("lastSuccessfulObservedAt"),
+            "degradationReasons": item.get("degradationReasons", []),
+        }
+        for item in approved
+    ]
+    return {
+        "status": "ready",
+        "message": f"Respuesta limitada al lote {scope['fieldId']} y su ubicación autorizada. Se utilizaron {len(approved)} fuentes Agronautas frescas; no se recalculó evidencia ni se incorporaron datos de otros productos.",
+        "missing_context": [],
+        "citations": citations,
+        "actionable": True,
+        "unavailable_reason": "",
+        "source_run_ids": source_run_ids,
+        "provider_modes": provider_modes,
+        "citation_lineage": lineage,
+    }
+
+
+def grounded_unavailable_response(reason: str, message: str, context: dict[str, Any], approved: list[dict[str, Any]] | None = None) -> CopilotTurnResponse:
+    approved_items = approved or []
+    return {
+        "status": "needs_context",
+        "message": message,
+        "missing_context": [],
+        "citations": [f"evidence:{item['evidenceId']}" for item in approved_items],
+        "actionable": False,
+        "unavailable_reason": reason,
+        "source_run_ids": unique_strings(item["runId"] for item in approved_items),
+        "provider_modes": unique_strings(item["providerMode"] for item in approved_items),
+        "citation_lineage": [],
+    }
+
+
+def unique_strings(values: Any) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if isinstance(value, str) and value not in result:
+            result.append(value)
+    return result
 
 
 def respond_node(state: CopilotState) -> CopilotState:

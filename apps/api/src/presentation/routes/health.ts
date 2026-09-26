@@ -190,6 +190,7 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
       }
 
       const requiredChecks = {
+        ...(config.maintenanceMode ? { maintenance: false } : {}),
         postgres: dependencyChecks.postgres,
         redis: dependencyChecks.redis,
         ...(topologyChecksRequired
@@ -231,6 +232,9 @@ export function createHealthRouter(deps: Partial<HealthRouterDeps> = {}): Router
 
       res.status(ready ? 200 : 503).json({
         ready,
+        maintenance: config.maintenanceMode
+          ? { enabled: true, reason: 'maintenance_mode' }
+          : { enabled: false },
         revision: config.revision,
         mode: config.mode,
         routePrefix: config.routePrefix,

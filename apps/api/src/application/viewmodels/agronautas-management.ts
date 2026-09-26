@@ -3,7 +3,7 @@ import {
   agronautasWorkspaceContextSchema,
   agronautasWorkspaceFieldPageSchema,
 } from '@repo/zod-schemas'
-import type { AgronautasActivitySourceRecord, AgronautasWorkspaceContextRecord, FieldRepository } from '../../domain/repositories/agronautas'
+import type { AgronautasActivitySourceRecord, AgronautasWorkspaceContextRecord, FieldRepository, ManagementAuditRecord, ManagementItemRecord } from '../../domain/repositories/agronautas'
 import { toAgronautasFieldIndexItem } from './agronautas-pilot'
 
 export function toWorkspaceContext(record: AgronautasWorkspaceContextRecord) {
@@ -39,4 +39,28 @@ export function toActivityResponse(fieldId: string, records: AgronautasActivityS
     .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt) || left.activityId.localeCompare(right.activityId))
 
   return agronautasActivityResponseSchema.parse({ contractVersion: 'agronautas-activity-v1', fieldId, items })
+}
+
+export function toManagementResponse(items: ManagementItemRecord[], audit: ManagementAuditRecord[]) {
+  return {
+    contractVersion: 'agronautas-management-v2' as const,
+    items: items.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      workspaceId: item.workspaceId,
+      fieldId: item.fieldId,
+      parentId: item.parentId,
+      name: item.name,
+      status: item.status,
+      revision: item.revision,
+      responsibleActorId: item.responsibleActorId,
+      createdByActorId: item.createdByActorId,
+      idempotencyKey: item.idempotencyKey,
+      sourceLocationIds: item.sourceLocationIds,
+      planningLabel: 'assumption_only' as const,
+      createdAt: item.createdAt.toISOString(),
+      updatedAt: item.updatedAt.toISOString(),
+    })),
+    audit: audit.map((entry) => ({ ...entry, occurredAt: entry.occurredAt.toISOString() })),
+  }
 }

@@ -73,6 +73,22 @@ test('ensureSchema upgrades pre-existing fields tables before seeding', async ()
   const pool = {
     async query(sql: string) {
       statements.push(sql)
+      if (/information_schema\.tables/i.test(sql)) {
+        return {
+          rows: [
+            'agronautas_auth_workspaces',
+            'agronautas_auth_users',
+            'agronautas_auth_sessions',
+            'agronautas_auth_refresh_tokens',
+            'agronautas_auth_memberships',
+            'agronautas_auth_field_mappings',
+            'agronautas_auth_bootstrap_state',
+          ].map((table_name) => ({ table_name })),
+          rowCount: 7,
+        }
+      }
+      if (/information_schema\.columns/i.test(sql)) return { rows: [{ table_name: 'fields', column_name: 'workspace_id' }], rowCount: 1 }
+      if (/agronautas_workspaces|agronautas_auth_workspaces/i.test(sql)) return { rows: [{ id: 'agronautas-pilot-workspace' }], rowCount: 1 }
       return { rows: [], rowCount: 0 }
     },
   }
@@ -84,5 +100,23 @@ test('ensureSchema upgrades pre-existing fields tables before seeding', async ()
   assert.match(joined, /ALTER TABLE fields\s+ADD COLUMN IF NOT EXISTS boundary_source jsonb/i)
   assert.match(joined, /CREATE UNIQUE INDEX IF NOT EXISTS fields_external_field_id_idx/i)
   assert.match(joined, /ALTER TABLE fields\s+ADD COLUMN IF NOT EXISTS boundary geometry\(MultiPolygon,4326\)/i)
+  assert.match(joined, /ALTER TABLE fields\s+ADD COLUMN IF NOT EXISTS workspace_id text/i)
   assert.match(joined, /ALTER TABLE signal_ingestion_runs ALTER COLUMN "signalType" DROP NOT NULL/i)
+})
+
+test('ensureSchema fails before seeding when canonical auth migration is missing', async () => {
+  const statements: string[] = []
+  const pool = {
+    async query(sql: string) {
+      statements.push(sql)
+      return { rows: [], rowCount: 0 }
+    },
+  }
+
+  await assert.rejects(
+    () => ensureSchema(pool as unknown as Parameters<typeof ensureSchema>[0]),
+    /AUTH_SCHEMA_PREREQUISITE_MISSING.*prisma migrate deploy.*auth bootstrap/i,
+  )
+
+  assert.equal(statements.some((statement) => /INSERT\s+INTO\s+fields/i.test(statement)), false)
 })

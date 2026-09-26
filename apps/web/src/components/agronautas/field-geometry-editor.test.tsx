@@ -111,3 +111,15 @@ test('geometry editor distinguishes saved geometry from a local draft and preven
   resolveSave?.(pointOnlyGeometry)
   await waitFor(() => assert.ok(view.getByText(/Guardado por el backend/i)))
 })
+
+test('geometry editor reports the saved polygon as the explicit downstream selection', async () => {
+  setupDom()
+  cleanup()
+  const selected: string[] = []
+  const view = render(<FieldGeometryEditor fieldId="field-demo-1" initialGeometry={pointOnlyGeometry} onSave={async (input) => ({ ...pointOnlyGeometry, polygonWkt: input.polygonWkt ?? pointOnlyGeometry.polygonWkt, status: 'saved' as const, source: 'operator' as const })} onSelectPolygon={async (polygonWkt) => { selected.push(polygonWkt) }} />)
+
+  fireEvent.click(view.getByRole('button', { name: /Agregar vértice/i }))
+  fireEvent.click(view.getByRole('button', { name: /Guardar perímetro/i }))
+  await waitFor(() => assert.equal(selected.length, 1))
+  assert.match(selected[0] ?? '', /^POLYGON\(\(/)
+})

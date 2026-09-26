@@ -34,17 +34,17 @@ export const hydrologyQualityStates = ['ok', 'estimated', 'degraded', 'missing']
 export const hydrologyTargetZones = ['Mercedes', 'Ituzaingó', 'Virasoro'] as const
 export const hydrologyMetrics = ['river_height_m', 'rain_mm', 'storm_alert'] as const
 export const hydrologyForecastConfidence = ['normal', 'speculative'] as const
-export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure', 'response_too_large'] as const
-export const hydrologyGovernmentSourceRunStatuses = ['success', 'empty', 'failed'] as const
+export const hydrologyGovernmentIngestFailureKinds = ['timeout', 'network_failure', 'http_status', 'unexpected_content_type', 'parse_failure', 'empty_response', 'runner_timeout', 'startup_failure', 'response_too_large', 'maintenance', 'unavailable'] as const
+export const hydrologyGovernmentSourceRunStatuses = ['success', 'empty', 'failed', 'unavailable', 'maintenance'] as const
 export const hydrologyOperatorReceiptScopes = ['local', 'production'] as const
 export const hydrologyOperatorReceiptChatModes = ['groq', 'degraded-fallback', 'not_run'] as const
 export const hydrologyOperatorReceiptRunnerModes = ['direct', 'proxy'] as const
 export const hydrologyExcludedSources = ['DMH_PARAGUAY'] as const
-export const hydrologyIberaRunStatuses = ['queued', 'started', 'completed', 'partial', 'failed'] as const
+export const hydrologyIberaRunStatuses = ['queued', 'started', 'completed', 'partial', 'failed', 'unavailable', 'maintenance'] as const
 export const hydrologyIberaCitationKinds = ['observed', 'forecast', 'alert'] as const
 export const hydrologyIberaCitationModes = ['validated-context', 'context-only', 'none'] as const
 export const hydrologyIberaCoverageStatus = ['supported', 'partial', 'unavailable', 'stale', 'failed', 'blocked', 'unverified'] as const
-export const hydrologyIberaGeometryStatuses = ['verified', 'unverified', 'unavailable'] as const
+export const hydrologyIberaGeometryStatuses = ['verified', 'unverified', 'partial', 'unavailable'] as const
 export const hydrologyIberaRegistryReviewStatuses = ['reviewed', 'pending', 'blocked'] as const
 export const hydrologyExcludedInputs = [
   'itaipu_discharge',
@@ -63,6 +63,9 @@ export const agronautasContractErrorCodes = [
   'STALE_SNAPSHOT',
   'UNAUTHORIZED',
   'FORBIDDEN',
+  'UNMAPPED_RECORD',
+  'AUTH_MAINTENANCE',
+  'REFRESH_REPLAY',
   'WORKER_UNAVAILABLE',
 ] as const
 export const agronautasWorkspaceStatuses = ['active'] as const
@@ -487,7 +490,7 @@ export const agronautasWorkspaceContextSchema = z.object({
   updatedAt: workspaceTimestampSchema,
 })
 
-const planningWorkspaceIdSchema = z.literal('agronautas-default-workspace')
+const planningWorkspaceIdSchema = z.string().trim().min(1).max(80)
 const planningAvailabilityStateSchema = z.enum(agronautasPlanningAvailabilityStates)
 const planningDomainSchema = z.enum(agronautasPlanningDomains)
 const planningFieldIdSchema = z.string().trim().min(1).max(80)
@@ -864,6 +867,63 @@ export const hydrologyGovernmentMunicipalitySchema = z.object({
   sourceRegistry: z.array(z.lazy(() => hydrologyIberaSourceProvenanceSchema)).default([]),
 })
 
+export const agronautasAuthScopes = ['read', 'write', 'recompute', 'admin'] as const
+export const agronautasAuthRoles = ['reader', 'operator', 'admin'] as const
+export const agronautasAuthMembershipSchema = z.object({
+  membershipId: z.string().min(1).max(80),
+  workspaceId: z.string().min(1).max(80),
+  workspaceKey: z.string().min(1).max(80),
+  role: z.enum(agronautasAuthRoles),
+  scopes: z.array(z.enum(agronautasAuthScopes)).min(1),
+}).strict()
+
+export const agronautasAuthPrincipalSchema = z.object({
+  actorId: z.string().min(1).max(80),
+  sessionId: z.string().min(1).max(120),
+  membershipId: z.string().min(1).max(80),
+  workspaceId: z.string().min(1).max(80),
+  workspaceKey: z.string().min(1).max(80),
+  role: z.enum(agronautasAuthRoles),
+  scopes: z.array(z.enum(agronautasAuthScopes)).min(1),
+  expiresAt: z.string().datetime(),
+}).strict()
+
+export const agronautasAuthTokenPairSchema = z.object({
+  accessToken: z.string().min(1),
+  refreshToken: z.string().min(1),
+  accessExpiresAt: z.string().datetime(),
+  refreshExpiresAt: z.string().datetime(),
+  principal: agronautasAuthPrincipalSchema,
+}).strict()
+
+export const agronautasAuthLoginRequestSchema = z.object({
+  email: z.string().trim().email().max(160),
+  password: z.string().min(1).max(200),
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+}).strict()
+
+export const agronautasAuthRefreshRequestSchema = z.object({ refreshToken: z.string().min(1).max(4096) }).strict()
+export const agronautasAuthStatusSchema = z.object({
+  principal: agronautasAuthPrincipalSchema,
+  memberships: z.array(agronautasAuthMembershipSchema),
+  accessExpiresAt: z.string().datetime(),
+  refreshExpiresAt: z.string().datetime(),
+}).strict()
+export const agronautasAuthBootstrapInputSchema = z.object({
+  idempotencyKey: z.string().trim().min(1).max(160),
+  bootstrapSecret: z.string().min(1),
+  pilotWorkspace: z.object({ key: z.literal('agronautas-pilot'), name: z.string().trim().min(1).max(120) }).strict(),
+  admin: z.object({ email: z.string().trim().email().max(160), password: z.string().min(12).max(200), displayName: z.string().trim().min(1).max(120) }).strict(),
+  fieldMappings: z.array(z.object({ fieldId: z.string().trim().min(1).max(80), workspaceKey: z.literal('agronautas-pilot') }).strict()),
+}).strict()
+export const agronautasAuthBootstrapResultSchema = z.object({
+  status: z.enum(['created', 'already_initialized']),
+  workspaceId: z.string().min(1).max(80),
+  adminUserId: z.string().min(1).max(80),
+  mappedFieldIds: z.array(z.string().min(1).max(80)),
+  unmappedFieldIds: z.array(z.string().min(1).max(80)),
+}).strict()
+
 export const hydrologyGovernmentProvinceAlertSchema = z.object({
   zone: z.string().min(1).max(160),
   source: hydrologySourceSchema,
@@ -930,7 +990,7 @@ export const hydrologyGovernmentIngestResponseSchema = z.object({
   runId: z.string().min(1).max(120).optional(),
   proofRunId: z.string().min(1).max(120).optional(),
   statusPath: z.string().regex(/^\/api\/hydrology\/ingest\/[^/?#]+$/).optional(),
-  status: z.enum(['queued', 'started', 'completed', 'partial', 'failed']),
+  status: z.enum(['queued', 'started', 'completed', 'partial', 'failed', 'unavailable', 'maintenance']),
   requestedSources: z.array(hydrologySourceSchema).default([]),
   results: z.array(z.object({
     source: hydrologySourceSchema,
@@ -991,6 +1051,7 @@ export const hydrologyIberaSourceProvenanceSchema = z.object({
   registryVersion: z.string().trim().min(1).max(80),
   reviewStatus: hydrologyIberaRegistryReviewStatusSchema,
   reviewedAt: z.string().datetime().nullable(),
+  geometryStatus: hydrologyIberaGeometryStatusSchema.optional(),
 }).strict()
 
 export const hydrologyIberaCoverageSummarySchema = z.object({
@@ -1146,6 +1207,7 @@ export const groundedChatRequestSchema = z.object({
   contractVersion: contractVersionSchema,
   message: z.string().trim().min(1).max(500),
   comparisonFieldId: z.string().min(1).max(80).optional(),
+  locationId: z.string().trim().min(1).max(160).optional(),
 })
 
 export const groundedChatActionSchema = z.discriminatedUnion('action', [
@@ -1182,6 +1244,27 @@ export const groundedChatTraceSchema = z.object({
   status: z.enum(['selected', 'executed', 'fallback']),
 })
 
+export const groundedChatCitationSchema = z.object({
+  citationId: z.string().min(1).max(240),
+  evidenceId: z.string().min(1).max(160),
+  runId: z.string().min(1).max(160),
+  provider: z.string().min(1).max(80),
+  signalType: z.string().min(1).max(80),
+  providerMode: providerModeSchema,
+  status: z.enum(['fresh', 'stale', 'degraded', 'missing', 'unavailable']),
+  sourceUrl: z.string().url().nullable().optional(),
+  sourceKey: z.string().min(1).max(160).optional(),
+  observedAt: z.string().datetime().nullable().optional(),
+  acquiredAt: z.string().datetime().nullable().optional(),
+  forecastAt: z.string().datetime().nullable().optional(),
+  retrievedAt: z.string().datetime(),
+  lastSuccessfulObservedAt: z.string().datetime().nullable().optional(),
+  degradationReasons: z.array(z.string().min(1).max(240)).max(8).default([]),
+}).strict()
+
+export const groundedChatModelModeSchema = z.enum(['groq', 'deterministic', 'unavailable'])
+export const groundedChatReadinessSchema = z.enum(['ready', 'degraded', 'stale', 'blocked', 'unavailable', 'unverified'])
+
 export const groundedChatResponseSchema = z.object({
   contractVersion: contractVersionSchema,
   fieldId: z.string().min(1).max(80),
@@ -1193,6 +1276,15 @@ export const groundedChatResponseSchema = z.object({
   trace: z.array(groundedChatTraceSchema).min(1).max(6),
   degraded: z.boolean().default(false),
   unavailableReason: z.string().min(1).max(240).optional(),
+  actionable: z.boolean().default(false),
+  locationId: z.string().min(1).max(160).optional(),
+  providerMode: providerModeSchema.optional(),
+  providerModes: z.array(providerModeSchema).max(4).default([]),
+  modelMode: groundedChatModelModeSchema.default('deterministic'),
+  evidenceStatus: z.enum(['fresh', 'stale', 'degraded', 'missing', 'unavailable']).optional(),
+  readiness: groundedChatReadinessSchema.optional(),
+  sourceRunIds: z.array(z.string().min(1).max(160)).max(16).default([]),
+  citationLineage: z.array(groundedChatCitationSchema).max(16).default([]),
 })
 
 export type FieldIntake = z.infer<typeof fieldIntakeSchema>
@@ -1225,6 +1317,13 @@ export type RiskSnapshot = z.infer<typeof riskSnapshotSchema>
 export type AlertSnapshot = z.infer<typeof alertSnapshotSchema>
 export type CopilotContext = z.infer<typeof copilotContextSchema>
 export type AgronautasContractError = z.infer<typeof agronautasContractErrorSchema>
+export type AgronautasAuthMembership = z.infer<typeof agronautasAuthMembershipSchema>
+export type AgronautasAuthPrincipal = z.infer<typeof agronautasAuthPrincipalSchema>
+export type AgronautasAuthTokenPair = z.infer<typeof agronautasAuthTokenPairSchema>
+export type AgronautasAuthLoginRequest = z.infer<typeof agronautasAuthLoginRequestSchema>
+export type AgronautasAuthRefreshRequest = z.infer<typeof agronautasAuthRefreshRequestSchema>
+export type AgronautasAuthBootstrapInput = z.infer<typeof agronautasAuthBootstrapInputSchema>
+export type AgronautasAuthBootstrapResult = z.infer<typeof agronautasAuthBootstrapResultSchema>
 export type RecomputeRequestResult = z.infer<typeof recomputeRequestResultSchema>
 export type RiskTimelineResponse = z.infer<typeof riskTimelineResponseSchema>
 export type WeatherTimelineItem = z.infer<typeof weatherTimelineItemSchema>

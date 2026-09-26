@@ -359,6 +359,73 @@ test('accepts 202 admission, polls statusPath without treating queued as complet
   }
 })
 
+test('renders maintenance as a terminal non-ready ingest state without retry', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async () => {
+    requestCount += 1
+    return requestCount === 1
+      ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+      : jsonResponse({ status: 'maintenance', runId: 'run-maintenance', requestedSources: ['PNA'], results: [{ source: 'PNA', status: 'failed', recordsIngested: 0 }] })
+  }) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+    await waitFor(() => assert.equal(view.getByRole('status').textContent, 'Fuente en mantenimiento'))
+    assert.equal(view.queryByRole('button', { name: 'Reintentar ingesta' }), null)
+    assert.equal(requestCount, 2)
+    assert.match(view.container.textContent ?? '', /maintenance/i)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('does not treat HTTP 200 without source records as verifiable ingestion', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async () => requestCount++ === 0
+    ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    : jsonResponse({ status: 'completed', runId: 'run-empty', requestedSources: ['PNA'], results: [] })) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(requestCount, 2)
+    const rendered = view.container.textContent ?? ''
+    assert.equal(view.container.querySelector('[role="status"]')?.textContent, 'Ingesta sin datos verificables')
+    assert.match(rendered, /No se devolvieron resultados por fuente/)
+    assert.match(rendered, /no se devolvieron resultados|missing|reintent/i)
+    assert.ok([...view.container.querySelectorAll('button')].some((button) => button.textContent === 'Reintentar ingesta'))
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('keeps authorization for a retryable ingest outage and does not route it through verification recovery', async () => {
+  const previousFetch = globalThis.fetch
+  let requestCount = 0
+  globalThis.fetch = (async () => requestCount++ === 0
+    ? jsonResponse({ contractVersion: '1.0.0', authorized: true })
+    : jsonResponse({ code: 'UPSTREAM_UNAVAILABLE' }, 503)) as typeof fetch
+
+  try {
+    const view = render(<IngestPanel />)
+    await authorize(view)
+    fireEvent.click(view.getByRole('button', { name: 'Iniciar ingesta' }))
+
+    await waitFor(() => assert.ok(view.getByRole('button', { name: 'Reintentar ingesta' })))
+    assert.equal(view.queryByRole('button', { name: 'Reintentar verificación' }), null)
+    assert.ok(view.getByRole('button', { name: 'Iniciar ingesta' }))
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
 async function authorize(view: ReturnType<typeof render>, token = crypto.randomUUID()) {
   const input = view.getByLabelText('Token de ingesta') as HTMLInputElement
   fireEvent.input(input, { target: { value: token } })

@@ -1,6 +1,5 @@
 import { campaignPlanningContextRequestSchema, campaignPlanningContextResponseSchema, type CampaignPlanningContextRequest } from '@repo/zod-schemas'
 import type { FieldContextRepository, AgronautasWorkspaceRepository, RiskSnapshotRepository, SignalSummaryRepository } from '../../domain/repositories/agronautas'
-import { DEFAULT_AGRONAUTAS_WORKSPACE_ID } from '../../domain/repositories/agronautas'
 
 export class UnsupportedPlanningFieldError extends Error {
   constructor(public readonly fieldId: string) { super(`Field ${fieldId} is not part of the supported workspace`) }
@@ -11,7 +10,6 @@ export class GetCampaignPlanningContext {
 
   async execute(input: CampaignPlanningContextRequest) {
     const request = campaignPlanningContextRequestSchema.parse(input)
-    if (request.workspaceId !== DEFAULT_AGRONAUTAS_WORKSPACE_ID) throw new Error('Unsupported planning workspace')
     const workspace = await this.workspaceRepository.getWorkspace(request.workspaceId)
     if (!workspace) throw new Error('Workspace not found')
     const page = await this.workspaceRepository.listWorkspaceFields({ workspaceId: request.workspaceId, limit: 50 })

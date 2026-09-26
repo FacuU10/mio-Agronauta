@@ -167,6 +167,28 @@ test('GET /ready exposes worker requirement when runtime is mandatory', async ()
   assert.deepEqual(body.failedRequiredChecks, ['worker'])
 })
 
+test('GET /ready exposes explicit maintenance without claiming readiness', async () => {
+  const app = express()
+  app.use('/agronautas', createHealthRouter({
+    checkPostgres: async () => true,
+    checkMongoDB: async () => false,
+    checkRedis: async () => true,
+    getConfig: () => ({ ...baseConfig, maintenanceMode: true }),
+  }))
+
+  const response = await request(app, '/agronautas/ready')
+  const body = await response.json() as {
+    ready: boolean
+    maintenance: { enabled: boolean; reason: string }
+    failedRequiredChecks: string[]
+  }
+
+  assert.equal(response.status, 503)
+  assert.equal(body.ready, false)
+  assert.deepEqual(body.maintenance, { enabled: true, reason: 'maintenance_mode' })
+  assert.ok(body.failedRequiredChecks.includes('maintenance'))
+})
+
 test('GET /ready reports an unavailable worker without claiming it is healthy when worker is optional', async () => {
   const app = express()
   app.use('/agronautas', createHealthRouter({

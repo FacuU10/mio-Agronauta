@@ -166,3 +166,41 @@ test('Agronautas service keeps an aborted transport retryable for existing consu
     globalThis.fetch = previousFetch
   }
 })
+
+test('evidence dashboard reads the real BFF dashboard contract and preserves canonical source metadata', async () => {
+  const previousFetch = globalThis.fetch
+  const sourceDashboard = await createAgronautasMockService().getDashboard('field-1')
+  const calls: string[] = []
+  globalThis.fetch = (async (input) => {
+    calls.push(String(input))
+    return new Response(JSON.stringify(sourceDashboard), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+
+  try {
+    const result = await createAgronautasApiService().getEvidenceDashboard('field-1')
+    assert.equal(calls[0], '/api/agronautas/v1/fields/field-1/dashboard')
+    assert.equal(result.dashboard.snapshotId, sourceDashboard.snapshotId)
+    assert.equal(result.sources.find((source) => source.key === 'weather')?.providerMode, 'mock')
+    assert.equal(result.sources.find((source) => source.key === 'satellite')?.status, 'missing')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('real evidence dashboard never replaces a 503 or malformed response with demo data', async () => {
+  const previousFetch = globalThis.fetch
+  let response: Response = new Response(JSON.stringify({ message: 'provider unavailable' }), { status: 503, headers: { 'content-type': 'application/json' } })
+  globalThis.fetch = (async () => response) as typeof fetch
+
+  try {
+    await assert.rejects(() => createAgronautasApiService().getEvidenceDashboard('field-real-1'), (error: unknown) => {
+      assert.equal((error as { status?: number }).status, 503)
+      return true
+    })
+
+    response = new Response('{"snapshotId":', { status: 200, headers: { 'content-type': 'application/json' } })
+    await assert.rejects(() => createAgronautasApiService().getEvidenceDashboard('field-real-1'), /Unexpected end|Invalid|JSON/i)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})

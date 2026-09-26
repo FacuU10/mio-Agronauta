@@ -1,7 +1,7 @@
 import type { Pool, QueryResult } from 'pg'
 import { corrientesRiceZoneBoundarySource } from '@repo/zod-schemas'
 import { Field, FieldContext } from '../../../domain/entities/agronautas'
-import { DEFAULT_AGRONAUTAS_WORKSPACE_ID, type FieldContextRepository, type FieldRepository, type SupportedCoverageResult } from '../../../domain/repositories/agronautas'
+import { type FieldContextRepository, type FieldRepository, type SupportedCoverageResult } from '../../../domain/repositories/agronautas'
 import { getPostgresPool } from './pool'
 import { normalizeFieldGeometryInput, polygonMetrics, type FieldGeometry, type FieldGeometryInput } from '../../../domain/geometry/field-geometry'
 import type { FieldGeometryRepository } from '../../../domain/repositories/agronautas'
@@ -44,17 +44,16 @@ function normalizeCoverage(result?: QueryResult['rows'][number]): SupportedCover
 }
 
 export class PostgresFieldRepository implements FieldRepository, FieldGeometryRepository {
-  constructor(private readonly pool: Pick<Pool, 'query'> = getPostgresPool()) {}
+  constructor(private readonly pool: Pick<Pool, 'query'> & Partial<Pick<Pool, 'connect'>> = getPostgresPool()) {}
 
-  async save(field: Field): Promise<void> {
+  async save(field: Field, workspaceId: string): Promise<void> {
     const geometry = field.props.polygonWkt ? normalizeFieldGeometryInput({ polygonWkt: field.props.polygonWkt }) : null
     const metrics = geometry ? polygonMetrics(geometry.coordinates) : null
-    await this.pool.query(
-       `INSERT INTO fields (
+    const fieldQuery = `INSERT INTO fields (
          id, external_field_id, crop, hectares, locality_name, province_code, workspace_id,
         centroid_lat, centroid_lng, boundary_source, boundary_version, boundary, centroid, boundary_area_m2, boundary_perimeter_m, geometry_source, geometry_updated_at,
         "externalFieldId", "localityName", "provinceCode", "centroidLat", "centroidLng", "boundarySource", "boundaryVersion", "updatedAt"
-       ) VALUES ($1,$2,$3,CASE WHEN $11 IS NULL THEN $4 ELSE ST_Area(ST_GeomFromText($11,4326)::geography) / 10000 END,$5,$6,'${DEFAULT_AGRONAUTAS_WORKSPACE_ID}',CASE WHEN $11 IS NULL THEN $7 ELSE ST_Y(ST_Centroid(ST_GeomFromText($11,4326))) END,CASE WHEN $11 IS NULL THEN $8 ELSE ST_X(ST_Centroid(ST_GeomFromText($11,4326))) END,$9::jsonb,$10,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromText($11,4326)) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Centroid(ST_GeomFromText($11,4326)) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Area(ST_GeomFromText($11,4326)::geography) END,CASE WHEN $11 IS NULL THEN NULL ELSE ST_Perimeter(ST_GeomFromText($11,4326)::geography) END,$14,$15,$2,$5,$6,$7,$8,$9::jsonb,$10,NOW())
+       ) VALUES ($1,$2,$3,CASE WHEN $11::text IS NULL THEN $4 ELSE ST_Area(ST_GeomFromText($11::text,4326)::geography) / 10000 END,$5,$6,$16::text,CASE WHEN $11::text IS NULL THEN $7 ELSE ST_Y(ST_Centroid(ST_GeomFromText($11::text,4326))) END,CASE WHEN $11::text IS NULL THEN $8 ELSE ST_X(ST_Centroid(ST_GeomFromText($11::text,4326))) END,$9::jsonb,$10,CASE WHEN $11::text IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromText($11::text,4326)) END,CASE WHEN $11::text IS NULL THEN NULL ELSE ST_Centroid(ST_GeomFromText($11::text,4326)) END,CASE WHEN $11::text IS NULL THEN $12::numeric ELSE ST_Area(ST_GeomFromText($11::text,4326)::geography) END,CASE WHEN $11::text IS NULL THEN $13::numeric ELSE ST_Perimeter(ST_GeomFromText($11::text,4326)::geography) END,$14::text,$15::timestamptz,$2,$5,$6,$7,$8,$9::jsonb,$10,NOW())
       ON CONFLICT (id) DO UPDATE SET
         hectares = EXCLUDED.hectares,
         locality_name = EXCLUDED.locality_name,
@@ -78,32 +77,70 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
         "boundarySource" = EXCLUDED."boundarySource",
         "boundaryVersion" = EXCLUDED."boundaryVersion",
         "updatedAt" = NOW(),
-        updated_at = NOW()`,
-      [
-        field.props.id,
-        field.props.externalFieldId,
-        field.props.crop,
-        field.props.hectares,
-        field.props.localityName,
-        field.props.provinceCode,
-        field.props.centroid.lat,
-        field.props.centroid.lng,
-        JSON.stringify(field.props.boundaryMetadata),
-        field.props.boundaryMetadata.sourceVersion,
-        geometry?.polygonWkt ?? null,
-        metrics?.areaM2 ?? null,
-        metrics?.perimeterM ?? null,
-        field.props.geometrySource ?? null,
-        geometry ? new Date() : null,
-      ],
-    )
+        updated_at = NOW()
+       WHERE EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = EXCLUDED.workspace_id)`
+    const params = [
+      field.props.id,
+      field.props.externalFieldId,
+      field.props.crop,
+      field.props.hectares,
+      field.props.localityName,
+      field.props.provinceCode,
+      field.props.centroid.lat,
+      field.props.centroid.lng,
+      JSON.stringify(field.props.boundaryMetadata),
+      field.props.boundaryMetadata.sourceVersion,
+      geometry?.polygonWkt ?? null,
+      metrics?.areaM2 ?? null,
+      metrics?.perimeterM ?? null,
+      field.props.geometrySource ?? null,
+      geometry ? new Date() : null,
+      workspaceId,
+    ]
+    const client = this.pool.connect ? await this.pool.connect() : null
+    const executor = client ?? this.pool
+    try {
+      if (client) await client.query('BEGIN')
+      const result = await executor.query(
+        fieldQuery,
+        params,
+      )
+      if (result.rowCount === 0) throw new Error('FIELD_WORKSPACE_CONFLICT')
+      if (client) {
+        const mapping = await client.query(
+          `INSERT INTO agronautas_auth_field_mappings (field_id, workspace_id, workspace_key)
+            SELECT $1, workspace.id, workspace.workspace_key
+              FROM agronautas_auth_workspaces workspace
+             WHERE workspace.id = $2
+            ON CONFLICT (field_id) DO NOTHING
+            RETURNING field_id`,
+          [field.props.id, workspaceId],
+        )
+        if (mapping.rowCount !== 1) {
+          const existingMapping = await client.query(
+            'SELECT field_id FROM agronautas_auth_field_mappings WHERE field_id = $1 AND workspace_id = $2 LIMIT 1',
+            [field.props.id, workspaceId],
+          )
+          if (existingMapping.rowCount !== 1) throw new Error('WORKSPACE_NOT_FOUND')
+        }
+        await client.query('COMMIT')
+      }
+    } catch (error) {
+      if (client) await client.query('ROLLBACK')
+      if (isExternalFieldIdConflict(error)) throw new Error('FIELD_EXTERNAL_ID_CONFLICT')
+      throw error
+    } finally {
+      client?.release()
+    }
   }
 
-  async findByExternalFieldId(fieldId: string): Promise<Field | null> {
+  async findByExternalFieldId(fieldId: string, workspaceId: string): Promise<Field | null> {
     const result = await this.pool.query(
        `SELECT id, external_field_id, crop, hectares, locality_name, province_code, centroid_lat, centroid_lng, boundary_source, ST_AsText(boundary) AS polygon_wkt, geometry_source
-       FROM fields WHERE external_field_id = $1 LIMIT 1`,
-      [fieldId],
+       FROM fields WHERE external_field_id = $1
+         AND EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = $2)
+       LIMIT 1`,
+      [fieldId, workspaceId],
     )
 
     const row = result.rows[0]
@@ -123,15 +160,16 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
     })
   }
 
-  async list(input: { limit: number; cursor?: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }> {
+  async list(input: { limit: number; cursor?: string; workspaceId: string }): Promise<{ items: Array<{ field: Field; createdAt: Date; updatedAt: Date; geometryUpdatedAt: Date | null }>; nextCursor: string | null }> {
     const limit = Math.min(100, Math.max(1, Math.floor(input.limit)))
     const result = await this.pool.query(
        `SELECT id, external_field_id, crop, hectares, locality_name, province_code, centroid_lat, centroid_lng, boundary_source, boundary_version, ST_AsText(boundary) AS polygon_wkt, geometry_source, geometry_updated_at, created_at, updated_at
          FROM fields
-        WHERE ($2::timestamptz IS NULL OR updated_at < $2::timestamptz)
+         WHERE EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = $2)
+           AND ($3::timestamptz IS NULL OR updated_at < $3::timestamptz)
         ORDER BY updated_at DESC, id DESC
         LIMIT $1`,
-      [limit + 1, input.cursor ? new Date(input.cursor) : null],
+      [limit + 1, input.workspaceId, input.cursor ? new Date(input.cursor) : null],
     )
     const rows = result.rows.slice(0, limit)
     return {
@@ -140,11 +178,13 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
     }
   }
 
-  async findById(fieldId: string): Promise<Field | null> {
+  async findById(fieldId: string, workspaceId: string): Promise<Field | null> {
     const result = await this.pool.query(
        `SELECT id, external_field_id, crop, hectares, locality_name, province_code, centroid_lat, centroid_lng, boundary_source, ST_AsText(boundary) AS polygon_wkt, geometry_source
-       FROM fields WHERE id = $1 LIMIT 1`,
-      [fieldId],
+       FROM fields WHERE id = $1
+         AND EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = $2)
+       LIMIT 1`,
+      [fieldId, workspaceId],
     )
 
     const row = result.rows[0]
@@ -169,12 +209,14 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
     return normalizeCoverage(result.rows[0])
   }
 
-  async getGeometry(fieldId: string): Promise<FieldGeometry | null> {
+  async getGeometry(fieldId: string, workspaceId: string): Promise<FieldGeometry | null> {
     const result = await this.pool.query(
       `SELECT ST_AsText(boundary) AS polygon_wkt, ST_Y(ST_Centroid(boundary)) AS centroid_lat, ST_X(ST_Centroid(boundary)) AS centroid_lng,
               boundary_area_m2, boundary_perimeter_m, geometry_source, geometry_updated_at
-         FROM fields WHERE id = $1 LIMIT 1`,
-      [fieldId],
+         FROM fields WHERE id = $1
+           AND EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = $2)
+         LIMIT 1`,
+      [fieldId, workspaceId],
     )
     const row = result.rows[0]
     if (!row?.polygon_wkt) return null
@@ -192,10 +234,10 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
     }
   }
 
-  async updateGeometry(fieldId: string, geometry: FieldGeometryInput & { source: 'operator' | 'google' | 'fallback'; expectedUpdatedAt?: string }): Promise<FieldGeometry> {
+  async updateGeometry(fieldId: string, workspaceId: string, geometry: FieldGeometryInput & { source: 'operator' | 'google' | 'fallback'; expectedUpdatedAt?: string }): Promise<FieldGeometry> {
     const normalized = normalizeFieldGeometryInput(geometry)
     const metrics = polygonMetrics(normalized.coordinates)
-    const existing = await this.getGeometry(fieldId)
+    const existing = await this.getGeometry(fieldId, workspaceId)
     if (existing && existing.polygonWkt === normalized.polygonWkt) {
       if (geometry.expectedUpdatedAt && existing.updatedAt?.toISOString() !== geometry.expectedUpdatedAt) throw new Error('STALE_GEOMETRY_VERSION')
       return existing
@@ -208,12 +250,14 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
               boundary_area_m2 = ST_Area(ST_GeomFromText($2,4326)::geography),
               boundary_perimeter_m = ST_Perimeter(ST_GeomFromText($2,4326)::geography),
               geometry_source = $8, geometry_updated_at = NOW(), updated_at = NOW()
-        WHERE id = $1 AND ($9::timestamptz IS NULL OR geometry_updated_at = $9::timestamptz)
+         WHERE id = $1
+           AND EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = $10)
+           AND ($9::timestamptz IS NULL OR geometry_updated_at = $9::timestamptz)
         RETURNING geometry_updated_at, centroid_lat, centroid_lng, hectares, boundary_area_m2, boundary_perimeter_m`,
-      [fieldId, normalized.polygonWkt, metrics.centroid.lat, metrics.centroid.lng, metrics.hectares, metrics.areaM2, metrics.perimeterM, geometry.source, geometry.expectedUpdatedAt ?? null],
+      [fieldId, normalized.polygonWkt, metrics.centroid.lat, metrics.centroid.lng, metrics.hectares, metrics.areaM2, metrics.perimeterM, geometry.source, geometry.expectedUpdatedAt ?? null, workspaceId],
     )
     if (!result.rows[0]) {
-      const exists = await this.pool.query('SELECT id FROM fields WHERE id = $1 LIMIT 1', [fieldId])
+       const exists = await this.pool.query('SELECT id FROM fields WHERE id = $1 AND EXISTS (SELECT 1 FROM agronautas_auth_field_mappings mapping WHERE mapping.field_id = fields.id AND mapping.workspace_id = $2)', [fieldId, workspaceId])
       if (!exists.rows[0]) throw new Error('FIELD_NOT_FOUND')
       throw new Error('STALE_GEOMETRY_VERSION')
     }
@@ -229,6 +273,14 @@ export class PostgresFieldRepository implements FieldRepository, FieldGeometryRe
       updatedAt: new Date(row.geometry_updated_at),
     }
   }
+}
+
+function isExternalFieldIdConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: unknown; constraint?: unknown }
+  if (candidate.code !== '23505' || typeof candidate.constraint !== 'string') return false
+  const normalizedConstraint = candidate.constraint.replace(/[^a-z0-9]/gi, '').toLowerCase()
+  return normalizedConstraint.includes('fieldsexternalfieldid')
 }
 
 export class PostgresFieldContextRepository implements FieldContextRepository {
