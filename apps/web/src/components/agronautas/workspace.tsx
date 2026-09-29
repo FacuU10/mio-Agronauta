@@ -24,6 +24,7 @@ import { normalizeRequestError } from '@/lib/visibility/view-models'
 import type { EvidenceDashboardModel, EvidenceSourceRecord } from '@/lib/agronautas/ingestion-status'
 import { FieldGeometryEditor } from './field-geometry-editor'
 import { ManagementPanel } from './management-panel'
+import { LivestockPanel } from './livestock/livestock-panel'
 import { PlanningPanel } from './planning-panel'
 import { CopilotPanel } from './copilot-panel'
 import { EvidencePanel } from './evidence-panel'
@@ -217,6 +218,17 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
           <DashboardPanel {...props} />
        </section>
           <PlanningPanel fieldId={props.selectedFieldId ?? (props.runtimeMode === 'demo' ? 'field-demo-1' : props.fieldIndex?.items[0]?.fieldId ?? null)} planningContext={props.planningContext} simulation={props.simulation} isLoading={props.isPlanningLoading} isMutating={props.isPlanningMutating} error={props.planningError} onRetry={props.onRetryPlanning} onLoadPlanningContext={props.onLoadPlanningContext} onSimulateAssumptions={props.onSimulateAssumptions} />
+
+          {props.workspaceView === 'livestock' ? (
+            <section
+              id="agronautas-livestock"
+              tabIndex={-1}
+              className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+            >
+              <LivestockPanel />
+            </section>
+          ) : null}
+
           <section id="agronautas-management" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700">
             <ManagementPanel selectedFieldId={props.selectedFieldId} items={props.managementItems} audit={props.managementAudit} isLoading={props.isManagementLoading} error={props.managementError} isMutating={props.isManagementMutating} onRetry={props.onRetryManagement} onCreateOperation={props.onCreateManagementOperation} onTransition={props.onTransitionManagement} />
           </section>
