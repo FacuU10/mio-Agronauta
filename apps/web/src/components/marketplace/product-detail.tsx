@@ -63,7 +63,7 @@ export function MarketplaceProductDetail({ listing }: { listing?: AgronautasMark
           <div>
             <MapPin size={18} aria-hidden="true" />
             <span>
-              Tapalqué, Buenos Aires <small>Ubicación ficticia</small>
+              Mercedes, Corrientes <small>Ubicación de la tropa</small>
             </span>
           </div>
         </div>
@@ -169,20 +169,67 @@ export function MarketplaceProductDetail({ listing }: { listing?: AgronautasMark
   )
 }
 
-export function MarketplacePricePreview() {
+export function MarketplacePricePreview({ requiresLogin = false }: { requiresLogin?: boolean }) {
+  const [price, setPrice] = useState('6000')
   const [quantity, setQuantity] = useState('70')
   const [payment, setPayment] = useState('Contado')
   const [delivery, setDelivery] = useState('Retiro en origen')
   const [simulated, setSimulated] = useState(false)
   const count = Number(quantity)
-  const valid = quantity.trim() !== '' && Number.isInteger(count) && count >= 1 && count <= 70
+  const pricePerKg = Number(price)
+  const valid =
+    quantity.trim() !== '' &&
+    Number.isInteger(count) &&
+    count >= 1 &&
+    count <= 70 &&
+    price !== '' &&
+    pricePerKg > 0
+  const adjustPrice = (change: number) => {
+    setPrice(String(Math.min(999999999, Math.max(0, pricePerKg + change))))
+    setSimulated(false)
+  }
   return (
     <section className="mkt-panel mkt-price-preview" aria-label="Simulador de precio ficticio">
       <span className="mkt-eyebrow">PRECIO DE EJEMPLO</span>
-      <h2>Tu próximo lote</h2>
+      <h2>Ingresá tu oferta</h2>
       <div className="mkt-price">
-        <strong>{money(1480000)}</strong>
-        <span>ARS por cabeza · precio ficticio</span>
+        <label htmlFor="marketplace-price">
+          Seleccioná el <span>Precio</span>
+        </label>
+        <div className="mkt-price-control">
+          <div className="mkt-price-input">
+            <span aria-hidden="true">$</span>
+            <input
+              id="marketplace-price"
+              aria-label="Precio en pesos por kilogramo"
+              inputMode="numeric"
+              value={price === '' ? '' : pricePerKg.toLocaleString('es-AR')}
+              onChange={(event) => {
+                setPrice(event.target.value.replace(/\D/g, '').slice(0, 9))
+                setSimulated(false)
+              }}
+            />
+          </div>
+          <div className="mkt-price-steps">
+            <button
+              type="button"
+              aria-label="Aumentar precio 5 pesos"
+              disabled={pricePerKg >= 999999999}
+              onClick={() => adjustPrice(5)}
+            >
+              <b aria-hidden="true">+</b> $ 5,00
+            </button>
+            <button
+              type="button"
+              aria-label="Reducir precio 5 pesos"
+              disabled={pricePerKg <= 0}
+              onClick={() => adjustPrice(-5)}
+            >
+              <b aria-hidden="true">−</b> $ 5,00
+            </button>
+          </div>
+        </div>
+        <span className="mkt-price-unit">Por Kg</span>
       </div>
       <p className="mkt-price-note">
         Sin una publicación real. Este ejemplo no se puede comprar ni reservar.
@@ -190,7 +237,12 @@ export function MarketplacePricePreview() {
       <form
         onSubmit={(event) => {
           event.preventDefault()
-          if (valid) setSimulated(true)
+          if (!valid) return
+          if (requiresLogin) {
+            window.location.assign('/login?next=marketplace')
+            return
+          }
+          setSimulated(true)
         }}
         onChange={() => setSimulated(false)}
       >
@@ -234,16 +286,19 @@ export function MarketplacePricePreview() {
         </label>
         <div className="mkt-estimate">
           <span>Subtotal estimado</span>
-          <strong>{valid ? money(count * 1480000) : '—'}</strong>
-          <small>Sin flete, comisiones ni impuestos. No es una cotización.</small>
+          <strong>{valid ? money(count * 280 * pricePerKg) : '—'}</strong>
+          <small>
+            Calculado con 280 kg por animal (peso ficticio). Sin flete, comisiones ni impuestos. No
+            es una cotización.
+          </small>
         </div>
-        <button className="mkt-button" type="submit">
-          Simular consulta
+        <button className="mkt-button" type="submit" disabled={!valid}>
+          Enviar oferta
         </button>
+        {requiresLogin && <small>Para enviar una oferta, te pediremos iniciar sesión.</small>}
         {simulated && (
           <p className="mkt-inline-success" role="status">
-            Simulación lista: {count} cabezas, {payment.toLowerCase()}, {delivery.toLowerCase()}. No
-            se envió ninguna consulta.
+            Oferta de demostración enviada con éxito.
           </p>
         )}
       </form>

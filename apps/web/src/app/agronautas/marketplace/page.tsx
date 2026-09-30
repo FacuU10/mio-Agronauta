@@ -34,7 +34,8 @@ export default function AgronautasMarketplacePage() {
             className="absolute inset-0 -z-10 bg-cover bg-center"
             style={{
               backgroundImage:
-                "linear-gradient(90deg, rgba(12,35,25,.9), rgba(12,35,25,.5)), url('/landing/source/imagen1.webp')",
+                "linear-gradient(90deg, rgba(12,35,25,.8), rgba(12,35,25,.35)), url('/marketplace/marketplace-hero.jpg')",
+              backgroundPosition: 'center 65%',
             }}
           />
           <div className="mx-auto flex min-h-[320px] max-w-[1440px] flex-col justify-center px-4 py-12 sm:min-h-[360px] sm:px-8 sm:py-16">

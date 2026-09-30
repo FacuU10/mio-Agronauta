@@ -18,7 +18,7 @@ function setupDom() {
   globalThis.Event = dom.window.Event
 }
 
-test('signed-out marketplace offers login without an RFQ error or retry action', () => {
+test('signed-out marketplace shows the public example with a gated offer action', () => {
   setupDom()
   cleanup()
   const view = render(
@@ -46,10 +46,10 @@ test('signed-out marketplace offers login without an RFQ error or retry action',
       onSubmit={async () => undefined}
     />
   )
-  assert.equal(
-    view.getByRole('link', { name: 'Iniciar sesión' }).getAttribute('href'),
-    '/login?next=marketplace'
-  )
+  assert.ok(view.getByRole('heading', { name: '70 vaquillonas para madre' }))
+  assert.ok(view.getByRole('button', { name: 'Enviar oferta' }))
+  assert.equal(view.queryByRole('link', { name: 'Iniciar sesión' }), null)
+  assert.ok(view.getByText('Para enviar una oferta, te pediremos iniciar sesión.'))
   assert.equal(view.queryByRole('button', { name: 'Reintentar historial' }), null)
   assert.doesNotMatch(
     view.container.textContent ?? '',

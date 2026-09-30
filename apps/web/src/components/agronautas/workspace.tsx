@@ -149,6 +149,17 @@ interface WorkspaceProps {
 
 export function AgronautasWorkspace(props: WorkspaceProps) {
   if (props.accessState === 'unauthorized') {
+    if (props.workspaceView === 'livestock') {
+      return (
+        <ProductShell product="agronautas" title="Hacienda" description="Iniciá sesión para acceder a tu rodeo." navItems={[]}>
+          <div className="mx-auto max-w-xl rounded-3xl border border-stone-200 bg-white p-8 text-center shadow-sm">
+            <h2 className="text-2xl font-semibold">Ingresá a tu cuenta</h2>
+            <p className="mt-3 text-sm leading-6 text-stone-600">Para ver Hacienda necesitás iniciar sesión. Después de ingresar, volverás a esta vista.</p>
+            <a href="/login?next=livestock" className="mt-6 inline-flex min-h-11 items-center rounded-full bg-emerald-600 px-6 py-3 font-semibold text-white hover:bg-emerald-700">Iniciar sesión</a>
+          </div>
+        </ProductShell>
+      )
+    }
     return <ProductShell product="agronautas" title="Workspace Agronautas" description="Acceso controlado al workspace Agronautas." navItems={[]}><div className="mx-auto max-w-4xl px-4 py-12"><VisibilityState state="unauthorized" title="Acceso Agronautas no autorizado" description="Este workspace requiere una sesión autorizada. La vista no muestra datos de producción mientras falta autenticación." /><a className="mt-4 inline-flex rounded-full bg-stone-950 px-4 py-2 text-sm font-semibold text-white hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700" href="/probar-demo">Solicitar entrada al demo</a></div></ProductShell>
   }
 

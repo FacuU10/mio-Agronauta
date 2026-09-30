@@ -18,7 +18,7 @@ type AuthPageState = (typeof AUTH_PAGE_STATES)[keyof typeof AUTH_PAGE_STATES]
 
 interface AgronautasAuthPageProps {
   client?: AgronautasAuthClient
-  destination?: '/agronautas' | '/agronautas/marketplace'
+  destination?: '/agronautas' | '/agronautas/marketplace' | '/agronautas?view=livestock'
 }
 
 export function AgronautasAuthPage({ client, destination = '/agronautas' }: AgronautasAuthPageProps) {

@@ -93,13 +93,14 @@ export function MarketplaceCatalogRfq({
   const activeListing = available
     ? (scoped.find((item) => item.listingId === selectedListing?.listingId) ?? scoped[0])
     : undefined
+  const showExample = accessState === 'unauthorized' || (available && scoped.length === 0)
   return (
     <div className="mkt-layout">
       <div className="mkt-main-column">
-        {activeListing || (available && scoped.length === 0) ? (
+        {activeListing || showExample ? (
           <MarketplaceProductDetail listing={activeListing} />
         ) : null}
-        {!(available && scoped.length === 0) && (
+        {!showExample && (
           <MarketplaceCatalog
             workspaceId={resolvedWorkspaceId}
             response={error ? { ...listings, status: 'unavailable' } : listings}
@@ -139,8 +140,8 @@ export function MarketplaceCatalogRfq({
             isSubmitting={isMutating}
             onSubmit={submit}
           />
-        ) : available && scoped.length === 0 ? (
-          <MarketplacePricePreview />
+        ) : showExample ? (
+          <MarketplacePricePreview requiresLogin={accessState === 'unauthorized'} />
         ) : (
           <section className="mkt-panel">
             <MessageCircle size={28} aria-hidden="true" />

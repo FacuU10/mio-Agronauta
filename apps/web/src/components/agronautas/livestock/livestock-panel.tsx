@@ -164,7 +164,8 @@ export function LivestockPanel() {
           className="absolute inset-0 -z-10 bg-cover bg-center"
           style={{
             backgroundImage:
-              "linear-gradient(90deg, rgba(12,35,25,.9), rgba(12,35,25,.5)), url('/landing/source/imagen1.webp')",
+              "linear-gradient(90deg, rgba(12,35,25,.8), rgba(12,35,25,.35)), url('/livestock/hacienda-hero.png')",
+            backgroundPosition: 'center 70%',
           }}
         />
         <div className="mx-auto max-w-[1440px] px-4 py-12 sm:px-8 sm:py-16">

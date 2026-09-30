@@ -1,5 +1,6 @@
 import { createElement, type ReactNode } from 'react'
 import { ScrollHeader } from './scroll-header'
+import { AccountMenu } from './account-menu'
 
 const React = { createElement }
 
@@ -84,6 +85,11 @@ export function ProductHeader({
       ? [...navItems, { href: '/agronautas/marketplace', label: 'Marketplace' }]
       : navItems
   if (variant === 'landing') {
+    const loginHref = resolvedNavItems.some((item) => item.active && item.href === '/agronautas/marketplace')
+      ? '/login?next=marketplace'
+      : resolvedNavItems.some((item) => item.active && item.href.includes('view=livestock'))
+        ? '/login?next=livestock'
+        : '/login'
     const links = resolvedNavItems.map((item) => (
       <a
         key={item.href}
@@ -103,15 +109,10 @@ export function ProductHeader({
           </a>
           <nav aria-label="Navegación de Agronautas" className="hidden items-center gap-1 min-[1400px]:flex group-data-[scrolled=false]/navbar:[&>a:not([aria-current]):not(:last-child)]:text-white">
             {links}
-            <a href="/probar-demo" className="ml-3 whitespace-nowrap rounded-full bg-gradient-to-r from-emerald-600 to-emerald-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:shadow-lg">Probar demo</a>
+            <AccountMenu items={resolvedNavItems} loginHref={loginHref} />
           </nav>
-          <details className="group min-[1400px]:hidden">
-            <summary className="cursor-pointer list-none rounded-lg border border-stone-200 px-3 py-2 text-sm font-semibold text-slate-700 group-data-[scrolled=false]/navbar:text-white">Menú <span aria-hidden="true">☰</span></summary>
-            <nav aria-label="Navegación móvil de Agronautas" className="absolute left-4 right-4 top-full mt-2 grid max-h-[75dvh] overflow-y-auto rounded-2xl border border-stone-200 bg-white p-4 shadow-xl">
-              {links}
-              <a href="/probar-demo" className="mt-3 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-500 px-5 py-3 text-center text-sm font-semibold text-white">Probar demo</a>
-            </nav>
-          </details>
+
+          <div className="min-[1400px]:hidden"><AccountMenu items={resolvedNavItems} loginHref={loginHref} /></div>
         </div>
       </ScrollHeader>
     )
