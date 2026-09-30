@@ -6,8 +6,16 @@ test.describe('route foundations', () => {
 
     await expect(page).toHaveTitle(/Marketplace Agronautas/)
     await expect(page.locator('main#main-content')).toHaveCount(1)
-    await expect(page.getByRole('heading', { level: 1, name: 'Marketplace Agronautas' })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Marketplace' })).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByRole('link', { name: 'Saltar al contenido principal' })).toHaveAttribute('href', '#main-content')
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Marketplace Agronautas' })
+    ).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Marketplace', exact: true })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
+    await expect(page.getByRole('link', { name: 'Saltar al contenido principal' })).toHaveAttribute(
+      'href',
+      '#main-content'
+    )
   })
 })

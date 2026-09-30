@@ -228,7 +228,7 @@ export class AgronautasAuthService {
       return await this.repository.runBootstrapTransaction(transaction)
     } catch (error) {
       if (error instanceof AuthFailure) throw error
-      throw new AuthFailure(AUTH_FAILURE_CODES.STORAGE_FAILURE, 'Bootstrap transaction failed')
+      throw new AuthFailure(AUTH_FAILURE_CODES.STORAGE_FAILURE, 'Bootstrap transaction failed', undefined, { cause: error })
     }
   }
 

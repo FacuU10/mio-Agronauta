@@ -1,13 +1,24 @@
 'use client'
 
-import { createElement, useMemo, useState } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { createElement, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  ArrowUpRight,
+  Bell,
+  Check,
+  ClipboardList,
+  Heart,
+  MapPin,
+  Scale,
+  Search,
+  ShieldCheck,
+  X,
+} from 'lucide-react'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 
 const React = { createElement }
-
 const mockAnimals = [
   {
     id: '1',
@@ -91,366 +102,746 @@ const mockAnimals = [
   },
 ]
 
+type Animal = (typeof mockAnimals)[number]
+const categories = ['Vaca', 'Vaquillona', 'Ternero', 'Ternera', 'Novillo', 'Toro']
+const paddocks = ['Potrero Norte', 'Potrero 2', 'Potrero Sur', 'Potrero 3', 'Potrero Este']
+const selectClass =
+  'h-11 w-full min-w-0 rounded-xl border border-stone-200 bg-white px-3 text-sm text-stone-800'
+const initialActivity = [
+  { title: 'Pesaje registrado', detail: 'AR-003 · 182 kg', time: '30 sep · 09:35' },
+  {
+    title: 'Cambio de potrero',
+    detail: 'AR-007 · Potrero 2 → Potrero Sur',
+    time: '29 sep · 17:20',
+  },
+  { title: 'Control de preñez', detail: 'AR-006 · Resultado positivo', time: '27 sep · 11:10' },
+  { title: 'Tratamiento sanitario', detail: 'AR-008 · Control programado', time: '26 sep · 15:40' },
+]
+const compositionGroups = [
+  { name: 'Vacas', categories: ['Vaca'], color: 'bg-emerald-800' },
+  { name: 'Terneros', categories: ['Ternero', 'Ternera'], color: 'bg-emerald-500' },
+  { name: 'Vaquillonas', categories: ['Vaquillona'], color: 'bg-lime-600' },
+  { name: 'Toros', categories: ['Toro'], color: 'bg-amber-500' },
+  { name: 'Novillos', categories: ['Novillo'], color: 'bg-stone-400' },
+]
+
 export function LivestockPanel() {
+  const [animals, setAnimals] = useState(mockAnimals)
+  const [activity, setActivity] = useState(initialActivity)
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('Todas')
-
-  const filteredAnimals = useMemo(() => {
-    return mockAnimals.filter((animal) => {
-      const matchesSearch =
-        animal.tag.toLowerCase().includes(search.toLowerCase()) ||
-        animal.breed.toLowerCase().includes(search.toLowerCase()) ||
-        animal.paddock.toLowerCase().includes(search.toLowerCase())
-
-      const matchesCategory =
-        category === 'Todas' || animal.category === category
-
-      return matchesSearch && matchesCategory
-    })
-  }, [search, category])
-
-  const total = mockAnimals.length
-  const cows = mockAnimals.filter((animal) => animal.category === 'Vaca').length
-  const calves = mockAnimals.filter(
-    (animal) => animal.category === 'Ternero' || animal.category === 'Ternera'
-  ).length
-  const pregnant = mockAnimals.filter((animal) => animal.status === 'Preñada').length
+  const [paddock, setPaddock] = useState('Todos')
+  const [selected, setSelected] = useState<Animal | null>(null)
+  const [action, setAction] = useState<'new' | 'movement' | null>(null)
+  const [notice, setNotice] = useState('')
+  const [formError, setFormError] = useState('')
+  const total = animals.length
+  const pregnant = animals.filter((animal) => animal.status === 'Preñada').length
+  const treatment = animals.filter((animal) => animal.status === 'Tratamiento').length
+  const filtered = animals.filter(
+    (animal) =>
+      [animal.tag, animal.breed, animal.paddock].some((value) =>
+        value.toLowerCase().includes(search.trim().toLowerCase())
+      ) &&
+      (category === 'Todas' || animal.category === category) &&
+      (paddock === 'Todos' || animal.paddock === paddock)
+  )
+  const composition = compositionGroups.map((group) => ({
+    ...group,
+    count: animals.filter((animal) => group.categories.includes(animal.category)).length,
+  }))
 
   return (
-    <div
-      className="grid gap-6"
+    <section
+      id="agronautas-livestock"
       aria-label="Hacienda Agronautas"
       data-testid="agronautas-livestock-panel"
+      className="min-h-screen bg-stone-100 pb-12"
     >
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-800">
-            Gestión ganadera
-          </p>
-
-          <h2 className="mt-2 font-serif text-3xl font-semibold text-stone-950">
-            Hacienda
-          </h2>
-
-          <p className="mt-2 max-w-2xl text-sm text-stone-600">
-            Control de animales, categorías, pesos, potreros y estado productivo
-            del establecimiento.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-3">
-          <Button variant="outline">
-            Registrar movimiento
-          </Button>
-
-          <Button className="bg-emerald-700 text-white hover:bg-emerald-800">
-            + Nuevo animal
-          </Button>
-        </div>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          title="Total hacienda"
-          value={String(total)}
-          description="Animales registrados"
+      <header className="relative isolate overflow-hidden bg-emerald-950 pt-20 text-white">
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 bg-cover bg-center"
+          style={{
+            backgroundImage:
+              "linear-gradient(90deg, rgba(12,35,25,.9), rgba(12,35,25,.5)), url('/landing/source/imagen1.webp')",
+          }}
         />
-
-        <MetricCard
-          title="Vacas"
-          value={String(cows)}
-          description="Hembras adultas"
-        />
-
-        <MetricCard
-          title="Terneros"
-          value={String(calves)}
-          description="Machos y hembras"
-        />
-
-        <MetricCard
-          title="Preñadas"
-          value={String(pregnant)}
-          description="Gestaciones registradas"
-        />
-      </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <CardTitle>Animales</CardTitle>
-              <CardDescription>
-                Datos ficticios para visualizar el módulo Hacienda.
-              </CardDescription>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Buscar caravana, raza o potrero..."
-                className="sm:w-72"
-              />
-
-              <select
-                value={category}
-                onChange={(event) => setCategory(event.target.value)}
-                className="min-h-10 rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-900"
-              >
-                <option>Todas</option>
-                <option>Vaca</option>
-                <option>Vaquillona</option>
-                <option>Ternero</option>
-                <option>Ternera</option>
-                <option>Novillo</option>
-                <option>Toro</option>
-              </select>
-            </div>
+        <div className="mx-auto max-w-[1440px] px-4 py-12 sm:px-8 sm:py-16">
+          <div className="mb-6 flex flex-wrap items-center gap-3 text-xs">
+            <span className="font-semibold uppercase tracking-[0.22em] text-emerald-200">
+              Gestión ganadera
+            </span>
+            <span className="rounded-full border border-white/25 bg-white/10 px-3 py-1">
+              Establecimiento demo
+            </span>
           </div>
-        </CardHeader>
+          <h1 className="font-serif text-5xl font-semibold tracking-tight sm:text-6xl">Hacienda</h1>
+          <p className="mt-5 max-w-xl text-base leading-7 text-stone-100 sm:text-lg">
+            Controlá tu rodeo, pesos, movimientos y estado productivo desde un solo lugar.
+          </p>
+          <div className="mt-7 flex flex-wrap gap-5 text-xs text-emerald-100">
+            <span className="flex items-center gap-2">
+              <MapPin size={15} aria-hidden="true" /> {paddocks.length} potreros
+            </span>
+            <span className="flex items-center gap-2">
+              <ShieldCheck size={15} aria-hidden="true" /> Datos ficticios · sin persistencia
+            </span>
+          </div>
+        </div>
+      </header>
 
-        <CardContent>
-          <div className="overflow-x-auto rounded-xl border border-stone-200">
-            <table className="w-full min-w-[900px] text-left text-sm">
-              <thead className="bg-stone-50 text-xs uppercase tracking-wide text-stone-500">
-                <tr>
-                  <th className="px-4 py-3">Caravana</th>
-                  <th className="px-4 py-3">Categoría</th>
-                  <th className="px-4 py-3">Raza</th>
-                  <th className="px-4 py-3">Sexo</th>
-                  <th className="px-4 py-3">Peso</th>
-                  <th className="px-4 py-3">Potrero</th>
-                  <th className="px-4 py-3">Estado</th>
-                  <th className="px-4 py-3 text-right">Acción</th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-stone-100 bg-white">
-                {filteredAnimals.map((animal) => (
-                  <tr
-                    key={animal.id}
-                    className="transition hover:bg-stone-50"
+      <div className="mx-auto max-w-[1440px] px-4 pt-7 sm:px-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-semibold text-stone-900">Tu rodeo, de un vistazo</h2>
+            <p className="mt-1 text-sm text-stone-500">
+              Panorama del establecimiento · septiembre 2026
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAction('movement')
+                setFormError('')
+              }}
+            >
+              <ArrowUpRight size={16} className="mr-2" aria-hidden="true" />
+              Registrar movimiento
+            </Button>
+            <Button
+              className="bg-emerald-800 text-white"
+              onClick={() => {
+                setAction('new')
+                setFormError('')
+              }}
+            >
+              + Nuevo animal
+            </Button>
+          </div>
+        </div>
+        {notice && (
+          <p
+            role="status"
+            className="mb-5 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"
+          >
+            <Check size={16} aria-hidden="true" />
+            {notice}
+          </p>
+        )}
+        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_310px]">
+          <div className="grid min-w-0 gap-6">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {[
+                ['Total hacienda', total, 'Animales registrados'],
+                [
+                  'Vacas',
+                  composition.find((group) => group.name === 'Vacas')?.count ?? 0,
+                  'Hembras adultas',
+                ],
+                [
+                  'Terneros',
+                  composition.find((group) => group.name === 'Terneros')?.count ?? 0,
+                  'Machos y hembras',
+                ],
+                ['Preñadas', pregnant, 'Gestaciones registradas'],
+              ].map(([title, value, detail], index) => (
+                <Card
+                  key={title}
+                  className={
+                    'rounded-2xl border-stone-200 p-4 sm:p-5 ' +
+                    (index === 0 ? 'border-emerald-800 bg-emerald-900 text-white' : 'bg-white')
+                  }
+                >
+                  <p
+                    className={
+                      'text-sm font-medium ' + (index === 0 ? 'text-emerald-100' : 'text-stone-600')
+                    }
                   >
-                    <td className="px-4 py-4">
-                      <div className="font-semibold text-stone-950">
-                        {animal.tag}
-                      </div>
-                      <div className="text-xs text-stone-500">
-                        ID {animal.id.padStart(4, '0')}
-                      </div>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      {animal.category}
-                    </td>
-
-                    <td className="px-4 py-4">
-                      {animal.breed}
-                    </td>
-
-                    <td className="px-4 py-4">
-                      {animal.sex}
-                    </td>
-
-                    <td className="px-4 py-4 font-medium">
-                      {animal.weight} kg
-                    </td>
-
-                    <td className="px-4 py-4">
-                      {animal.paddock}
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <AnimalStatus status={animal.status} />
-                    </td>
-
-                    <td className="px-4 py-4 text-right">
-                      <Button variant="outline" size="sm">
-                        Ver ficha
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {filteredAnimals.length === 0 ? (
-            <div className="py-12 text-center text-sm text-stone-500">
-              No encontramos animales con esos filtros.
+                    {title}
+                  </p>
+                  <p className="my-2 text-4xl font-semibold tracking-tight">{value}</p>
+                  <p className={'text-xs ' + (index === 0 ? 'text-emerald-200' : 'text-stone-500')}>
+                    {detail}
+                  </p>
+                </Card>
+              ))}
             </div>
-          ) : null}
-
-          <div className="mt-4 flex items-center justify-between text-xs text-stone-500">
-            <span>
-              Mostrando {filteredAnimals.length} de {mockAnimals.length} animales
-            </span>
-
-            <span>
-              Datos demostrativos
-            </span>
+            <Panel title="Animales" description="Identificación y estado actual de tu hacienda.">
+              <div className="mb-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_145px_155px]">
+                <label className="text-xs font-medium text-stone-600">
+                  Buscar animal
+                  <span className="relative mt-2 block">
+                    <Search
+                      size={16}
+                      className="absolute left-3 top-3.5 text-stone-400"
+                      aria-hidden="true"
+                    />
+                    <Input
+                      className="h-11 pl-9"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                      placeholder="Caravana, raza o potrero"
+                    />
+                  </span>
+                </label>
+                <label className="text-xs font-medium text-stone-600">
+                  Categoría
+                  <select
+                    className={selectClass + ' mt-2'}
+                    value={category}
+                    onChange={(event) => setCategory(event.target.value)}
+                  >
+                    <option>Todas</option>
+                    {categories.map((value) => (
+                      <option key={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs font-medium text-stone-600">
+                  Potrero
+                  <select
+                    className={selectClass + ' mt-2'}
+                    value={paddock}
+                    onChange={(event) => setPaddock(event.target.value)}
+                  >
+                    <option>Todos</option>
+                    {paddocks.map((value) => (
+                      <option key={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div
+                className="overflow-x-auto rounded-xl border border-stone-200"
+                tabIndex={0}
+                role="region"
+                aria-label="Listado de animales"
+              >
+                <table className="w-full min-w-[660px] text-left text-sm">
+                  <caption className="sr-only">Animales del establecimiento demostrativo</caption>
+                  <thead className="bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
+                    <tr>
+                      {['Caravana / raza', 'Categoría', 'Peso', 'Potrero', 'Estado', 'Detalle'].map(
+                        (title) => (
+                          <th
+                            scope="col"
+                            key={title}
+                            className="whitespace-nowrap px-3 py-3 font-medium"
+                          >
+                            {title}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {filtered.map((animal) => (
+                      <tr key={animal.id} className="transition-colors hover:bg-emerald-50/40">
+                        <th scope="row" className="px-3 py-4 font-normal">
+                          <span className="block font-semibold text-stone-900">{animal.tag}</span>
+                          <span className="text-xs text-stone-500">{animal.breed}</span>
+                        </th>
+                        <td className="px-3 py-4">{animal.category}</td>
+                        <td className="whitespace-nowrap px-3 py-4 font-medium">
+                          {animal.weight} <span className="text-xs text-stone-500">kg</span>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-4 text-stone-600">
+                          {animal.paddock}
+                        </td>
+                        <td className="px-3 py-4">
+                          <AnimalStatus status={animal.status} />
+                        </td>
+                        <td className="px-3 py-4">
+                          <button
+                            type="button"
+                            aria-label={'Ver ficha de ' + animal.tag}
+                            onClick={() => setSelected(animal)}
+                            className="min-h-10 whitespace-nowrap rounded-lg px-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
+                          >
+                            Ver ficha <span aria-hidden="true">↗</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {filtered.length === 0 && (
+                  <div className="p-8 text-center">
+                    <p className="text-sm text-stone-500">
+                      No encontramos animales con esos filtros.
+                    </p>
+                    <Button
+                      variant="ghost"
+                      className="mt-3"
+                      onClick={() => {
+                        setSearch('')
+                        setCategory('Todas')
+                        setPaddock('Todos')
+                      }}
+                    >
+                      Limpiar filtros
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <div className="mt-4 flex flex-wrap justify-between gap-2 text-xs text-stone-500">
+                <span>
+                  Mostrando {filtered.length} de {total} animales
+                </span>
+                <span>Datos demostrativos</span>
+              </div>
+            </Panel>
           </div>
-        </CardContent>
-      </Card>
+          <aside
+            aria-label="Resumen del rodeo"
+            className="grid gap-5 md:grid-cols-2 xl:grid-cols-1"
+          >
+            <Panel
+              title="Alertas ganaderas"
+              icon={<Bell size={19} />}
+              description="Próximas tareas del rodeo"
+            >
+              <div className="space-y-3">
+                {[
+                  ['2', 'vacunas próximas', 'AR-001 y AR-002 · 5 oct'],
+                  [String(treatment), 'animal en tratamiento', 'AR-008 · revisión 2 oct'],
+                  ['3', 'controles de preñez pendientes', 'AR-001, AR-002 y AR-006 · 7 oct'],
+                ].map(([count, label, detail]) => (
+                  <div key={label} className="flex gap-3 rounded-xl bg-amber-50/70 p-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 font-semibold text-amber-900">
+                      {count}
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-stone-800">{label}</p>
+                      <p className="mt-1 text-xs leading-5 text-stone-500">{detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+            <Panel
+              title="Así está tu rodeo"
+              description={total + ' animales · distribución por categoría'}
+            >
+              <div className="mb-5 flex h-3 overflow-hidden rounded-full" aria-hidden="true">
+                {composition.map((group) => (
+                  <div
+                    key={group.name}
+                    className={group.color}
+                    style={{ width: (group.count / total) * 100 + '%' }}
+                  />
+                ))}
+              </div>
+              <ul className="space-y-3">
+                {composition.map((group) => (
+                  <li key={group.name} className="flex items-center gap-2 text-sm">
+                    <span aria-hidden="true" className={'h-2 w-2 rounded-full ' + group.color} />
+                    <span className="flex-1 text-stone-600">{group.name}</span>
+                    <span className="text-xs text-stone-400">{group.count}</span>
+                    <strong className="w-14 text-right font-medium">
+                      {((group.count / total) * 100).toLocaleString('es-AR', {
+                        maximumFractionDigits: 1,
+                      })}
+                      %
+                    </strong>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+            <Panel title="Actividad reciente" icon={<ClipboardList size={19} />}>
+              <ol className="space-y-4">
+                {activity.slice(0, 4).map((item, index) => (
+                  <li key={item.title + index} className="flex gap-3">
+                    <span
+                      aria-hidden="true"
+                      className="mt-1 h-2 w-2 shrink-0 rounded-full bg-emerald-600"
+                    />
+                    <div>
+                      <p className="text-sm font-medium">{item.title}</p>
+                      <p className="mt-1 text-xs text-stone-600">{item.detail}</p>
+                      <p className="mt-1 text-[11px] text-stone-400">{item.time}</p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </Panel>
+          </aside>
+        </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Distribución por potrero</CardTitle>
-            <CardDescription>
-              Cantidad ficticia de animales actualmente asignados.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="grid gap-4">
-            <PaddockRow name="Potrero Norte" animals={2} percentage={25} />
-            <PaddockRow name="Potrero 2" animals={2} percentage={25} />
-            <PaddockRow name="Potrero Sur" animals={2} percentage={25} />
-            <PaddockRow name="Potrero 3" animals={1} percentage={12.5} />
-            <PaddockRow name="Potrero Este" animals={1} percentage={12.5} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Actividad reciente</CardTitle>
-            <CardDescription>
-              Últimos eventos simulados de la hacienda.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="grid gap-4">
-            <ActivityRow
-              title="Pesaje registrado"
-              detail="AR-003 · 182 kg"
-              time="Hoy · 09:35"
+        <div className="mb-5 mt-8">
+          <h2 className="text-2xl font-semibold">Seguimiento del establecimiento</h2>
+          <p className="mt-1 text-sm text-stone-500">Potreros, sanidad y evolución productiva.</p>
+        </div>
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          <Panel title="Distribución por potrero" icon={<MapPin size={19} />}>
+            <div className="space-y-4">
+              {paddocks.map((name) => {
+                const count = animals.filter((animal) => animal.paddock === name).length
+                return (
+                  <div key={name}>
+                    <div className="mb-2 flex justify-between gap-2 text-xs">
+                      <span>{name}</span>
+                      <span className="text-stone-500">{count} animales</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-stone-100">
+                      <div
+                        className="h-full rounded-full bg-emerald-700"
+                        style={{ width: (count / total) * 100 + '%' }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+          <Panel title="Resumen sanitario" icon={<ShieldCheck size={19} />}>
+            <p className="text-3xl font-semibold text-emerald-900">
+              {total - treatment}
+              <span className="ml-2 text-sm font-normal text-stone-500">de {total} animales</span>
+            </p>
+            <p className="mb-5 mt-1 text-xs text-stone-500">Sin tratamiento activo registrado</p>
+            <SummaryRow label="En tratamiento" value={String(treatment)} />
+            <SummaryRow label="Vacunas próximas" value="2" />
+            <p className="mt-4 rounded-lg bg-emerald-50 p-3 text-xs leading-5 text-emerald-800">
+              Próxima jornada sanitaria
+              <br />
+              <strong>5 de octubre de 2026</strong>
+            </p>
+          </Panel>
+          <Panel title="Resumen reproductivo" icon={<Heart size={19} />}>
+            <p className="text-3xl font-semibold text-emerald-900">
+              {pregnant}
+              <span className="ml-2 text-sm font-normal text-stone-500">preñadas</span>
+            </p>
+            <p className="mb-5 mt-1 text-xs text-stone-500">Gestaciones registradas en el rodeo</p>
+            <SummaryRow label="Controles pendientes" value="3" />
+            <SummaryRow
+              label="Toros reproductores"
+              value={String(animals.filter((animal) => animal.status === 'Reproductor').length)}
             />
-
-            <ActivityRow
-              title="Cambio de potrero"
-              detail="AR-007 · Potrero 2 → Potrero Sur"
-              time="Ayer · 17:20"
-            />
-
-            <ActivityRow
-              title="Control de preñez"
-              detail="AR-006 · Resultado positivo"
-              time="27 Sep · 11:10"
-            />
-
-            <ActivityRow
-              title="Tratamiento sanitario"
-              detail="AR-008 · Control programado"
-              time="26 Sep · 15:40"
-            />
-          </CardContent>
-        </Card>
+            <p className="mt-4 rounded-lg bg-stone-50 p-3 text-xs leading-5 text-stone-600">
+              Último control positivo
+              <br />
+              <strong>AR-006 · 27 de septiembre</strong>
+            </p>
+          </Panel>
+          <Panel
+            title="Últimos pesajes"
+            icon={<Scale size={19} />}
+            description="Registros simulados · septiembre"
+          >
+            <div className="space-y-4">
+              {mockAnimals
+                .filter((animal) => ['1', '3', '6'].includes(animal.id))
+                .sort((a, b) => ['3', '1', '6'].indexOf(a.id) - ['3', '1', '6'].indexOf(b.id))
+                .map((animal, index) => (
+                  <div
+                    key={animal.id}
+                    className="flex items-center justify-between border-b border-stone-100 pb-3 last:border-0"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold">{animal.tag}</p>
+                      <p className="mt-1 text-xs text-stone-500">
+                        {30 - index} sep · {animal.category}
+                      </p>
+                    </div>
+                    <strong className="text-sm text-emerald-800">{animal.weight} kg</strong>
+                  </div>
+                ))}
+            </div>
+          </Panel>
+        </div>
+        <p className="mt-7 text-center text-xs text-stone-500">
+          Hacienda · Agronautas · Todos los datos y eventos de esta vista son ficticios.
+        </p>
       </div>
-    </div>
+
+      {selected && (
+        <Modal title={'Ficha de ' + selected.tag} onClose={() => setSelected(null)}>
+          <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-emerald-50 p-4">
+            <div>
+              <p className="text-xs uppercase tracking-widest text-emerald-700">
+                Identificación individual
+              </p>
+              <p className="mt-1 text-2xl font-semibold text-emerald-950">{selected.tag}</p>
+            </div>
+            <AnimalStatus status={selected.status} />
+          </div>
+          <dl className="grid grid-cols-2 gap-5">
+            {[
+              ['Categoría', selected.category],
+              ['Raza', selected.breed],
+              ['Sexo', selected.sex],
+              ['Peso registrado', selected.weight + ' kg'],
+              ['Potrero actual', selected.paddock],
+              ['Identificador', selected.id.padStart(4, '0')],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <dt className="text-xs text-stone-500">{label}</dt>
+                <dd className="mt-1 text-sm font-semibold">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          <div className="mt-6 border-t border-stone-200 pt-5">
+            <h3 className="text-lg font-semibold">Estado y seguimiento</h3>
+            <p className="mt-2 text-sm leading-6 text-stone-600">
+              {selected.status === 'Tratamiento'
+                ? 'Tratamiento sanitario en curso. Revisión ficticia programada para el 2 de octubre.'
+                : selected.status === 'Preñada'
+                  ? 'Preñez registrada. Próximo control ficticio: 7 de octubre.'
+                  : 'Sin observaciones adicionales en esta ficha demostrativa.'}
+            </p>
+          </div>
+          <p className="mt-5 text-xs text-stone-500">
+            Ficha ficticia · Los cambios de esta sesión no se guardan.
+          </p>
+        </Modal>
+      )}
+      {action && (
+        <Modal
+          title={action === 'new' ? 'Nuevo animal' : 'Registrar movimiento'}
+          onClose={() => setAction(null)}
+        >
+          <p className="mb-5 text-sm text-stone-500">
+            Simulación local. Los cambios se pierden al recargar la página.
+          </p>
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const data = new FormData(event.currentTarget)
+              const destination = String(data.get('paddock'))
+              if (action === 'new') {
+                const tag = String(data.get('tag')).trim().toUpperCase()
+                if (!tag || animals.some((animal) => animal.tag.toUpperCase() === tag)) {
+                  setFormError('Ingresá una caravana única para el animal.')
+                  return
+                }
+                const animal: Animal = {
+                  id: String(total + 1),
+                  tag,
+                  category: String(data.get('category')),
+                  breed: String(data.get('breed')).trim(),
+                  sex: String(data.get('sex')),
+                  weight: Number(data.get('weight')),
+                  paddock: destination,
+                  status: 'Activo',
+                }
+                setAnimals((current) => [...current, animal])
+                setActivity((current) => [
+                  {
+                    title: 'Alta de animal',
+                    detail: tag + ' · ' + destination,
+                    time: 'Esta sesión',
+                  },
+                  ...current,
+                ])
+                setNotice(tag + ' agregado al rodeo de demostración.')
+              } else {
+                const animal = animals.find((item) => item.id === data.get('animal'))
+                if (!animal) return
+                if (animal.paddock === destination) {
+                  setFormError('Elegí un potrero distinto al actual.')
+                  return
+                }
+                setAnimals((current) =>
+                  current.map((item) =>
+                    item.id === animal.id ? { ...item, paddock: destination } : item
+                  )
+                )
+                setActivity((current) => [
+                  {
+                    title: 'Cambio de potrero',
+                    detail: animal.tag + ' · ' + animal.paddock + ' → ' + destination,
+                    time: 'Esta sesión',
+                  },
+                  ...current,
+                ])
+                setNotice('Movimiento de ' + animal.tag + ' simulado correctamente.')
+              }
+              setAction(null)
+            }}
+          >
+            {action === 'new' ? (
+              <>
+                <label className="grid gap-2 text-sm">
+                  Caravana
+                  <Input name="tag" required maxLength={30} placeholder="AR-009" />
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="grid gap-2 text-sm">
+                    Categoría
+                    <select name="category" className={selectClass}>
+                      {categories.map((value) => (
+                        <option key={value}>{value}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-2 text-sm">
+                    Sexo
+                    <select name="sex" className={selectClass}>
+                      <option>Hembra</option>
+                      <option>Macho</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="grid gap-2 text-sm">
+                    Raza
+                    <Input name="breed" required maxLength={40} placeholder="Brangus" />
+                  </label>
+                  <label className="grid gap-2 text-sm">
+                    Peso (kg)
+                    <Input name="weight" type="number" min="1" max="2000" step="0.1" required />
+                  </label>
+                </div>
+              </>
+            ) : (
+              <label className="grid gap-2 text-sm">
+                Animal
+                <select name="animal" className={selectClass}>
+                  {animals.map((animal) => (
+                    <option key={animal.id} value={animal.id}>
+                      {animal.tag} · {animal.paddock}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="grid gap-2 text-sm">
+              {action === 'new' ? 'Potrero' : 'Potrero de destino'}
+              <select name="paddock" className={selectClass}>
+                {paddocks.map((value) => (
+                  <option key={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+            {formError && (
+              <p role="alert" className="text-sm text-red-700">
+                {formError}
+              </p>
+            )}
+            <div className="mt-2 flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setAction(null)}>
+                Cancelar
+              </Button>
+              <Button type="submit" className="bg-emerald-800">
+                Simular {action === 'new' ? 'alta' : 'movimiento'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </section>
   )
 }
 
-function MetricCard({
+function Panel({
   title,
-  value,
   description,
+  icon,
+  children,
 }: {
   title: string
-  value: string
-  description: string
+  description?: string
+  icon?: ReactNode
+  children: ReactNode
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardDescription>{title}</CardDescription>
-
-        <CardTitle className="text-3xl">
-          {value}
-        </CardTitle>
+    <Card className="min-w-0 rounded-2xl border-stone-200 bg-white">
+      <CardHeader className="p-5 pb-4">
+        <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-stone-900">
+          {icon && (
+            <span aria-hidden="true" className="text-emerald-700">
+              {icon}
+            </span>
+          )}
+          {title}
+        </h3>
+        {description && (
+          <CardDescription className="text-xs leading-5 text-stone-500">
+            {description}
+          </CardDescription>
+        )}
       </CardHeader>
-
-      <CardContent>
-        <p className="text-xs text-stone-500">
-          {description}
-        </p>
-      </CardContent>
+      <CardContent className="p-5 pt-0">{children}</CardContent>
     </Card>
   )
 }
 
-function AnimalStatus({ status }: { status: string }) {
-  const className =
-    status === 'Preñada'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-      : status === 'Tratamiento'
-        ? 'border-amber-200 bg-amber-50 text-amber-800'
-        : status === 'Reproductor'
-          ? 'border-blue-200 bg-blue-50 text-blue-800'
-          : 'border-stone-200 bg-stone-50 text-stone-700'
-
+function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <Badge variant="outline" className={className}>
+    <div className="flex justify-between gap-3 border-b border-stone-100 py-3 text-xs">
+      <span className="text-stone-600">{label}</span>
+      <strong className="text-stone-900">{value}</strong>
+    </div>
+  )
+}
+
+function AnimalStatus({ status }: { status: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className={
+        'whitespace-nowrap text-[11px] ' +
+        (status === 'Preñada'
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          : status === 'Tratamiento'
+            ? 'border-amber-200 bg-amber-50 text-amber-800'
+            : 'border-stone-200 bg-stone-50 text-stone-600')
+      }
+    >
       {status}
     </Badge>
   )
 }
 
-function PaddockRow({
-  name,
-  animals,
-  percentage,
-}: {
-  name: string
-  animals: number
-  percentage: number
-}) {
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between text-sm">
-        <span className="font-medium text-stone-900">
-          {name}
-        </span>
-
-        <span className="text-stone-500">
-          {animals} animales
-        </span>
-      </div>
-
-      <div className="h-2 overflow-hidden rounded-full bg-stone-100">
-        <div
-          className="h-full rounded-full bg-emerald-600"
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function ActivityRow({
+function Modal({
   title,
-  detail,
-  time,
+  onClose,
+  children,
 }: {
   title: string
-  detail: string
-  time: string
+  onClose: () => void
+  children: ReactNode
 }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const triggerRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    const dialog = ref.current
+    triggerRef.current ??= document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    dialog?.showModal()
+    document.body.style.overflow = 'hidden'
+    return () => {
+      dialog?.close()
+      document.body.style.overflow = previousOverflow
+      triggerRef.current?.focus()
+    }
+  }, [])
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-stone-100 pb-4 last:border-b-0 last:pb-0">
-      <div>
-        <p className="text-sm font-semibold text-stone-950">
-          {title}
-        </p>
-
-        <p className="mt-1 text-sm text-stone-600">
-          {detail}
-        </p>
+    <dialog
+      ref={ref}
+      aria-labelledby="livestock-dialog-title"
+      onCancel={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      className="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-2xl border border-stone-200 bg-white p-0 text-stone-900 shadow-2xl backdrop:bg-stone-950/60"
+    >
+      <div className="p-5 sm:p-7">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <h2 id="livestock-dialog-title" className="text-2xl font-semibold">
+            {title}
+          </h2>
+          <Button variant="ghost" onClick={onClose} aria-label="Cerrar" className="shrink-0 px-2">
+            <X size={20} aria-hidden="true" />
+          </Button>
+        </div>
+        {children}
       </div>
-
-      <span className="whitespace-nowrap text-xs text-stone-400">
-        {time}
-      </span>
-    </div>
+    </dialog>
   )
 }

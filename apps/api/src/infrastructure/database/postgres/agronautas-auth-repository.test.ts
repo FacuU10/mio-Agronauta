@@ -6,6 +6,31 @@ import { AuthFailure, AUTH_FAILURE_CODES } from '../../../domain/auth/contracts'
 import { PostgresAgronautasAuthRepository } from './agronautas-auth-repository'
 import { PostgresAgronautasManagementRepository } from './agronautas-management-repository'
 
+test('bootstrap preserves the storage cause and rolls back before releasing the connection', async () => {
+  const cause = Object.assign(new Error('Missing bootstrap table'), { code: '42P01' })
+  const statements: string[] = []
+  const client = {
+    async query(sql: string) {
+      statements.push(sql)
+      if (sql.includes('agronautas_auth_bootstrap_state')) throw cause
+      return { rows: [] }
+    },
+    release() { statements.push('release') },
+  }
+  const repository = new PostgresAgronautasAuthRepository({ async connect() { return client } } as never)
+  await assert.rejects(() => repository.runBootstrapTransaction({
+    input: {
+      idempotencyKey: 'bootstrap-failure', bootstrapSecret: 'test-secret',
+      pilotWorkspace: { key: 'agronautas-pilot', name: 'Pilot' },
+      admin: { email: 'admin@example.test', password: 'test-password', displayName: 'Admin' },
+      fieldMappings: [],
+    },
+    inputHash: 'test-hash', passwordHash: 'test-password-hash',
+  }), (error: unknown) => error instanceof AuthFailure
+    && error.code === AUTH_FAILURE_CODES.STORAGE_FAILURE && error.cause === cause)
+  assert.deepEqual(statements.slice(-2), ['ROLLBACK', 'release'])
+})
+
 test('Postgres auth bootstrap is transactional, locks idempotency state, and does not return the input hash', async () => {
   const statements: string[] = []
   const parameters: unknown[][] = []

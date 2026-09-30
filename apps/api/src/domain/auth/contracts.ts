@@ -177,8 +177,9 @@ export class AuthFailure extends Error {
     readonly code: AuthFailureCode,
     message: string = code,
     readonly statusCode: number = failureStatus(code),
+    options?: ErrorOptions,
   ) {
-    super(message)
+    super(message, options)
     this.message = message
   }
 }

@@ -1,7 +1,6 @@
+import './infrastructure/config/load-env'
 import 'express-async-errors'
 import express, { Application } from 'express'
-import dotenv from 'dotenv'
-import { resolve } from 'node:path'
 import { globalErrorHandler, notFoundHandler } from './presentation/middleware/error-handler'
 import { httpLogger, logger } from './infrastructure/observability/logger'
 import { helmetMiddleware } from './presentation/middleware/helmet'
@@ -24,7 +23,6 @@ import { ProductionEnvValidatorPort } from './infrastructure/config/validator'
 import type { AgronautasAuthServicePort } from './domain/auth/ports'
 import { runAgronautasAuthBootstrapFromEnv, type AgronautasAuthBootstrapResult } from './infrastructure/bootstrap/agronautas-auth-bootstrap'
 
-dotenv.config({ path: resolve(__dirname, '../.env') })
 
 function parseApiPort(name: 'PORT' | 'API_PORT', value: string | undefined): number | undefined {
   const normalized = value?.trim()

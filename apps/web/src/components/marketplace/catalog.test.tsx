@@ -6,7 +6,9 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
 import { MarketplaceCatalog } from './catalog'
 
 function setupDom() {
-  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/agronautas/marketplace' })
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+    url: 'http://localhost/agronautas/marketplace',
+  })
   globalThis.window = dom.window as unknown as Window & typeof globalThis
   globalThis.document = dom.window.document
   globalThis.HTMLElement = dom.window.HTMLElement
@@ -36,7 +38,11 @@ const listings = {
       quantity: 100,
       unit: 'toneladas',
       qualityStatus: 'verified' as const,
-      provenance: { sourceKey: 'operator-catalog', sourceUrl: null, recordedAt: '2026-09-21T08:00:00.000Z' },
+      provenance: {
+        sourceKey: 'operator-catalog',
+        sourceUrl: null,
+        recordedAt: '2026-09-21T08:00:00.000Z',
+      },
       freshnessExpiresAt: '2026-09-22T10:00:00.000Z',
       updatedAt: '2026-09-21T09:00:00.000Z',
     },
@@ -53,7 +59,11 @@ const listings = {
       quantity: 20,
       unit: 'cajones',
       qualityStatus: 'unverified' as const,
-      provenance: { sourceKey: 'other-workspace', sourceUrl: null, recordedAt: '2026-09-21T08:00:00.000Z' },
+      provenance: {
+        sourceKey: 'other-workspace',
+        sourceUrl: null,
+        recordedAt: '2026-09-21T08:00:00.000Z',
+      },
       freshnessExpiresAt: '2026-09-22T10:00:00.000Z',
       updatedAt: '2026-09-21T09:00:00.000Z',
     },
@@ -63,25 +73,49 @@ const listings = {
 test('catalog filters by search and market without leaking another workspace', () => {
   setupDom()
   cleanup()
-  const view = render(<MarketplaceCatalog workspaceId="workspace-1" response={listings} onSelectListing={() => undefined} />)
+  const view = render(
+    <MarketplaceCatalog
+      workspaceId="workspace-1"
+      response={listings}
+      onSelectListing={() => undefined}
+    />
+  )
 
   assert.ok(view.getByText('Arroz de Corrientes'))
   assert.equal(view.queryByText('Cítricos de Bella Vista'), null)
-  assert.ok(view.getByText('operator-catalog'))
-  assert.ok(view.getByText('2026-09-22T10:00:00.000Z'))
+  assert.equal(view.queryByText('operator-catalog'), null)
+  assert.equal(view.queryByText('2026-09-22T10:00:00.000Z'), null)
 
   fireEvent.input(view.getByLabelText('Buscar publicaciones'), { target: { value: 'cítricos' } })
-  assert.ok(view.getByText('No hay publicaciones que coincidan con los filtros del workspace.'))
+  assert.ok(view.getByText('No encontramos coincidencias'))
 })
 
 test('catalog renders empty and unavailable recovery states without fabricated listings', () => {
   setupDom()
   cleanup()
   const onRetry = () => undefined
-  const view = render(<MarketplaceCatalog workspaceId="workspace-1" response={{ ...listings, status: 'unavailable', items: [], reason: 'storage_unavailable', retryable: true }} onSelectListing={() => undefined} onRetry={onRetry} />)
+  const view = render(
+    <MarketplaceCatalog
+      workspaceId="workspace-1"
+      response={{
+        ...listings,
+        status: 'unavailable',
+        items: [],
+        reason: 'storage_unavailable',
+        retryable: true,
+      }}
+      onSelectListing={() => undefined}
+      onRetry={onRetry}
+    />
+  )
 
   assert.ok(view.getByRole('alert'))
-  assert.ok(view.getByText('No hay publicaciones actuales verificables.'))
-  assert.ok(view.getByRole('button', { name: 'Reintentar catálogo' }))
-  assert.doesNotMatch(view.container.textContent ?? '', /Comprar|Pagar|Checkout|Pedido|Precio|Oferta/i)
+  assert.ok(view.getByText('No pudimos cargar las publicaciones'))
+  assert.equal(view.queryByLabelText('Buscar publicaciones'), null)
+  assert.equal(view.queryByText('Todavía no hay publicaciones'), null)
+  assert.ok(view.getByRole('button', { name: 'Volver a intentar' }))
+  assert.doesNotMatch(
+    view.container.textContent ?? '',
+    /Comprar|Pagar|Checkout|Pedido|Precio|Oferta/i
+  )
 })

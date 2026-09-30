@@ -18,9 +18,10 @@ type AuthPageState = (typeof AUTH_PAGE_STATES)[keyof typeof AUTH_PAGE_STATES]
 
 interface AgronautasAuthPageProps {
   client?: AgronautasAuthClient
+  destination?: '/agronautas' | '/agronautas/marketplace'
 }
 
-export function AgronautasAuthPage({ client }: AgronautasAuthPageProps) {
+export function AgronautasAuthPage({ client, destination = '/agronautas' }: AgronautasAuthPageProps) {
   const router = useRouter()
   const queryClient = useQueryClient()
   const [defaultClient] = useState<AgronautasAuthClient>(() => createAgronautasAuthClient())
@@ -59,7 +60,7 @@ export function AgronautasAuthPage({ client }: AgronautasAuthPageProps) {
       setSession(nextSession)
       setPageState(AUTH_PAGE_STATES.AUTHENTICATED)
       setPassword('')
-      router.replace('/agronautas')
+      router.replace(destination)
     } catch (error: unknown) {
       setOutcome(normalizeAgronautasAuthClientError(error))
       setPageState(AUTH_PAGE_STATES.ERROR)

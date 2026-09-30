@@ -265,7 +265,7 @@ export class PostgresAgronautasAuthRepository implements AuthRepository {
     } catch (error) {
       await client.query('ROLLBACK')
       if (error instanceof AuthFailure) throw error
-      throw new AuthFailure(AUTH_FAILURE_CODES.STORAGE_FAILURE, 'Bootstrap transaction failed')
+      throw new AuthFailure(AUTH_FAILURE_CODES.STORAGE_FAILURE, 'Bootstrap transaction failed', undefined, { cause: error })
     } finally {
       client.release()
     }

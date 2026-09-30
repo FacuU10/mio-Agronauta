@@ -62,6 +62,12 @@ pnpm install
 
 ### 3. Start the env-backed services and API
 
+For local Docker development, PostgreSQL is published on `localhost:5433`
+to avoid collisions with PostgreSQL installed on Windows. Set `DATABASE_URL`
+in `apps/api/.env` to `postgresql://user:password@localhost:5433/appdb`.
+The container-to-container port remains `5432`. Override `POSTGRES_PORT` if
+you need a different host port, and update your local connection URL accordingly.
+
 Provide API, PostgreSQL/PostGIS, Redis, and worker endpoints/processes through the operator environment or process manager. Readiness and real service calls are the only proof authority; missing services remain `blocked` or `not_run`.
 
 Use the exact application commands:

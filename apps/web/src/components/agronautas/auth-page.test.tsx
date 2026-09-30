@@ -69,6 +69,12 @@ test('successful operator sign-in replaces /login with the protected workspace r
 
     cleanup()
     routerCalls.length = 0
+    const marketplaceView = render(<AppRouterContext.Provider value={router as unknown as AppRouterInstance}><QueryProvider><AgronautasAuthPage client={client} destination="/agronautas/marketplace" /></QueryProvider></AppRouterContext.Provider>)
+    await waitFor(() => assert.ok(marketplaceView.container.querySelector('form')))
+    fireEvent.submit(marketplaceView.container.querySelector('form')!)
+    await waitFor(() => assert.deepEqual(routerCalls, ['/agronautas/marketplace']))
+    cleanup()
+    routerCalls.length = 0
     const forbiddenClient: AgronautasAuthClient = {
       status: statusUnauthorized,
       login: async () => { throw new ApiError(403, 'Workspace forbidden') },

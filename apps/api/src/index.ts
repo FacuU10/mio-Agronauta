@@ -1,11 +1,10 @@
+import './infrastructure/config/load-env'
 import cluster from 'cluster'
 import os from 'os'
-import dotenv from 'dotenv'
 import { logger } from './infrastructure/observability/logger'
 import { startServer } from './server'
 import { ProductionEnvValidatorPort } from './infrastructure/config/validator'
 
-dotenv.config()
 ProductionEnvValidatorPort.validate()
 
 const numCPUs = os.cpus().length
@@ -29,8 +28,12 @@ if (cluster.isPrimary) {
   void startServer().then(() => {
     logger.info({ pid: process.pid }, 'API worker started')
   }).catch((error: unknown) => {
-    const failure = error as { code?: string }
-    logger.error({ code: failure.code ?? 'API_STARTUP_FAILURE' }, 'API worker startup failed')
+    const failure = error as { code?: string; message?: string; cause?: { code?: string } }
+    logger.error({
+      code: failure.code ?? 'API_STARTUP_FAILURE',
+      message: failure.message,
+      databaseCode: failure.cause?.code,
+    }, 'API worker startup failed')
     process.exit(1)
   })
 }

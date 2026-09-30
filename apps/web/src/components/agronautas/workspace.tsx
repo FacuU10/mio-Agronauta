@@ -7,7 +7,7 @@ import type { AlertsCurrent, DashboardSnapshot, FieldGeometryResponse, FieldOver
 import { AGRONAUTAS_CONTRACT_VERSION } from '@/lib/agronautas/schemas'
 import { buildIngestionAdminRows, buildSourceFreshnessCards, deriveSafeOperationalAlerts } from '@/lib/agronautas/ingestion-status'
 import { AGRONAUTAS_LOCALITIES, createAgronautasMapAdapter, previewAgronautasPoint } from '@/lib/agronautas/intake-map'
-import { ProductShell } from '@/components/shell/product-shell'
+import { ProductHeader, ProductShell } from '@/components/shell/product-shell'
 import { EvidenceStateBadge, FreshnessBanner, MapFrame, StatusBadge, MetricCard as VisibilityMetricCard, VisibilityState } from '@/components/visibility/primitives'
 import { FutureCapabilities } from '@/components/visibility/future-capabilities'
 import type { ChatStreamState } from '@/lib/visibility/chat'
@@ -175,6 +175,17 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
     active: props.workspaceView === view.key,
   }))
 
+  if (props.workspaceView === 'livestock') {
+    return (
+      <div className="min-h-screen bg-stone-100 text-stone-950">
+        <ProductHeader product="agronautas" variant="landing" navItems={operationalNavItems} />
+        <main id="main-content" tabIndex={-1}>
+          <LivestockPanel />
+        </main>
+      </div>
+    )
+  }
+
   return (
     <ProductShell
       product="agronautas"
@@ -218,16 +229,6 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
           <DashboardPanel {...props} />
        </section>
           <PlanningPanel fieldId={props.selectedFieldId ?? (props.runtimeMode === 'demo' ? 'field-demo-1' : props.fieldIndex?.items[0]?.fieldId ?? null)} planningContext={props.planningContext} simulation={props.simulation} isLoading={props.isPlanningLoading} isMutating={props.isPlanningMutating} error={props.planningError} onRetry={props.onRetryPlanning} onLoadPlanningContext={props.onLoadPlanningContext} onSimulateAssumptions={props.onSimulateAssumptions} />
-
-          {props.workspaceView === 'livestock' ? (
-            <section
-              id="agronautas-livestock"
-              tabIndex={-1}
-              className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
-            >
-              <LivestockPanel />
-            </section>
-          ) : null}
 
           <section id="agronautas-management" tabIndex={-1} className="scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700">
             <ManagementPanel selectedFieldId={props.selectedFieldId} items={props.managementItems} audit={props.managementAudit} isLoading={props.isManagementLoading} error={props.managementError} isMutating={props.isManagementMutating} onRetry={props.onRetryManagement} onCreateOperation={props.onCreateManagementOperation} onTransition={props.onTransitionManagement} />
