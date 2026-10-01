@@ -19,6 +19,7 @@ export default async function DemoPage({
     'geometry',
     'management',
     'livestock',
+    'agronomy',
     'planning',
     'evidence',
     'intelligence',

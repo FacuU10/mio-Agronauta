@@ -13,6 +13,7 @@ const AUTH_CLIENT_STATES = {
   RECOVERY: 'recovery',
   MAINTENANCE: 'maintenance',
   UNAVAILABLE: 'unavailable',
+  RATE_LIMITED: 'rate_limited',
 } as const
 
 export type AgronautasAuthClientState = (typeof AUTH_CLIENT_STATES)[keyof typeof AUTH_CLIENT_STATES]
@@ -39,6 +40,17 @@ export interface AgronautasAuthClientErrorOutcome {
   title: string
   description: string
   preserveDraft: true
+  retryAfterMs?: number
+}
+
+let pendingStatus: Promise<AgronautasAuthStatus> | undefined
+function sharedStatus(): Promise<AgronautasAuthStatus> {
+  if (!pendingStatus) {
+    pendingStatus = request('/api/agronautas/auth/status')
+      .then((data) => agronautasAuthStatusSchema.parse(data))
+      .finally(() => { pendingStatus = undefined })
+  }
+  return pendingStatus
 }
 
 export function createAgronautasAuthClient(): AgronautasAuthClient {
@@ -47,7 +59,7 @@ export function createAgronautasAuthClient(): AgronautasAuthClient {
       const payload = agronautasAuthLoginRequestSchema.parse(input)
       return publicSessionSchema.parse(await request('/api/agronautas/auth/login', { method: 'POST', body: JSON.stringify(payload) }))
     },
-    status: async () => agronautasAuthStatusSchema.parse(await request('/api/agronautas/auth/status')),
+    status: sharedStatus,
     refresh: async () => publicSessionSchema.parse(await request('/api/agronautas/auth/refresh', { method: 'POST' })),
     logout: async () => {
       await request('/api/agronautas/auth/logout', { method: 'POST' })
@@ -57,6 +69,10 @@ export function createAgronautasAuthClient(): AgronautasAuthClient {
 
 export function normalizeAgronautasAuthClientError(error: unknown): AgronautasAuthClientErrorOutcome {
   const apiError = error instanceof ApiError ? error : undefined
+  if (apiError?.status === 429) {
+    const retryAfterMs = apiError.retryAfterMs ?? 60_000
+    return { state: AUTH_CLIENT_STATES.RATE_LIMITED, title: 'Demasiados intentos', description: `Esperá ${Math.ceil(retryAfterMs / 1000)} segundos antes de volver a intentar. Tus datos siguen en el formulario.`, preserveDraft: true, retryAfterMs }
+  }
   if (apiError?.code === 'REFRESH_REPLAY' || apiError?.status === 409) {
     return { state: AUTH_CLIENT_STATES.RECOVERY, title: 'Sesión revocada por seguridad', description: 'El refresh fue rechazado por replay. Iniciá sesión nuevamente; no se muestran datos protegidos.', preserveDraft: true }
   }
@@ -83,7 +99,10 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
   const data = await response.json().catch(() => ({})) as unknown
   if (!response.ok) {
     const record = asRecord(data)
-    throw new ApiError(response.status, typeof record?.['message'] === 'string' ? record['message'] : `HTTP ${response.status}`, data, undefined, typeof record?.['code'] === 'string' ? record['code'] as string : undefined)
+    const retryHeader = response.headers.get('retry-after')
+    const retryValue = retryHeader ? (/^\d+$/.test(retryHeader) ? Number(retryHeader) * 1000 : Date.parse(retryHeader) - Date.now()) : NaN
+    const retryAfterMs = Number.isFinite(retryValue) ? Math.max(0, retryValue) : undefined
+    throw new ApiError(response.status, typeof record?.['message'] === 'string' ? record['message'] : `HTTP ${response.status}`, data, retryAfterMs, typeof record?.['code'] === 'string' ? record['code'] as string : undefined)
   }
   return data
 }

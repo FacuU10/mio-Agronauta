@@ -67,5 +67,5 @@ test('livestock renders independently without agricultural modules', () => {
   assert.equal(view.container.querySelector('#agronautas-management'), null)
   assert.equal(view.container.querySelector('#agronautas-intake'), null)
   assert.equal(view.container.querySelector('#agronautas-planning'), null)
-  assert.equal(view.getByRole('link', { name: 'Hacienda' }).getAttribute('aria-current'), 'page')
+  assert.equal(within(view.getByRole('navigation', { name: 'Navegación de Agronautas' })).getByRole('link', { name: 'Hacienda' }).getAttribute('aria-current'), 'page')
 })

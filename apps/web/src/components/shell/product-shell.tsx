@@ -18,6 +18,9 @@ interface ProductShellProps {
   description?: string
   navItems: readonly ProductNavItem[]
   children: ReactNode
+  headerVariant?: 'default' | 'landing'
+  fullBleed?: boolean
+  headerOverlay?: boolean
 }
 
 const productCopy: Record<ProductKey, { name: string; kicker: string; accent: string }> = {
@@ -39,6 +42,9 @@ export function ProductShell({
   description,
   navItems,
   children,
+  headerVariant = 'default',
+  fullBleed = false,
+  headerOverlay = false,
 }: ProductShellProps) {
   const copy = productCopy[product]
 
@@ -47,13 +53,13 @@ export function ProductShell({
       className="responsive-shell min-h-screen bg-stone-100 text-stone-950"
       data-product={product}
     >
-      <ProductHeader product={product} navItems={navItems} />
+      <ProductHeader product={product} navItems={navItems} variant={headerVariant} overlay={headerOverlay} />
       <main
         id="main-content"
         tabIndex={-1}
-        className="responsive-main mx-auto max-w-[90rem] scroll-mt-24 px-4 py-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 sm:px-8"
+        className={fullBleed ? 'w-full scroll-mt-24 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200' : 'responsive-main mx-auto max-w-[90rem] scroll-mt-24 px-4 py-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 sm:px-8'}
       >
-        <div className="mb-6 border-l-4 border-emerald-700 pl-4">
+        <div className={fullBleed ? 'sr-only' : 'mb-6 border-l-4 border-emerald-700 pl-4'}>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-800">
             {copy.name}
           </p>
@@ -74,10 +80,12 @@ export function ProductHeader({
   product,
   navItems,
   variant = 'default',
+  overlay = true,
 }: {
   product: ProductKey
   navItems: readonly ProductNavItem[]
   variant?: 'default' | 'landing'
+  overlay?: boolean
 }) {
   const copy = productCopy[product]
   const resolvedNavItems =
@@ -95,24 +103,32 @@ export function ProductHeader({
         key={item.href}
         href={item.href}
         aria-current={item.active ? 'page' : undefined}
-        className={`whitespace-nowrap rounded-lg px-2 py-3 text-sm font-medium transition-colors hover:bg-emerald-50 hover:text-emerald-700 focus-visible:outline-emerald-600 ${item.active ? 'bg-emerald-50 text-emerald-700' : 'text-slate-700'}`}
+        className={`whitespace-nowrap rounded-lg px-2 py-3 text-sm font-medium transition-colors hover:bg-emerald-50 hover:text-emerald-700 focus-visible:outline-emerald-600 group-data-[scrolled=false]/navbar:!text-white group-data-[scrolled=false]/navbar:hover:bg-white/20 ${item.active ? 'bg-emerald-50 text-emerald-700 group-data-[scrolled=false]/navbar:bg-white/15' : 'text-slate-700'}`}
       >
         {item.label}
       </a>
     ))
     return (
-      <ScrollHeader product={product}>
+      <ScrollHeader product={product} overlay={overlay}>
         <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-8">
           <a href="/" aria-label="Agronautas, inicio" className="flex items-center gap-3 rounded-lg focus-visible:outline-emerald-600">
             <img src="/landing/source/logo.webp" alt="" width={40} height={40} className="h-9 w-9 rounded-full object-contain sm:h-10 sm:w-10" />
-            <span className="bg-gradient-to-r from-emerald-700 to-emerald-500 bg-clip-text text-xl font-black tracking-tight text-transparent sm:text-2xl">AGRONAUTAS</span>
+            <span className="bg-gradient-to-r from-emerald-700 to-emerald-500 bg-clip-text text-xl font-black tracking-tight text-transparent group-data-[scrolled=false]/navbar:!text-white sm:text-2xl">AGRONAUTAS</span>
           </a>
-          <nav aria-label="Navegación de Agronautas" className="hidden items-center gap-1 min-[1400px]:flex group-data-[scrolled=false]/navbar:[&>a:not([aria-current]):not(:last-child)]:text-white">
+          <nav aria-label="Navegación de Agronautas" className="hidden min-w-0 flex-1 flex-wrap items-center justify-end gap-1 min-[1400px]:flex group-data-[scrolled=false]/navbar:[&>a]:!text-white">
             {links}
             <AccountMenu items={resolvedNavItems} loginHref={loginHref} />
           </nav>
 
-          <div className="min-[1400px]:hidden"><AccountMenu items={resolvedNavItems} loginHref={loginHref} /></div>
+          <div className="flex items-center gap-2 min-[1400px]:hidden">
+            <details className="relative">
+              <summary className="cursor-pointer rounded-full bg-white px-3 py-2 text-sm font-semibold text-emerald-800 group-data-[scrolled=false]/navbar:bg-white/15 group-data-[scrolled=false]/navbar:!text-white">Menú</summary>
+              <nav aria-label="Navegación móvil de Agronautas" className="absolute right-0 top-full z-50 mt-3 grid max-h-[65dvh] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-stone-200 bg-white p-2 shadow-xl">
+                {resolvedNavItems.map((item) => <a key={item.href} href={item.href} aria-current={item.active ? 'page' : undefined} className={`rounded-lg px-4 py-3 text-sm hover:bg-emerald-50 ${item.active ? 'bg-emerald-50 font-semibold text-emerald-800' : 'text-slate-700'}`}>{item.label}</a>)}
+              </nav>
+            </details>
+            <AccountMenu items={resolvedNavItems} loginHref={loginHref} />
+          </div>
         </div>
       </ScrollHeader>
     )

@@ -57,6 +57,30 @@ test('signed-out marketplace shows the public example with a gated offer action'
   )
 })
 
+for (const state of ['pending', 'maintenance', 'forbidden'] as const) {
+  test(`public marketplace remains visible when authentication is ${state}`, () => {
+    setupDom()
+    cleanup()
+    const view = render(
+      <MarketplaceCatalogRfq
+        publicPreview
+        listings={{ contractVersion: 'agronautas-marketplace-v1', status: 'unavailable', staleListingCount: 0, generatedAt: '2026-10-01T12:00:00.000Z', retryable: true, items: [] }}
+        rfqs={{ contractVersion: 'agronautas-marketplace-v1', status: 'unavailable', items: [], audit: [], retryable: true }}
+        accessState={state === 'pending' ? undefined : state}
+        isLoading={state === 'pending'}
+        error={null}
+        onRetry={async () => undefined}
+        onSubmit={async () => { throw new Error('Public preview must not submit a real offer') }}
+      />
+    )
+    assert.ok(view.getByRole('heading', { name: '70 vaquillonas para madre' }))
+    assert.ok(view.getByText('Para enviar una oferta, te pediremos iniciar sesión.'))
+    assert.equal(view.queryByText('Mis consultas'), null)
+    assert.equal(view.queryByText('Buscando publicaciones…'), null)
+    cleanup()
+  })
+}
+
 test('marketplace view renders truthful catalog and review-only RFQ handoff', () => {
   setupDom()
   cleanup()

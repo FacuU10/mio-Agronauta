@@ -25,11 +25,12 @@ import type { EvidenceDashboardModel, EvidenceSourceRecord } from '@/lib/agronau
 import { FieldGeometryEditor } from './field-geometry-editor'
 import { ManagementPanel } from './management-panel'
 import { LivestockPanel } from './livestock/livestock-panel'
+import { AgronomyPanel } from './agronomy/agronomy-panel'
 import { PlanningPanel } from './planning-panel'
 import { CopilotPanel } from './copilot-panel'
 import { EvidencePanel } from './evidence-panel'
 import { IntelligencePanel } from './intelligence-panel'
-import { buildWorkspaceHref, OPERATIONAL_WORKSPACE_VIEWS, type OperationalWorkspaceView } from './workspace-navigation'
+import { buildWorkspaceHref, DEMO_WORKSPACE_VIEWS, OPERATIONAL_WORKSPACE_VIEWS, type OperationalWorkspaceView } from './workspace-navigation'
 
 const React = { createElement, Fragment }
 
@@ -180,11 +181,19 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
   }
 
   const isDemo = props.runtimeMode === 'demo' || props.accessState === 'demo'
-  const operationalNavItems = OPERATIONAL_WORKSPACE_VIEWS.map((view) => ({
+  const operationalNavItems = (isDemo ? DEMO_WORKSPACE_VIEWS : OPERATIONAL_WORKSPACE_VIEWS).map((view) => ({
     href: buildWorkspaceHref(view.key, props.selectedFieldId, props.workspaceBasePath),
     label: view.label,
     active: props.workspaceView === view.key,
   }))
+
+  if (props.workspaceView === 'agronomy' && isDemo) {
+    return (
+      <ProductShell product="agronautas" title="Gestión Agronómica" headerVariant="landing" headerOverlay fullBleed navItems={operationalNavItems}>
+        <AgronomyPanel />
+      </ProductShell>
+    )
+  }
 
   if (props.workspaceView === 'livestock') {
     return (
@@ -201,8 +210,9 @@ export function AgronautasWorkspace(props: WorkspaceProps) {
     <ProductShell
       product="agronautas"
       title="Workspace Agronautas"
+      headerVariant={isDemo ? 'landing' : 'default'}
       description="De la ubicación del lote a una decisión verificable: cobertura por punto, nivel de riesgo, siguiente acción y evidencia contratada."
-       navItems={[{ href: '#agronautas-intake', label: 'Nuevo lote' }, ...operationalNavItems, { href: '#agronautas-dashboard', label: 'Decisión' }, { href: '#agronautas-alerts', label: 'Alertas' }, { href: '#agronautas-timeline', label: 'Timeline' }]}
+       navItems={isDemo ? operationalNavItems : [{ href: '#agronautas-intake', label: 'Nuevo lote' }, ...operationalNavItems, { href: '#agronautas-dashboard', label: 'Decisión' }, { href: '#agronautas-alerts', label: 'Alertas' }, { href: '#agronautas-timeline', label: 'Timeline' }]}
     >
     <div className="agronautas-canvas mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 rounded-[2rem] px-4 py-8 md:px-8">
       {props.workspaceReady ? <p role="status" aria-label="Workspace Agronautas listo" data-testid="agronautas-workspace-ready" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">Workspace Agronautas listo: sesión, runtime y contexto autorizados.</p> : null}

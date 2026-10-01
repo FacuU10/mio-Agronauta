@@ -4,7 +4,7 @@ import express, { Application } from 'express'
 import { globalErrorHandler, notFoundHandler } from './presentation/middleware/error-handler'
 import { httpLogger, logger } from './infrastructure/observability/logger'
 import { helmetMiddleware } from './presentation/middleware/helmet'
-import { createRateLimitMiddleware } from './presentation/middleware/rate-limit'
+import { createAuthRateLimitMiddleware, createRateLimitMiddleware } from './presentation/middleware/rate-limit'
 import { corsMiddleware } from './presentation/middleware/cors'
 import { healthRouter } from './presentation/routes/health'
 import { createAgronautasRouter } from './presentation/routes/agronautas'
@@ -69,6 +69,7 @@ export function createApp(deps: { hydrologyIngestionCoordinator?: HydrologyInges
   app.use(helmetMiddleware)
   app.use(corsMiddleware)
   app.use(createRateLimitMiddleware())
+  app.use(createAuthRateLimitMiddleware())
 
   // Body parsing
   app.use(express.json())

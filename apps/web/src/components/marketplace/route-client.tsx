@@ -38,6 +38,7 @@ export function MarketplaceRouteClient() {
   }
   return (
     <MarketplaceCatalogRfq
+      publicPreview={!workspaceId}
       workspaceId={workspaceId}
       listings={
         listingsQuery.isError

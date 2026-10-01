@@ -16,6 +16,7 @@ import { MarketplaceProductDetail, MarketplacePricePreview } from './product-det
 const React = { createElement }
 
 interface MarketplaceCatalogRfqProps {
+  publicPreview?: boolean
   workspaceId?: string
   listings: AgronautasMarketplaceDiscoveryResponse
   rfqs: AgronautasMarketplaceRfqResponse
@@ -41,6 +42,7 @@ interface MarketplaceCatalogRfqProps {
 }
 
 export function MarketplaceCatalogRfq({
+  publicPreview = false,
   workspaceId,
   listings,
   rfqs,
@@ -84,6 +86,7 @@ export function MarketplaceCatalogRfq({
   }
 
   const available =
+    !publicPreview &&
     !accessState &&
     !isLoading &&
     !error &&
@@ -93,7 +96,7 @@ export function MarketplaceCatalogRfq({
   const activeListing = available
     ? (scoped.find((item) => item.listingId === selectedListing?.listingId) ?? scoped[0])
     : undefined
-  const showExample = accessState === 'unauthorized' || (available && scoped.length === 0)
+  const showExample = publicPreview || accessState === 'unauthorized' || (available && scoped.length === 0)
   return (
     <div className="mkt-layout">
       <div className="mkt-main-column">
@@ -117,7 +120,7 @@ export function MarketplaceCatalogRfq({
             }}
           />
         )}
-        {!accessState ? (
+        {!publicPreview && !accessState ? (
           <div id="mis-consultas">
             <MarketplaceRfqHistory
               workspaceId={resolvedWorkspaceId}
@@ -141,7 +144,7 @@ export function MarketplaceCatalogRfq({
             onSubmit={submit}
           />
         ) : showExample ? (
-          <MarketplacePricePreview requiresLogin={accessState === 'unauthorized'} />
+          <MarketplacePricePreview requiresLogin={publicPreview || accessState === 'unauthorized'} />
         ) : (
           <section className="mkt-panel">
             <MessageCircle size={28} aria-hidden="true" />

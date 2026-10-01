@@ -9,12 +9,12 @@ function shouldUseMemoryStore(): boolean {
   return process.env['RATE_LIMIT_STORE'] === 'memory'
 }
 
-function createRedisStore() {
+function createRedisStore(prefix = 'rl:') {
   if (shouldUseMemoryStore()) return undefined
 
   return new RedisStore({
     sendCommand: (command: string, ...args: string[]) => getRedisClient().call(command, ...args) as Promise<any>,
-    prefix: 'rl:',
+    prefix,
   })
 }
 
@@ -23,8 +23,9 @@ function createBaseRateLimit(options: {
   max: number
   message: { error: string }
   skip?: SkipPredicate
+  prefix?: string
 }) {
-  const store = createRedisStore()
+  const store = createRedisStore(options.prefix)
   return rateLimit({
     ...(store ? { store } : {}),
     windowMs: options.windowMs,
@@ -43,12 +44,27 @@ export function createRateLimitMiddleware() {
     message: {
       error: 'Too many requests from this IP, please try again later.',
     },
-    skip: (req: Request) => req.path === '/health' || req.path === '/ready',
+    skip: (req: Request) => req.path === '/health' || req.path === '/ready' || isSessionMutation(req),
+  })
+}
+
+function isSessionMutation(req: Request): boolean {
+  return ['/agronautas/auth/login', '/agronautas/auth/refresh', '/agronautas/auth/logout'].includes(req.path)
+}
+
+export function createAuthRateLimitMiddleware() {
+  return createBaseRateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    prefix: 'rl:auth:',
+    message: { error: 'Too many authentication requests. Please try again later.' },
+    skip: (req) => !isSessionMutation(req),
   })
 }
 
 export function createChatRateLimitMiddleware() {
   return createBaseRateLimit({
+    prefix: 'rl:chat:',
     windowMs: 60 * 1000,
     max: 10,
     message: {
